@@ -124,6 +124,21 @@ MODEL_VOCABULARIES: Dict[str, object] = {
     "timesfm": "any",
 }
 
+# Spellings the clinical epilepsy corpora use -- upper case, and the old
+# 10-20 temporal names T3/T4/T5/T6 -- that REVE's published position bank
+# (brain-bzh/reve-positions, 543 entries) also carries. Checked name by name
+# against positions.json; the bank, not this list, is what the wrapper
+# resolves against at run time.
+_REVE_BANK_ALIASES: FrozenSet[str] = frozenset({
+    "FP1", "FP2", "FPZ", "FZ", "CZ", "PZ", "OZ", "T3", "T4", "T5", "T6",
+})
+
+# Families whose wrapper takes a bipolar pair "A-B" as a channel of its own:
+# REVE places it at the midpoint of A and B (reve.py:_resolve_positions). A
+# pair is valid when both of its electrodes are.
+_BIPOLAR_MIDPOINT_FAMILIES = frozenset({"reve"})
+
+
 def accepts_label(model_family: str, target: str) -> bool:
     """Return True iff ``target`` is a valid name in ``model_family``'s vocabulary."""
     vocab = MODEL_VOCABULARIES.get(model_family)
@@ -134,7 +149,13 @@ def accepts_label(model_family: str, target: str) -> bool:
     if vocab == "any":
         return True
     assert isinstance(vocab, frozenset)
-    return target in vocab
+    if model_family == "reve":
+        vocab = vocab | _REVE_BANK_ALIASES
+    if target in vocab:
+        return True
+    if model_family in _BIPOLAR_MIDPOINT_FAMILIES and target.count("-") == 1:
+        return all(part in vocab for part in target.split("-"))
+    return False
 
 def suggest_close_matches(model_family: str, target: str, n: int = 3):
     """Return up to ``n`` likely-intended names from the vocabulary for a typo."""

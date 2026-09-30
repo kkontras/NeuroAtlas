@@ -145,6 +145,24 @@ def load_channel_map(
                 f"channel map {path}: per_model[{model!r}] must be a dict or "
                 f"'skip', got {type(entry).__name__}"
             )
+        if "mode" in entry:
+            # `mode: label_pass_through` -- index-based wrappers (CBraMod) take
+            # the used channels under their own names, so the map is the
+            # identity over channels_used. non_eeg_drop_prefixes documents what
+            # the reader already left out of channels_used.
+            mode = entry.get("mode")
+            if mode != "label_pass_through":
+                raise ValueError(
+                    f"channel map {path}: per_model[{model!r}] has mode {mode!r}; "
+                    f"the only mode is 'label_pass_through'."
+                )
+            unknown = set(entry) - {"mode", "non_eeg_drop_prefixes"}
+            if unknown:
+                raise ValueError(
+                    f"channel map {path}: per_model[{model!r}] mixes mode with "
+                    f"entries {sorted(unknown)!r}; use one or the other."
+                )
+            entry = {label: label for label in channels_used}
 
         # Validate completeness.
         missing = [label for label in channels_used if label not in entry]
