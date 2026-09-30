@@ -11,5 +11,8 @@ derived_from: sleep_stage
 datasets: [dcsm, dod, isruc, mass, physionet2026, sleep_edf_expanded, ucddb, wsc]
 single: sleep_edf_expanded
 metrics:
-  headline: mae
-  higher_is_better: false
+  # Pearson r between each feature from the predicted and the true hypnogram,
+  # averaged over the 34 features. Their MAEs are in different units (minutes,
+  # percentages, counts), so no average of those means anything.
+  headline: pearson_r
+  higher_is_better: true

@@ -107,40 +107,44 @@ python -m neuroatlas.entrypoints.prepare --dataset weibo2014
 # 3. EMBED -- frozen backbones, one pass per (dataset, model)
 # ==========================================================================
 
-# Epilepsy: 10 s windows, no overlap (C.1)
-python -m neuroatlas.entrypoints.embed --models all --dataset bonn --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset chbmit --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset epilepsiae --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset helsinki_neonatal --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset nmt --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset siena --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset sz1 --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset sz2 --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset tuab --set window_s=10 --set stride_s=10
-python -m neuroatlas.entrypoints.embed --models all --dataset tusz --set window_s=10 --set stride_s=10
+# Epilepsy: 10 s windows, no overlap (C.1). --expected-epoch-seconds tells
+# each backbone the window it is handed, so one pretrained on 30 s epochs
+# (BIOT) does not reject a 10 s one; every epilepsy launcher set it.
+python -m neuroatlas.entrypoints.embed --models all --dataset bonn --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset chbmit --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset epilepsiae --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset helsinki_neonatal --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset nmt --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset sz1 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset sz2 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset tuab --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all --dataset tusz --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
 
-# Sleep and brain age: 30 s epochs (C.2, C.3)
+# Sleep and brain age: 30 s epochs (C.2, C.3). Cohorts whose readers are
+# built on fixed 30 s scoring epochs take no window arguments -- passing
+# them was a TypeError -- so only the configurable ones are told.
 python -m neuroatlas.entrypoints.embed --models all --dataset cfs --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset dcsm --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset dod --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset dcsm
+python -m neuroatlas.entrypoints.embed --models all --dataset dod
 python -m neuroatlas.entrypoints.embed --models all --dataset hmc --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.embed --models all --dataset hpap_lab_full --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset isruc --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset mass --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset isruc
+python -m neuroatlas.entrypoints.embed --models all --dataset mass
 python -m neuroatlas.entrypoints.embed --models all --dataset mesa --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.embed --models all --dataset mros --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026 --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset shhs --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026
+python -m neuroatlas.entrypoints.embed --models all --dataset shhs
+python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded
 python -m neuroatlas.entrypoints.embed --models all --dataset stages --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset ucddb --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset wsc --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset ucddb
+python -m neuroatlas.entrypoints.embed --models all --dataset wsc
 python -m neuroatlas.entrypoints.embed --models all --dataset cfs --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset isruc --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset isruc
 python -m neuroatlas.entrypoints.embed --models all --dataset mros --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026 --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset wsc --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026
+python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded
+python -m neuroatlas.entrypoints.embed --models all --dataset wsc
 
 # BCI (C.4). Trial windows come from the manifest, and two axes
 # are crossed over every cohort.

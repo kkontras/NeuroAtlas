@@ -7,7 +7,9 @@ paper: App. C.2
 task: limb
 embed: --set window_s=30 --set stride_s=30
 probe: --probe-type linear --class-weight balanced --tune-c 1.0
-datasets: [physionet2026]
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: physionet2026, embed: ""}
 single: physionet2026
 metrics:
   headline: macro_f1

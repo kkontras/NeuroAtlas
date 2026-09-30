@@ -9,9 +9,10 @@ paper: App. C.2, Fig. 3d
 embed: --set window_s=30 --set stride_s=30
 probe: --probe-type linear --class-weight balanced --tune-c 1.0 --aggregation mean
 datasets:
-  - {slug: dod, task: osa}
-  - {slug: physionet2026, task: cognitive}
-  - {slug: isruc, task: pathology}
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: dod, task: osa, embed: ""}
+  - {slug: physionet2026, task: cognitive, embed: ""}
+  - {slug: isruc, task: pathology, embed: ""}
 single: dod
 metrics:
   headline: balanced_accuracy

@@ -7,7 +7,10 @@ paper: App. C.2
 task: respiratory
 embed: --set window_s=30 --set stride_s=30
 probe: --probe-type linear --class-weight balanced --tune-c 1.0
-datasets: [physionet2026, ucddb]
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: physionet2026, embed: ""}
+  - {slug: ucddb, embed: ""}
 single: ucddb
 metrics:
   headline: macro_f1

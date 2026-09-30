@@ -34,6 +34,7 @@ class DatasetEntry:
     slug: str
     task: Optional[str] = None      # overrides the benchmark's task for this cohort
     note: Optional[str] = None
+    embed: Optional[Tuple[str, ...]] = None   # replaces the benchmark's embed args
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class Metrics:
     higher_is_better: bool = True
     dummy: Any = None               # number, {slug: number}, or None
     secondary: Tuple[str, ...] = ()
+    tolerance: Optional[float] = None   # |ours - paper| that still counts as reproduced
 
     def dummy_for(self, slug: str) -> Optional[float]:
         if isinstance(self.dummy, dict):
@@ -137,7 +139,8 @@ class Benchmark:
             return [Step("hypnogram", e.slug, ("--datasets", e.slug)) for e in entries]
         out: List[Step] = []
         for e in entries:
-            out.append(Step("embed", e.slug, ("--dataset", e.slug, *chosen.embed)))
+            embed = chosen.embed if e.embed is None or chosen.name != DEFAULT_VARIANT else e.embed
+            out.append(Step("embed", e.slug, ("--dataset", e.slug, *embed)))
         for e in entries:
             task = e.task or self.task
             head = ("--dataset", e.slug) + (("--task", task) if task else ())
@@ -175,7 +178,8 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
         if isinstance(item, str):
             entries.append(DatasetEntry(item))
         elif isinstance(item, dict) and "slug" in item:
-            entries.append(DatasetEntry(item["slug"], item.get("task"), item.get("note")))
+            embed = _args(item["embed"], f"{source} {item['slug']}.embed") if "embed" in item else None
+            entries.append(DatasetEntry(item["slug"], item.get("task"), item.get("note"), embed))
         else:
             raise CatalogError(f"{source}: a dataset is a slug or {{slug, task, note}}, got {item!r}")
     slugs = [e.slug for e in entries]
@@ -189,7 +193,8 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
     if "headline" not in m:
         raise CatalogError(f"{source}: metrics.headline is required")
     metrics = Metrics(m["headline"], bool(m.get("higher_is_better", True)),
-                      m.get("dummy"), tuple(m.get("secondary") or ()))
+                      m.get("dummy"), tuple(m.get("secondary") or ()),
+                      float(m["tolerance"]) if m.get("tolerance") is not None else None)
 
     variants = {}
     for name, v in (data.get("variants") or {}).items():

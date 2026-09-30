@@ -23,6 +23,9 @@ two drift apart. So a file here never invents a protocol -- it names one.
                                     {slug: number}, or omitted when it depends on
                                     the split (normalised scores are then n/a)
     metrics.secondary               reported beside the headline
+    metrics.tolerance               how far from the paper's number still counts as
+                                    reproduced (`results --reference`); the paper's
+                                    numbers live in ../reference/<benchmark>.csv
     variants                        other cells the paper also runs, each with its
                                     own embed/probe arguments and optional dataset subset
     derived_from                    a benchmark computed from another's output

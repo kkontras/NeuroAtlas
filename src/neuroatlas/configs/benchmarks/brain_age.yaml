@@ -11,7 +11,14 @@ paper: App. C.3
 task: brain_age
 embed: --set window_s=30 --set stride_s=30
 probe: --set label_mode=age --aggregation mean
-datasets: [cfs, isruc, mros, physionet2026, sleep_edf_expanded, wsc]
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - cfs
+  - {slug: isruc, embed: ""}
+  - mros
+  - {slug: physionet2026, embed: ""}
+  - {slug: sleep_edf_expanded, embed: ""}
+  - {slug: wsc, embed: ""}
 single: sleep_edf_expanded
 planned:
   - {name: shhs, reason: "the README counts it among the brain-age cohorts; run/default_runs.sh does not probe it for age"}

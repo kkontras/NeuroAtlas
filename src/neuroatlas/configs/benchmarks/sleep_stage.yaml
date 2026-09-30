@@ -7,8 +7,23 @@ paper: App. C.2
 task: sleep_staging
 embed: --set window_s=30 --set stride_s=30
 probe: ""
-datasets: [cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros, physionet2026,
-           shhs, sleep_edf_expanded, stages, ucddb, wsc]
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - cfs
+  - {slug: dcsm, embed: ""}
+  - {slug: dod, embed: ""}
+  - hmc
+  - hpap_lab_full
+  - {slug: isruc, embed: ""}
+  - {slug: mass, embed: ""}
+  - mesa
+  - mros
+  - {slug: physionet2026, embed: ""}
+  - {slug: shhs, embed: ""}
+  - {slug: sleep_edf_expanded, embed: ""}
+  - stages
+  - {slug: ucddb, embed: ""}
+  - {slug: wsc, embed: ""}
 single: sleep_edf_expanded
 metrics:
   headline: balanced_accuracy
