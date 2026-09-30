@@ -24,7 +24,7 @@ acquisition:
   kind: internal
   ref: null
   note: >
-    Read from the preprocessed pickles produced by preprocess_arithmetic_task.py, which
+    Read from the preprocessed pickles this cohort was benchmarked on, which
     is what the published embeddings and probes were built from. There is no
     download path in this repository.
 
@@ -38,7 +38,7 @@ labels:
     trial_class:
       note: >
         rest=0, arithmetic=1, meditation/breathing=2, per
-        preprocess_arithmetic_task.py. Experiment 1 recorded meditation, experiment
+        the upstream preprocessing. Experiment 1 recorded meditation, experiment
         2 breathing; both map to 2. The script declares 52 subjects but the
         pickles hold 45 -- experiment 2's S02-S09 are absent, skipped because
         their directory or EDF is missing from the raw tree. 45 is what the
@@ -77,5 +77,5 @@ provenance:
   last_verified: 2026-09-30
   note: >
     45 subjects, 1.0 s windows, resampled to 128 Hz. Classes: rest (0), arithmetic (1), meditation_breathing (2).
-    Labels verified against preprocess_arithmetic_task.py rather than inferred from the
+    Labels read from the upstream preprocessing rather than inferred from the
     stored integers.

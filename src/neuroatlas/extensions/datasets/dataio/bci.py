@@ -51,11 +51,11 @@ EVENTS_LEE2019_MI = {"right_hand": 0, "left_hand": 1}
 EVENTS_HINSS2021 = {"easy": 2, "medium": 3, "difficult": 4, "rest": 1}
 
 # --- Cognitive / affective cohorts -------------------------------------------
-# Not MOABB datasets: each is read from the preprocessed pickles their own
-# preprocess_*.py produced. Label integers are the ones actually stored, read
-# from those scripts rather than inferred -- see the note on ArithmeticTask.
+# Not MOABB datasets: each is read from the preprocessed pickles the cohort was
+# benchmarked on. Label integers are the ones actually stored, read from that
+# upstream preprocessing rather than inferred -- see the note on ArithmeticTask.
 EVENTS_EEGMAT = {"rest": 0, "arithmetic": 1}
-# preprocess_arithmetic_task.py: rest=0, arithmetic=1, meditation/breathing=2.
+# Upstream preprocessing writes rest=0, arithmetic=1, meditation/breathing=2.
 # Experiment 1 recorded meditation ("M"), experiment 2 breathing ("B"); both
 # map to 2, which is why the class is named for the pair.
 EVENTS_ARITHMETIC_TASK = {"rest": 0, "arithmetic": 1, "meditation_breathing": 2}
@@ -81,7 +81,7 @@ SUBJECTS_CHO2017 = [x for x in range(1, 53) if x not in {32, 46, 49}]
 SUBJECTS_LEE2019_MI = list(range(1, 55))
 SUBJECTS_HINSS2021 = list(range(1, 16))
 SUBJECTS_EEGMAT = list(range(36))            # ids 0..35, one per PhysioNet subject
-# preprocess_arithmetic_task.py declares 52 (exp1 S01-S21 -> 1001-1021, exp2
+# The upstream preprocessing declares 52 (exp1 S01-S21 -> 1001-1021, exp2
 # S02-S33 excluding S07 -> 2002-2033). The pickles hold 45: experiment 2's
 # S02-S09 are absent, because the script skips any subject whose directory or
 # EDF is missing from the raw tree. 45 is what the embeddings and probes were
@@ -115,8 +115,8 @@ CHANNELS_LEE2019_MI = [
     "CP5", "CP1", "CP2", "CP6", "FC3", "FC4",
     "C5", "C1", "C2", "C6", "CP3", "CPz", "CP4",
 ]
-# 19 standard 10-20, as preprocess_eegmat.py / preprocess_arithmetic_task.py
-# pick them. The two differ only in ordering; the set is identical.
+# 19 standard 10-20, as the upstream preprocessing picks them. EEGMAT and
+# ArithmeticTask differ only in ordering; the set is identical.
 CHANNELS_EEGMAT = [
     "Fp1", "Fp2", "F3", "F4", "F7", "F8", "T7", "T8", "C3", "C4",
     "P7", "P8", "P3", "P4", "O1", "O2", "Fz", "Cz", "Pz",

@@ -24,7 +24,7 @@ acquisition:
   kind: physionet
   ref: eegmat/1.0.0
   note: >
-    Read from the preprocessed pickles produced by preprocess_eegmat.py, which
+    Read from the preprocessed pickles this cohort was benchmarked on, which
     is what the published embeddings and probes were built from. There is no
     download path in this repository.
 
@@ -37,7 +37,7 @@ labels:
   modes:
     trial_class:
       note: >
-        rest=0, arithmetic=1, as preprocess_eegmat.py writes them. Raw is 72
+        rest=0, arithmetic=1, as the upstream preprocessing writes them. Raw is 72
         EDFs, two per subject (_1 rest, _2 task).
 
 splits:
@@ -73,5 +73,5 @@ provenance:
   last_verified: 2026-09-30
   note: >
     36 subjects, 4.0 s windows, resampled to 128 Hz. Classes: rest (0), arithmetic (1).
-    Labels verified against preprocess_eegmat.py rather than inferred from the
+    Labels read from the upstream preprocessing rather than inferred from the
     stored integers.

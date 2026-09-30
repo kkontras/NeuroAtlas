@@ -24,7 +24,7 @@ acquisition:
   kind: manual
   ref: null
   note: >
-    Read from the preprocessed pickles produced by preprocess_dreamer.py, which
+    Read from the preprocessed pickles this cohort was benchmarked on, which
     is what the published embeddings and probes were built from. There is no
     download path in this repository.
 
@@ -73,5 +73,5 @@ provenance:
   last_verified: 2026-09-30
   note: >
     23 subjects, 4.0 s windows, resampled to 128 Hz. Classes: low_arousal (0), high_arousal (1).
-    Labels verified against preprocess_dreamer.py rather than inferred from the
+    Labels read from the upstream preprocessing rather than inferred from the
     stored integers.
