@@ -50,6 +50,8 @@ def ensure_checkpoint(checkpoint_path: str | Path, source_type: str, source_refe
             return _download_github(path, source_reference)
         elif source_type == "github_release_asset":
             return _download_release_asset(path, source_reference)
+        elif source_type == "google_drive_zip":
+            return _download_google_drive_zip(path, source_reference)
         elif source_type == "figshare_private_share":
             return _download_figshare_private_share(path, source_reference)
         elif source_type == "github_figshare":
@@ -279,6 +281,41 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
                 f"({inner}). Download the asset by hand and place it at {local_path}."
             ) from exc
     logger.info("Downloaded %s", local_path.name)
+    return local_path
+
+
+def _download_google_drive_zip(local_path: Path, drive_url: str) -> Path:
+    """Fetch a zip the upstream authors host on Google Drive and pull one file out.
+
+    SleePyCo publishes its checkpoints this way, linked from the Main Results
+    table of github.com/gist-ailab/SleePyCo. We download from them rather than
+    redistributing the weights, so the file lands here byte-identical to theirs.
+
+    Only the single .pth inside is kept, written to *local_path*.
+    """
+    import urllib.request
+    import zipfile
+
+    with tempfile.TemporaryDirectory(prefix="eegbench_gd_") as tmpdir:
+        archive = Path(tmpdir) / "download.zip"
+        logger.info("Downloading %s", drive_url)
+        with urllib.request.urlopen(drive_url) as response, open(archive, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        if not zipfile.is_zipfile(archive):
+            # Drive serves an HTML consent page instead of the file when the
+            # object is large enough to trigger its virus-scan interstitial.
+            raise FileNotFoundError(
+                f"{drive_url} did not return a zip. Download it by hand, unzip it, "
+                f"and place the checkpoint at {local_path}."
+            )
+        with zipfile.ZipFile(archive) as zf:
+            members = [n for n in zf.namelist() if n.endswith(".pth")]
+            if not members:
+                raise FileNotFoundError(f"No .pth inside the archive at {drive_url}.")
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(members[0]) as src, open(local_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            logger.info("Extracted %s from the upstream archive", members[0])
     return local_path
 
 
