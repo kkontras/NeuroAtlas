@@ -45,13 +45,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from neuroatlas import config as user_config
 from neuroatlas.entrypoints._common import (
     check_dataset_paths,
     expand_dataset_paths,
     parse_embed_chunk,
 )
 from neuroatlas.entrypoints import _help
-from neuroatlas._paths import configs_dir
+from neuroatlas._paths import configs_dir, output_dir
 
 TASKS_DIR = configs_dir("tasks")
 
@@ -159,7 +160,7 @@ def load_task_preset(name: str) -> Dict[str, Any]:
 
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m neuroatlas.entrypoints.probe",
+        prog="neuroatlas probe",
         description="Fit a probe on extracted embeddings for any dataset/model/task.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
@@ -265,8 +266,10 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     preset = load_task_preset(task_name)
     task_block: Dict[str, Any] = dict(preset["task"])
 
-    # precedence: manifest defaults < task preset < --set < explicit flags
+    # precedence: manifest defaults < config.yaml dataset_paths < task preset
+    #             < --set < explicit flags
     dataset_config: Dict[str, Any] = dict(spec.config_defaults)
+    dataset_config.update(user_config.dataset_paths(spec.slug))
     # `dataset_defaults` applies to whichever dataset the preset is run on;
     # `datasets.<slug>` then refines it for one cohort.
     dataset_config.update(preset.get("dataset_defaults") or {})
@@ -332,7 +335,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     cache_root = (Path(args.cache_root) if args.cache_root
                   else Path(cache_env) if cache_env else SHARED_EMBEDDING_CACHE_ROOT)
     output_root = (Path(args.output_root) if args.output_root
-                   else Path("artifacts/benchmarks") / spec.slug / task_name)
+                   else output_dir(spec.slug, task_name))
 
     return {
         "benchmark": {
@@ -368,6 +371,7 @@ def _required_keys(slug: str):
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser(argv)
     args = parser.parse_args(argv)

@@ -66,6 +66,13 @@ def models_dir(*parts: str) -> Path:
     return base.joinpath(*parts)
 
 
+def output_dir(*parts: str) -> Path:
+    """Probe results. ``$NEUROATLAS_OUTPUT_ROOT`` overrides the default."""
+    override = os.environ.get("NEUROATLAS_OUTPUT_ROOT")
+    base = Path(override).expanduser() if override else artifacts_dir("benchmarks")
+    return base.joinpath(*parts)
+
+
 def data_dir(*parts: str) -> Path:
     """``<workspace>/data/...`` -- corpora a builder writes next to the code."""
     return workspace_root().joinpath("data", *parts)

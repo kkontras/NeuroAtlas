@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from neuroatlas import config as user_config
 from neuroatlas.benchmarking_helpers import BenchmarkRunner, seed_everything
 from neuroatlas.benchmarking_helpers.runtime.cache import SHARED_EMBEDDING_CACHE_ROOT
 from neuroatlas.benchmarking_helpers.registry.discovery import (
@@ -60,6 +61,7 @@ from neuroatlas.entrypoints._common import (
     parse_embed_chunk,
 )
 from neuroatlas.entrypoints import _help
+from neuroatlas._paths import artifacts_dir
 
 
 def default_cache_root() -> Path:
@@ -130,7 +132,7 @@ def _parse_checkpoints(pairs: List[str]) -> Dict[str, Dict[str, Any]]:
 
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m neuroatlas.entrypoints.embed",
+        prog="neuroatlas embed",
         description="Extract frozen-backbone embeddings for any registered dataset.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
@@ -251,6 +253,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
 
     # Per-dataset defaults first, CLI on top -- never the other way round.
     dataset_config: Dict[str, Any] = dict(spec.config_defaults)
+    dataset_config.update(user_config.dataset_paths(spec.slug))
     dataset_config.update(_parse_set(args.overrides))
     if args.data_root is not None:
         dataset_config["data_root"] = args.data_root
@@ -298,7 +301,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     cache_root = Path(args.cache_root) if args.cache_root else default_cache_root()
     output_root = (
         Path(args.output_root) if args.output_root
-        else Path("artifacts/embeddings") / spec.slug
+        else artifacts_dir("embeddings", spec.slug)
     )
 
     return {
@@ -326,6 +329,7 @@ def _required_keys(slug: str):
 
 
 def main(argv: List[str] | None = None) -> None:
+    user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser(argv).parse_args(argv)
 

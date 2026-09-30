@@ -43,12 +43,11 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
+from neuroatlas import config as user_config
 from neuroatlas.benchmarking_helpers.probes.metrics import compute_classification_metrics
-from neuroatlas._paths import workspace_root
+from neuroatlas._paths import output_dir
 
 logger = logging.getLogger(__name__)
-
-REPO = workspace_root()
 
 EPOCH_SEC = 30
 H_PER_EPOCH = EPOCH_SEC / 3600
@@ -444,7 +443,7 @@ def process_dataset(dataset: str) -> List[Dict[str, Any]]:
     if rel is None:
         logger.warning("unknown dataset: %s", dataset)
         return []
-    path = REPO / "artifacts" / "benchmarks" / rel
+    path = output_dir() / rel
     if not path.exists():
         logger.warning("skipping %s: %s not found", dataset, path)
         return []
@@ -605,15 +604,15 @@ def _add_reconstruct_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_features_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--output-dir", default="artifacts/benchmarks",
-                   help="Where the CSVs are written (default: %(default)s).")
+    p.add_argument("--output-dir", default=None,
+                   help="Where the CSVs are written (default: the output root).")
     p.add_argument("--no-summary", action="store_true",
                    help="Skip the per-feature error summary.")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m neuroatlas.entrypoints.hypnogram",
+        prog="neuroatlas hypnogram",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -640,7 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _results_dir_for(dataset: str) -> Path:
     """Where this dataset's probe results live, from the known layout."""
     rel = DATASET_HYPNO_PATHS[dataset]
-    return REPO / "artifacts" / "benchmarks" / Path(rel).parent
+    return output_dir() / Path(rel).parent
 
 
 def run_reconstruct(args, datasets: Sequence[str]) -> int:
@@ -666,7 +665,7 @@ def run_reconstruct(args, datasets: Sequence[str]) -> int:
 
 
 def run_features(args, datasets: Sequence[str]) -> int:
-    out_dir = Path(args.output_dir)
+    out_dir = Path(args.output_dir) if args.output_dir else output_dir()
     if args.dry_run:
         for d in datasets:
             print(f"features {_results_dir_for(d)}/hypnograms.json")
@@ -688,6 +687,7 @@ def run_features(args, datasets: Sequence[str]) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

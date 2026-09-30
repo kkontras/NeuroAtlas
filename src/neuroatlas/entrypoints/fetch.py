@@ -31,6 +31,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from neuroatlas import config as user_config
+
 
 # How each acquisition.kind is obtained. `auto` means this verb can do it;
 # the rest need a human with credentials, and get instructions instead.
@@ -138,7 +140,7 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     from neuroatlas.entrypoints import _help
 
     parser = argparse.ArgumentParser(
-        prog="python -m neuroatlas.entrypoints.fetch",
+        prog="neuroatlas fetch",
         description="Obtain a dataset's raw corpus, or say exactly how to.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
@@ -159,6 +161,7 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> None:
     import os
 
+    user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser(argv).parse_args(argv)
 

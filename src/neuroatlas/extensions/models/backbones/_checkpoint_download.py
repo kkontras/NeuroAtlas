@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from neuroatlas._paths import workspace_root
+from neuroatlas._paths import home, workspace_root
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,10 @@ def ensure_checkpoint(checkpoint_path: str | Path, source_type: str, source_refe
     if path.exists():
         return path
 
-    if os.environ.get("EEGBENCH_OFFLINE") == "1":
+    if "1" in (os.environ.get("NEUROATLAS_OFFLINE"), os.environ.get("EEGBENCH_OFFLINE")):
         raise FileNotFoundError(
-            f"Checkpoint not found at {path} and EEGBENCH_OFFLINE=1 blocks auto-download. "
-            f"Place the file manually or unset the env var."
+            f"Checkpoint not found at {path}, and downloads are off. "
+            f"Fetch it with `neuroatlas models download`, or pass --online."
         )
 
     logger.info("Checkpoint not found at %s — attempting auto-download (source_type=%s)", path, source_type)
@@ -86,6 +86,7 @@ _HF_FILENAME_MAP = {
 # a 401. The search order is that script's, unchanged.
 _HF_TOKEN_SOURCES = (
     "NEUROATLAS_HF_TOKEN_FILE",           # explicit override, a path
+    "$NEUROATLAS_HOME/hf_token",          # written next to config.yaml
     "${REPO}/.secrets/hf_token",           # per-checkout, gitignored
     "~/.cache/huggingface/token",          # what `huggingface-cli login` writes
 )
@@ -105,6 +106,7 @@ def resolve_hf_token() -> str | None:
     repo_root = workspace_root()
     candidates = [
         os.environ.get("NEUROATLAS_HF_TOKEN_FILE"),
+        home() / "hf_token",
         repo_root / ".secrets" / "hf_token",
         Path.home() / ".cache" / "huggingface" / "token",
     ]

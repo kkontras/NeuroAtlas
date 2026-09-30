@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from neuroatlas import config as user_config
 from neuroatlas.entrypoints._common import (
     expand_dataset_paths,
     parse_embed_chunk,
@@ -74,6 +75,7 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     for name, cfg in backends.items():
         if name == chosen or chosen is None:
             merged.update((cfg or {}).get("defaults") or {})
+    merged.update(user_config.dataset_paths(slug))
     defaults = expand_dataset_paths({**merged, **overrides})
 
     argv: List[str] = []
@@ -119,7 +121,7 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     from neuroatlas.entrypoints import _help
 
     parser = argparse.ArgumentParser(
-        prog="python -m neuroatlas.entrypoints.prepare",
+        prog="neuroatlas prepare",
         description="Build a dataset's cache. Optional for every cohort that "
                     "reads raw; required for BCI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -149,6 +151,7 @@ def _parse_set(pairs: List[str]) -> Dict[str, Any]:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser(argv).parse_args(argv)
 
