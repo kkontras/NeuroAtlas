@@ -24,6 +24,7 @@ cohort:
 acquisition:
   kind: physionet
   ref: ucddb
+  version: 1.0.0
 
 signal:
   notch_freq: 50.0

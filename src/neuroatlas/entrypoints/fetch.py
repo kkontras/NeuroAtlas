@@ -66,7 +66,8 @@ def _url_for(kind: str, acq: Dict[str, Any]) -> Optional[str]:
             return f"https://zenodo.org/api/records/{ref}/files/{name}/content"
         return f"https://zenodo.org/api/records/{ref}"
     if kind == "physionet":
-        return f"https://physionet.org/files/{ref}/"
+        version = acq.get("version")
+        return f"https://physionet.org/files/{ref}/{version + '/' if version else ''}"
     if kind == "mendeley":
         return f"https://data.mendeley.com/datasets/{str(ref).split('/')[-1]}"
     if kind == "figshare":

@@ -25,6 +25,8 @@ cohort:
 acquisition:
   kind: physionet
   ref: hmc-sleep-staging
+  version: "1.1"
+  subdir: recordings
 
 signal:
   notch_freq: 50.0

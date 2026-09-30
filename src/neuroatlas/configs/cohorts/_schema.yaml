@@ -90,6 +90,14 @@ fields:
       size_gb:  {type: float}
       checksum: {type: str, doc: "sha256:… of the archive. 'TBD' is allowed but
                                   reported by the completeness test."}
+      version:  {type: str, doc: "Release to fetch, for kinds whose URLs carry one
+                                  (physionet: files/<ref>/<version>/)."}
+      subdir:   {type: str, doc: "Where, inside what `data download` fetches, the
+                                  reader's path points (hmc reads recordings/)."}
+      expect:   {type: map, doc: "What `data status` counts as the corpus being
+                                  there: {glob: '**/*.edf', min: N}. Without it, any
+                                  EEG file under the raw path counts."}
+      note:     {type: str, doc: "Anything a person fetching it must know."}
 
   # -- signal ----------------------------------------------------------------
   signal:
