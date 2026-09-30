@@ -102,3 +102,4 @@ neuroatlas = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: builds a wheel or touches real data"]
