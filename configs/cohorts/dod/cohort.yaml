@@ -1,0 +1,92 @@
+# dod — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: dod
+name: Dod
+domain: sleep
+paper_dataset: true
+
+description: >
+  Dreem Open Datasets (DODH healthy + DODO obstructive apnea)
+  sleep-staging and OSA-detection adapter.
+
+cohort:
+  centre: "Dreem Open Datasets, France"
+  country: FR
+  powerline_hz: 50
+
+acquisition:
+  kind: manual
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      implemented_by: adapters.dod
+    osa_group:
+      granularity: recording   # one label for the whole recording; window scores are aggregated to the recording before scoring
+      implemented_by: adapters.dod
+splits:
+  manifest: folds.json
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  montage: dod_eeg_5                        # the 5-channel DOD derivation; lived only in dod_fm_probe.sh
+  batch_size: 32
+  data_root: "${EEG_DATA_ROOT}/data/DOD"
+  label_mode: sleep_stage
+  notch_map:
+    dodh: 50.0
+    dodo: 60.0
+  num_folds: 5
+  signal_kind: raw
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - sleep_stage
+      - osa_group
+    enforced_by: adapters.dod
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: extensions.datasets.adapters.dod.DODBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - num_folds
+    - label_mode
+
+provenance:
+  known_issues:
+    - "The multi-scorer evaluation needs the dreem-learning-evaluation
+       scorers, which dod_fm_probe.sh pointed at /tmp/dreem-learning-
+       evaluation/scorers -- a clone someone made by hand, with no default
+       that survives a reboot. Pass --set expert_scorers_root=<path>."
+  last_verified: 2026-09-21

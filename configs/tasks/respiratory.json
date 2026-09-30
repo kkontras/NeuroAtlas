@@ -1,0 +1,23 @@
+{
+  "_doc": "Respiratory-event detection over the 9 per-epoch fraction fields. Was probe_{physionet2026,ucddb}_respevt_fm.py.",
+  "task": {
+    "name": "respiratory_event_detection",
+    "event_fields": [
+      "obstructive_apnea_fraction",
+      "central_apnea_fraction",
+      "mixed_apnea_fraction",
+      "hypopnea_fraction",
+      "rera_fraction",
+      "apnea_any_fraction",
+      "ahi_fraction",
+      "rdi_fraction",
+      "respiratory_event_any_fraction"
+    ]
+  },
+  "datasets": {
+    "physionet2026": {
+      "require_human_annotations": true
+    },
+    "ucddb": {}
+  }
+}

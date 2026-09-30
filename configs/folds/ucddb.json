@@ -1,0 +1,174 @@
+{
+  "dataset": "ucddb",
+  "n_subjects": 25,
+  "n_recordings": 25,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": {
+      "train": [
+        "ucddb005",
+        "ucddb006",
+        "ucddb007",
+        "ucddb009",
+        "ucddb010",
+        "ucddb013",
+        "ucddb015",
+        "ucddb018",
+        "ucddb019",
+        "ucddb021",
+        "ucddb022",
+        "ucddb023",
+        "ucddb024",
+        "ucddb025",
+        "ucddb028"
+      ],
+      "val": [
+        "ucddb003",
+        "ucddb008",
+        "ucddb012",
+        "ucddb017",
+        "ucddb026"
+      ],
+      "test": [
+        "ucddb002",
+        "ucddb011",
+        "ucddb014",
+        "ucddb020",
+        "ucddb027"
+      ]
+    },
+    "1": {
+      "train": [
+        "ucddb002",
+        "ucddb009",
+        "ucddb010",
+        "ucddb011",
+        "ucddb013",
+        "ucddb014",
+        "ucddb018",
+        "ucddb020",
+        "ucddb021",
+        "ucddb022",
+        "ucddb023",
+        "ucddb024",
+        "ucddb025",
+        "ucddb027",
+        "ucddb028"
+      ],
+      "val": [
+        "ucddb005",
+        "ucddb006",
+        "ucddb007",
+        "ucddb015",
+        "ucddb019"
+      ],
+      "test": [
+        "ucddb003",
+        "ucddb008",
+        "ucddb012",
+        "ucddb017",
+        "ucddb026"
+      ]
+    },
+    "2": {
+      "train": [
+        "ucddb002",
+        "ucddb003",
+        "ucddb008",
+        "ucddb009",
+        "ucddb010",
+        "ucddb011",
+        "ucddb012",
+        "ucddb013",
+        "ucddb014",
+        "ucddb017",
+        "ucddb018",
+        "ucddb020",
+        "ucddb023",
+        "ucddb026",
+        "ucddb027"
+      ],
+      "val": [
+        "ucddb021",
+        "ucddb022",
+        "ucddb024",
+        "ucddb025",
+        "ucddb028"
+      ],
+      "test": [
+        "ucddb005",
+        "ucddb006",
+        "ucddb007",
+        "ucddb015",
+        "ucddb019"
+      ]
+    },
+    "3": {
+      "train": [
+        "ucddb002",
+        "ucddb003",
+        "ucddb005",
+        "ucddb006",
+        "ucddb007",
+        "ucddb008",
+        "ucddb011",
+        "ucddb012",
+        "ucddb014",
+        "ucddb015",
+        "ucddb017",
+        "ucddb019",
+        "ucddb020",
+        "ucddb026",
+        "ucddb027"
+      ],
+      "val": [
+        "ucddb009",
+        "ucddb010",
+        "ucddb013",
+        "ucddb018",
+        "ucddb023"
+      ],
+      "test": [
+        "ucddb021",
+        "ucddb022",
+        "ucddb024",
+        "ucddb025",
+        "ucddb028"
+      ]
+    },
+    "4": {
+      "train": [
+        "ucddb003",
+        "ucddb005",
+        "ucddb006",
+        "ucddb007",
+        "ucddb008",
+        "ucddb012",
+        "ucddb015",
+        "ucddb017",
+        "ucddb019",
+        "ucddb021",
+        "ucddb022",
+        "ucddb024",
+        "ucddb025",
+        "ucddb026",
+        "ucddb028"
+      ],
+      "val": [
+        "ucddb002",
+        "ucddb011",
+        "ucddb014",
+        "ucddb020",
+        "ucddb027"
+      ],
+      "test": [
+        "ucddb009",
+        "ucddb010",
+        "ucddb013",
+        "ucddb018",
+        "ucddb023"
+      ]
+    }
+  }
+}

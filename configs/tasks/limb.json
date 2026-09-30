@@ -1,0 +1,15 @@
+{
+  "_doc": "Limb-movement detection. Was probe_physionet2026_limb_fm.py. It uses the respiratory_event_detection task because that task is a generic per-field binary event probe driven by event_fields \u2014 the name is domain-specific, the algorithm is not.",
+  "task": {
+    "name": "respiratory_event_detection",
+    "event_fields": [
+      "limb_movement_any_fraction",
+      "limb_movement_plm_fraction"
+    ]
+  },
+  "datasets": {
+    "physionet2026": {
+      "require_human_annotations": true
+    }
+  }
+}

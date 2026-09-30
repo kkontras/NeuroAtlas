@@ -1,0 +1,22 @@
+{
+  "_doc": "Subject-level sex classification. NOT part of the NeuroAtlas benchmark \u2014 kept only so the four stashed probe_*_sex_fm entrypoints stay reproducible. Do not add it to a benchmark run.",
+  "task": {
+    "name": "patient_classification",
+    "aggregation": "mean,mean_std"
+  },
+  "datasets": {
+    "isruc": {
+      "label_mode": "sex"
+    },
+    "ucddb": {
+      "label_mode": "sex"
+    },
+    "wsc": {
+      "label_mode": "sex"
+    },
+    "sleep_edf_expanded": {
+      "label_mode": "sex"
+    }
+  },
+  "_status": "exploratory, not in the paper"
+}

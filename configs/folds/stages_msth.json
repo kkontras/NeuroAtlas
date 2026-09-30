@@ -1,0 +1,49 @@
+{
+  "dataset": "stages_msth",
+  "n_subjects": 31,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "MSTH00007",
+      "MSTH00008",
+      "MSTH00012",
+      "MSTH00020",
+      "MSTH00022",
+      "MSTH00023",
+      "MSTH00031"
+    ],
+    "1": [
+      "MSTH00002",
+      "MSTH00006",
+      "MSTH00009",
+      "MSTH00017",
+      "MSTH00024",
+      "MSTH00029"
+    ],
+    "2": [
+      "MSTH00013",
+      "MSTH00015",
+      "MSTH00016",
+      "MSTH00026",
+      "MSTH00033",
+      "MSTH00034"
+    ],
+    "3": [
+      "MSTH00001",
+      "MSTH00005",
+      "MSTH00014",
+      "MSTH00021",
+      "MSTH00025",
+      "MSTH00027"
+    ],
+    "4": [
+      "MSTH00003",
+      "MSTH00004",
+      "MSTH00018",
+      "MSTH00019",
+      "MSTH00028",
+      "MSTH00030"
+    ]
+  }
+}

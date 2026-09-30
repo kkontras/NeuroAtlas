@@ -1,0 +1,52 @@
+# REFERENCE ONLY — the runtime channel-map loader (MODEL_CONTRACTS §1) is
+# not yet wired. Wrappers currently read meta['channels'] directly. This
+# YAML documents the authoritative (Epilepsiae, model) channel plan.
+
+dataset: epilepsiae
+channels_available:
+  [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
+# Default montage is bipolar TCP (20 pairs) for epilepsy runs; unipolar
+# 19 when the entrypoint overrides montage='unipolar'.
+channels_used:
+  [FP1-F7, F7-T3, T3-T5, T5-O1,
+   FP2-F8, F8-T4, T4-T6, T6-O2,
+   T3-C3, C3-CZ, CZ-C4, C4-T4,
+   FP1-F3, F3-C3, C3-P3, P3-O1,
+   FP2-F4, F4-C4, C4-P4, P4-O2]
+
+per_model:
+  # REVE resolves bipolar 'A-B' names by splitting on '-' and averaging
+  # the two electrode positions (reve.py:104-131), so the target names
+  # are the bipolar strings themselves and each half must exist in the
+  # REVE position bank.
+  reve:
+    FP1-F7: FP1-F7
+    F7-T3: F7-T3
+    T3-T5: T3-T5
+    T5-O1: T5-O1
+    FP2-F8: FP2-F8
+    F8-T4: F8-T4
+    T4-T6: T4-T6
+    T6-O2: T6-O2
+    T3-C3: T3-C3
+    C3-CZ: C3-CZ
+    CZ-C4: CZ-C4
+    C4-T4: C4-T4
+    FP1-F3: FP1-F3
+    F3-C3: F3-C3
+    C3-P3: C3-P3
+    P3-O1: P3-O1
+    FP2-F4: FP2-F4
+    F4-C4: F4-C4
+    C4-P4: C4-P4
+    P4-O2: P4-O2
+  cbramod:
+    mode: label_pass_through
+    # CBraMod's ACPE Conv2d is index-based; labels are not consulted by the
+    # model. Wrapper drops EOG/EMG/ECG/EKG/RESP/TEMP/EVENT auxiliaries by
+    # prefix substring match; remaining channels pass through in dataset order.
+    non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+
+notes:
+  reve: "Bipolar TCP 20-pair montage. REVE midpoints each pair's 3D positions (position_utils.py convention). Each half is a 10-20 electrode that must resolve in brain-bzh/reve-positions."
+  cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged; ACPE encodes spatial structure from channel ordering."

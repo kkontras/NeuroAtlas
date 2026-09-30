@@ -1,0 +1,84 @@
+dataset: ucddb
+channels_available:
+- C3A2
+- C4A1
+channels_used:
+- C3A2
+- C4A1
+per_model:
+  eegpt:
+    C3A2: C3
+    C4A1: C4
+  cbramod:
+    C3A2: C3A2
+    C4A1: C4A1
+  labram:
+    C3A2: C3
+    C4A1: C4
+  neurolm:
+    C3A2: C3
+    C4A1: C4
+  reve:
+    C3A2: C3
+    C4A1: C4
+  steegformer:
+    C3A2: C3
+    C4A1: C4
+  neurorvq:
+    C3A2: C3
+    C4A1: C4
+  neurogpt:
+    C3A2: C3
+    C4A1: C4
+  biot:
+    C3A2: C3
+    C4A1: C4
+  sleepfm:
+    C3A2: C3A2
+    C4A1: C4A1
+  chronos:
+    C3A2: C3A2
+    C4A1: C4A1
+  moment:
+    C3A2: C3A2
+    C4A1: C4A1
+  timemoe:
+    C3A2: C3A2
+    C4A1: C4A1
+  moirai:
+    C3A2: C3A2
+    C4A1: C4A1
+  lagllama:
+    C3A2: C3A2
+    C4A1: C4A1
+  timesfm:
+    C3A2: C3A2
+    C4A1: C4A1
+  core_sleep:
+    C3A2: C3A2
+    C4A1: C4A1
+  sleep_transformer:
+    C3A2: C3A2
+    C4A1: C4A1
+  sleepyco:
+    C3A2: C3A2
+    C4A1: C4A1
+notes:
+  eegpt: Pre-referenced bipolars → referential 10-20 anchors. Paper pretrained unipolar; the bipolar→unipolar mapping is an approximation.
+  labram: Pre-referenced bipolars → standard_1020 referential anchors.
+  neurolm: Pre-referenced bipolars → referential 10-20 anchors.
+  reve: Pre-referenced bipolars → lowercase 10-20 names per REVE position bank.
+  steegformer: Pre-referenced bipolars → referential 10-20 anchors; monopolar anchor approximation.
+  neurorvq: Pre-referenced bipolars → referential 10-20 anchors.
+  neurogpt: Pre-referenced bipolars → referential 10-20 anchors in NeuroGPT's legacy layout (match-ratio 2/22).
+  biot: 2 monopolar channels → uppercase 10-20 names. Wrapper fills 4 slots via single-electrode approximation (C3→2 slots, C4→2 slots), 12 zero-padded.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

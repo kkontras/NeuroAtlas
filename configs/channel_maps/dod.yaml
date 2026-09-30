@@ -1,0 +1,358 @@
+dataset: dod
+channels_available:
+- C3
+- C4
+- F3-F4
+- F3
+- F3-O1
+- F4
+- F4-O2
+- FP1-F3
+- FP1
+- FP1-O1
+- FP2-F4
+- FP2
+- FP2-O2
+- O1
+- O2
+channels_used:
+- C3
+- C4
+- F3-F4
+- F3
+- F3-O1
+- F4
+- F4-O2
+- FP1-F3
+- FP1
+- FP1-O1
+- FP2-F4
+- FP2
+- FP2-O2
+- O1
+- O2
+per_model:
+  eegpt:
+    C3: C3
+    C4: C4
+    F3-F4: FZ
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: FP1
+    FP1: FP1
+    FP1-O1: FP1
+    FP2-F4: FP2
+    FP2: FP2
+    FP2-O2: FP2
+    O1: O1
+    O2: O2
+  cbramod:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  labram:
+    C3: C3
+    C4: C4
+    F3-F4: FZ
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: FP1
+    FP1: FP1
+    FP1-O1: FP1
+    FP2-F4: FP2
+    FP2: FP2
+    FP2-O2: FP2
+    O1: O1
+    O2: O2
+  neurolm:
+    C3: C3
+    C4: C4
+    F3-F4: FZ
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: FP1
+    FP1: FP1
+    FP1-O1: FP1
+    FP2-F4: FP2
+    FP2: FP2
+    FP2-O2: FP2
+    O1: O1
+    O2: O2
+  reve:
+    C3: C3
+    C4: C4
+    F3-F4: Fz
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: Fp1
+    FP1: Fp1
+    FP1-O1: Fp1
+    FP2-F4: Fp2
+    FP2: Fp2
+    FP2-O2: Fp2
+    O1: O1
+    O2: O2
+  steegformer:
+    C3: C3
+    C4: C4
+    F3-F4: Fz
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: Fp1
+    FP1: Fp1
+    FP1-O1: Fp1
+    FP2-F4: Fp2
+    FP2: Fp2
+    FP2-O2: Fp2
+    O1: O1
+    O2: O2
+  neurorvq:
+    C3: C3
+    C4: C4
+    F3-F4: FZ
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: FP1
+    FP1: FP1
+    FP1-O1: FP1
+    FP2-F4: FP2
+    FP2: FP2
+    FP2-O2: FP2
+    O1: O1
+    O2: O2
+  neurogpt:
+    C3: C3
+    C4: C4
+    F3-F4: FZ
+    F3: F3
+    F3-O1: F3
+    F4: F4
+    F4-O2: F4
+    FP1-F3: FP1
+    FP1: FP1
+    FP1-O1: FP1
+    FP2-F4: FP2
+    FP2: FP2
+    FP2-O2: FP2
+    O1: O1
+    O2: O2
+  biot:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  sleepfm:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  chronos:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  moment:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  timemoe:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  moirai:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  lagllama:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  timesfm:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  core_sleep:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  sleep_transformer:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+  sleepyco:
+    C3: C3
+    C4: C4
+    F3-F4: F3-F4
+    F3: F3
+    F3-O1: F3-O1
+    F4: F4
+    F4-O2: F4-O2
+    FP1-F3: FP1-F3
+    FP1: FP1
+    FP1-O1: FP1-O1
+    FP2-F4: FP2-F4
+    FP2: FP2
+    FP2-O2: FP2-O2
+    O1: O1
+    O2: O2
+notes:
+  eegpt: Same bipolar→unipolar approximations. Paper pretrained unipolar at 58 channels; these are coarse approximations.
+  labram: Same bipolar→unipolar approximations; shared vocabulary with NeuroLM.
+  neurolm: Same bipolar→unipolar approximations.
+  reve: Same bipolar→unipolar approximations; uses mixed-case per REVE position bank.
+  steegformer: Same bipolar→unipolar approximations; mixed-case per STEEGFORMER_CHANNEL_MAP vocabulary (Fp1 not FP1, Fz not FZ).
+  neurorvq: Same bipolar→unipolar approximations.
+  neurogpt: "Dreem headband: monopolar channels identity-mapped, bipolars \u2192 dominant anchor. 6 duplicate targets (e.g. FP1 monopolar + FP1-F3 bipolar both \u2192 FP1); wrapper keeps first-listed. 9/22 unique slots filled."
+  biot: 'Monopolar channels → uppercase 10-20 names; native bipolars FP1-F3/FP2-F4 kept as direct BIOT slot matches. Other DOD bipolars (F3-F4, F3-O1, etc.) passed through but ignored by wrapper. DOD-H:
+    2 direct + 1 derivation + 4 approx. DOD-O: 1 derivation + 8 approx.'
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.

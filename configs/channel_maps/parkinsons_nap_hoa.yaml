@@ -1,0 +1,145 @@
+dataset: parkinsons_nap_hoa
+channels_available:
+- C3-A2
+- C4-A1
+- O1-A2
+- O2-A1
+- F3-A2
+- F4-A1
+channels_used:
+- C3-A2
+- C4-A1
+- O1-A2
+- O2-A1
+- F3-A2
+- F4-A1
+per_model:
+  eegpt:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  cbramod:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  labram:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  neurolm:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  reve:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  steegformer:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  neurorvq:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  neurogpt:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  biot:
+    C3-A2: C3
+    C4-A1: C4
+    O1-A2: O1
+    O2-A1: O2
+    F3-A2: F3
+    F4-A1: F4
+  sleepfm:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  chronos:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  moment:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  timemoe:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  moirai:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  lagllama:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+  timesfm:
+    C3-A2: C3-A2
+    C4-A1: C4-A1
+    O1-A2: O1-A2
+    O2-A1: O2-A1
+    F3-A2: F3-A2
+    F4-A1: F4-A1
+notes:
+  eegpt: Linked-ear bipolars → referential 10-20 anchors. Paper pretrained unipolar at 58 channels; the bipolar→unipolar mapping is an approximation (signal values remain bipolar differences).
+  cbramod: CBraMod is index-based and permutation-invariant; pass the bipolar labels through unchanged.
+  labram: Linked-ear bipolars → standard_1020 referential anchors; shared vocabulary with NeuroLM.
+  neurolm: Uppercase per NeuroLM standard_1020 vocabulary.
+  reve: Lowercase 10-20 names per REVE position bank; bipolar→referential approximation same as EEGPT/LaBraM.
+  steegformer: Linked-ear bipolars → referential 10-20 anchors; monopolar anchor approximation.
+  neurorvq: Linked-ear bipolars → referential 10-20 anchors; monopolar anchor approximation.
+  neurogpt: Linked-ear bipolars → referential 10-20 anchors in NeuroGPT's legacy layout (match-ratio 6/22).
+  biot: 6 monopolar channels → uppercase 10-20 names. Wrapper computes 2 derivations (F3-C3, F4-C4), 8 single-electrode approximations, 6 zero-padded.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

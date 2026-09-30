@@ -1,0 +1,41 @@
+# REFERENCE ONLY — the runtime channel-map loader (MODEL_CONTRACTS §1) is
+# not yet wired. Wrappers currently read meta['channels'] directly. This
+# YAML documents the authoritative (TUAB, model) channel plan.
+
+dataset: tuab
+channels_available:
+  [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
+channels_used:
+  [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
+
+per_model:
+  reve:
+    FP1: Fp1
+    FP2: Fp2
+    F7: F7
+    F3: F3
+    FZ: Fz
+    F4: F4
+    F8: F8
+    T3: T7
+    C3: C3
+    CZ: Cz
+    C4: C4
+    T4: T8
+    T5: P7
+    P3: P3
+    PZ: Pz
+    P4: P4
+    T6: P8
+    O1: O1
+    O2: O2
+  cbramod:
+    mode: label_pass_through
+    # CBraMod's ACPE Conv2d is index-based; labels are not consulted by the
+    # model. Wrapper drops EOG/EMG/ECG/EKG/RESP/TEMP/EVENT auxiliaries by
+    # prefix substring match; remaining channels pass through in dataset order.
+    non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+
+notes:
+  reve: "TUAB is monopolar 10-20 — identity mapping. Targets use REVE's position-bank spelling (Fp1/Fz/Cz/Pz) and modern 10-20 temporal names (T3/T4/T5/T6 -> T7/T8/P7/P8)."
+  cbramod: "Label pass-through (index-based ACPE). Variable channel count supported. TUAB emits 19 unipolar electrodes (no aux channels) — wrapper drops nothing here."

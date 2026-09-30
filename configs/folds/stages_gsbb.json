@@ -1,0 +1,48 @@
+{
+  "dataset": "stages_gsbb",
+  "n_subjects": 30,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "GSBB00010",
+      "GSBB00012",
+      "GSBB00013",
+      "GSBB00021",
+      "GSBB00024",
+      "GSBB00029"
+    ],
+    "1": [
+      "GSBB00004",
+      "GSBB00009",
+      "GSBB00018",
+      "GSBB00026_3",
+      "GSBB00026_5",
+      "GSBB00030"
+    ],
+    "2": [
+      "GSBB00003",
+      "GSBB00008",
+      "GSBB00014",
+      "GSBB00016",
+      "GSBB00017",
+      "GSBB00031"
+    ],
+    "3": [
+      "GSBB00007",
+      "GSBB00015",
+      "GSBB00022",
+      "GSBB00026",
+      "GSBB00026_4",
+      "GSBB00027"
+    ],
+    "4": [
+      "GSBB00006",
+      "GSBB00011",
+      "GSBB00019",
+      "GSBB00020",
+      "GSBB00025",
+      "GSBB00026_2"
+    ]
+  }
+}

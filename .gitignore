@@ -1,0 +1,140 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local secrets — API tokens and credentials. Never commit these.
+# HF token goes in .secrets/hf_token (see run/common/load_hf_token.sh).
+/.secrets/
+
+# Local environments and editor state
+.venv/
+.env
+.idea/
+.vscode/
+.DS_Store
+.nfs*
+
+# Tooling state
+.cache/
+.codex
+.claude/
+.openclaw/
+.openclaw-state/
+memory/
+internal/
+lm_call_dump/
+debug_viz/
+
+# Build and packaging outputs
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+lightning_logs/
+condor_logs/
+run/condor/logs/
+
+# Experiment outputs and checkpoints
+outputs/
+wandb/
+artifacts/
+/checkpoints/
+*.pth.tar
+*.pt
+
+# Local benchmark preprocessing outputs
+data/*
+!data/README.md
+
+# Planning docs
+*.docx
+
+# EEG benchmark large local assets
+src/extensions/datasets/dataio/SHHS/assets/*.pkl
+src/extensions/datasets/dataio/SHHS/assets/*.mat
+
+# Legacy local dataset artifacts
+src/synib/mydatasets/CREMAD/*.json
+src/synib/mydatasets/CREMAD/*.pkl
+src/synib/mydatasets/Trifeatures/data
+src/synib/mydatasets/MultimodalQA/dataset
+src/synib/mydatasets/MultimodalQA/final_dataset_images
+src/synib/mydatasets/MUStARD/prepared/
+
+# === Sofia-local additions (not for upstream) ===
+# Operational dirs that hold paths/data/results specific to this deployment
+/parity/
+/.local/
+/docs/sofia/
+/docs/results/
+/artifacts
+/data_root_neuroatlas/
+/run/slurm/_env.sh.orig
+/logs/
+
+# Sofia-local re-extraction scripts (hard-coded HPC paths, not for upstream)
+/run/slurm/re_extract_one.sbatch
+/run/slurm/re_extract_shard.sbatch
+/run/slurm/re_merge_shards.sbatch
+/run/slurm/re_probe_sklearn.sbatch
+/run/slurm/submit_re_extract_sharded.sh
+# Stray dir from a bad shard sbatch literal expansion
+/${HPC_PROJECT_ROOT}/
+
+# Cluster-local job trees (condor/slurm submit files, host blacklists, arg
+# lists). They hard-code site paths, usernames and node names, so they stay
+# out of the release.
+/run/condor/bci_pp/
+/run/condor/combined_perC/
+/run/condor/seizure_cross/
+/run/slurm/seizure_cross/
+/run/slurm/bci_kul/submit_extract.sbatch
+
+# Local operational and analysis scripts (site paths, one-off cleanups)
+/scripts/finish_moment_large_probe.sbatch
+/scripts/post_sz2_jobs_cleanup.sh
+/scripts/restructure_artifacts.sh
+/scripts/restructure_artifacts_cleanup.sh
+/scripts/sz1_loso_hard_patients.py
+/scripts/sz1_loso_matched.py
+/scripts/sz1_per_patient_sensfa.py
+
+# Internal infrastructure notes (archive layouts, cluster handoffs)
+/docs/tier1_data_audit.md
+/docs/bci_tier2_probing_handoff.md
+
+# Editor/tool backups and LaTeX build artifacts
+*.bak
+*.bak.[0-9]*
+*.aux
+
+# Superseded entrypoints, kept on disk for reference and deliberately not
+# shipped: `fetch`, `prepare`, `embed` and `probe` replace them. Ignored so a
+# fresh clone shows only the four verbs -- git history still has the originals
+# if anything needs recovering.
+/legacy/
+
+# Cluster scaffolding: the whole HTCondor and Slurm trees (1,393 + 19 files).
+# They encode the queues, node constraints and absolute paths of the machines
+# this was run on, not the benchmark itself. `fetch`, `prepare`, `embed` and
+# `probe` need none of it. Kept on disk, not shipped.
+/run/condor/
+/run/slurm/
+
+# Machine-specific data inventories. Read by no code -- they record where
+# corpora and embeddings sit on one cluster, which is useful to us and
+# meaningless to anyone else, and they name internal paths. Kept on disk.
+/configs/dataset_paths_sofia.yaml
+/configs/embeddings_paths_sofia.yaml
+
+# Tests. Kept on disk for the team, out of the public tree by decision:
+# they verify this repo rather than being part of what it ships. Note the
+# cost -- a fresh clone has no way to check any claim the benchmark makes,
+# and tests/test_paper_scope.py is what pinned the 42-dataset arithmetic.
+/tests/

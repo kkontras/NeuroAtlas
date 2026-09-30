@@ -1,0 +1,55 @@
+{
+  "dataset": "parkinsons_nap_pd",
+  "n_subjects": 37,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "Sub_0002_nap",
+      "Sub_0003_nap",
+      "Sub_0009_nap",
+      "Sub_0040_nap",
+      "Sub_0047_nap",
+      "Sub_0054_nap",
+      "Sub_0055_nap",
+      "Sub_0077_nap"
+    ],
+    "1": [
+      "Sub_0001_nap",
+      "Sub_0013_nap",
+      "Sub_0018_nap",
+      "Sub_0042_nap",
+      "Sub_0058_nap",
+      "Sub_0062_nap",
+      "Sub_0075_nap",
+      "Sub_0080_nap"
+    ],
+    "2": [
+      "Sub_0005_nap",
+      "Sub_0023_nap",
+      "Sub_0028_nap",
+      "Sub_0032_nap",
+      "Sub_0070_nap",
+      "Sub_0076_nap",
+      "Sub_0082_nap"
+    ],
+    "3": [
+      "Sub_0020_nap",
+      "Sub_0021_nap",
+      "Sub_0026_nap",
+      "Sub_0031_nap",
+      "Sub_0044_nap",
+      "Sub_0048_nap",
+      "Sub_0083_nap"
+    ],
+    "4": [
+      "Sub_0004_nap",
+      "Sub_0011_nap",
+      "Sub_0022_nap",
+      "Sub_0033_nap",
+      "Sub_0036_nap",
+      "Sub_0046_nap",
+      "Sub_0068_nap"
+    ]
+  }
+}

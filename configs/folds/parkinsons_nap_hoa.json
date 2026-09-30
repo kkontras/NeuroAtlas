@@ -1,0 +1,52 @@
+{
+  "dataset": "parkinsons_nap_hoa",
+  "n_subjects": 34,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "Sub_0016_nap",
+      "Sub_0038_nap",
+      "Sub_0061_nap",
+      "Sub_0074_nap",
+      "Sub_0081_nap",
+      "Sub_0084_nap",
+      "Sub_0088_nap"
+    ],
+    "1": [
+      "Sub_0014_nap",
+      "Sub_0019_nap",
+      "Sub_0039_nap",
+      "Sub_0041_nap",
+      "Sub_0045_nap",
+      "Sub_0051_nap",
+      "Sub_0057_nap"
+    ],
+    "2": [
+      "Sub_0008_nap",
+      "Sub_0010_nap",
+      "Sub_0030_nap",
+      "Sub_0059_nap",
+      "Sub_0065_nap",
+      "Sub_0066_nap",
+      "Sub_0073_nap"
+    ],
+    "3": [
+      "Sub_0006_nap",
+      "Sub_0015_nap",
+      "Sub_0024_nap",
+      "Sub_0029_nap",
+      "Sub_0037_nap",
+      "Sub_0043_nap",
+      "Sub_0086_nap"
+    ],
+    "4": [
+      "Sub_0027_nap",
+      "Sub_0034_nap",
+      "Sub_0067_nap",
+      "Sub_0078_nap",
+      "Sub_0085_nap",
+      "Sub_0087_nap"
+    ]
+  }
+}

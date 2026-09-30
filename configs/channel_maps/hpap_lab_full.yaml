@@ -1,0 +1,42 @@
+dataset: hpap
+channels_available:
+  - C4
+  - C3
+channels_used:
+  - C4
+  - C3
+
+per_model:
+  eegpt:
+    C4: C4
+    C3: C3
+  cbramod:
+    C4: C4
+    C3: C3
+  labram:
+    C4: C4
+    C3: C3
+  neurolm:
+    C4: C4
+    C3: C3
+  reve:
+    C4: C4
+    C3: C3
+  biot:
+    C4: C4
+    C3: C3
+  sleepfm:
+    C4: C4
+    C3: C3
+
+  core_sleep:
+    C4: C4
+    C3: C3
+  sleep_transformer:
+    C4: C4
+    C3: C3
+  sleepyco:
+    C4: C4
+    C3: C3
+
+notes:

@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eegbenchmarks"
+version = "0.1.0"
+description = "EEGBenchmarks: checkpoint-aware EEG sleep benchmarking with linear probing and native-head evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Kept unpinned on purpose: the exact pins used for the paper live in
+# requirements-fm.txt (main stack) and requirements-tsfm.txt (jax-based TS-FMs,
+# separate environment). Install torch separately to match your CUDA version.
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn",
+    "h5py",
+    "edfio",
+    "pyyaml",   # cohort manifests and channel maps -- read by every run
+]
+
+[project.optional-dependencies]
+# Exactly what reproduction/neuroatlas_minimal_repro.ipynb needs.
+notebook = [
+    "torch",
+    "transformers",
+    "safetensors",
+    "momentfm",             # generic time-series FM
+    "chronos-forecasting",  # generic time-series FM
+    "matplotlib",           # hypnogram plot
+    "pyyaml",               # configs/channel_maps/*.yaml
+    "xlrd",                 # Sleep-EDF ships SC-subjects.xls as legacy .xls
+]
+# The 14 MOABB BCI cohorts. Imported lazily, so the rest of the benchmark runs
+# without it; needed to download or epoch a MOABB dataset rather than read a
+# preprocessed pickle.
+bci = [
+    "moabb",
+    "pooch",
+]
+# Sleep-domain PhysioEx preprocessing pipeline (not needed by the repro notebook).
+sleep = [
+    "mne",
+    "mne-bids",
+    "braindecode",
+    "physioex",
+    "loguru",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

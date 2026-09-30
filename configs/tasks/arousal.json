@@ -1,0 +1,28 @@
+{
+  "_doc": "Arousal detection. MASS carries subset_filter=SS01 because only subset SS01 has arousal annotations (tasks/arousal_detection.py:126 says so too). Thresholds are seconds of arousal per epoch.",
+  "task": {
+    "name": "arousal_detection",
+    "thresholds": [
+      0.0,
+      1.0,
+      3.0,
+      5.0,
+      7.0,
+      9.0
+    ]
+  },
+  "datasets": {
+    "mass": {
+      "subsets": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    "physionet2026": {
+      "require_human_annotations": true
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_doc": "PhysioNet 2026 cognitive-impairment classification. Was probe_physionet2026_cognitive_fm.py.",
+  "task": {
+    "name": "patient_classification",
+    "aggregation": "mean,mean_std"
+  },
+  "datasets": {
+    "physionet2026": {
+      "label_mode": "ci_label"
+    }
+  }
+}

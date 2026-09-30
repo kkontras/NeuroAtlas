@@ -1,0 +1,12 @@
+{
+  "_doc": "DOD obstructive-sleep-apnea group classification. Was probe_dod_osa_fm.py.",
+  "task": {
+    "name": "patient_classification",
+    "aggregation": "mean,mean_std"
+  },
+  "datasets": {
+    "dod": {
+      "label_mode": "osa_group"
+    }
+  }
+}
