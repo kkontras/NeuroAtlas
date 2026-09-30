@@ -50,6 +50,7 @@ from neuroatlas.entrypoints._common import (
     check_dataset_paths,
     expand_dataset_paths,
     parse_embed_chunk,
+    resolve_models_arg,
 )
 from neuroatlas.entrypoints import _help
 from neuroatlas._paths import configs_dir, output_dir
@@ -169,10 +170,11 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
                         help="Run a JSON benchmark config verbatim (the former "
                              "`benchmark` entrypoint). Mutually exclusive with --dataset.")
     parser.add_argument("--dataset", default=None, help="DatasetSpec slug.")
-    parser.add_argument("--models", default=None,
-                        help="Comma-separated model families or checkpoint ids, "
-                             "or `all` for every checkpoint in the registry "
-                             "(also the default when the flag is omitted).")
+    parser.add_argument("-m", "--models", default=None,
+                        help="An alias (all_fm, all_ts, all_supervised, all_random), a "
+                             "group, a family or checkpoint ids, comma-separated; `all` "
+                             "(the default) is every checkpoint in the registry. See "
+                             "`neuroatlas list aliases`.")
     parser.add_argument("--task", default=None,
                         help="Task slug or preset name. Default: the dataset's "
                              "DatasetSpec.default_task.")
@@ -304,10 +306,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     # An empty list means every registered model. `--models all` says that
     # out loud, so a command reads the same as what it does instead of
     # relying on the reader knowing that the absent flag means everything.
-    if args.models is None or args.models.strip().lower() == "all":
-        models = []
-    else:
-        models = _parse_csv(args.models)
+    models = resolve_models_arg(args.models)
     if args.no_recording_norm or args.no_amplitude_scale:
         runtime: Dict[str, Any] = {}
         if args.no_recording_norm:

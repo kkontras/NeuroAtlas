@@ -212,6 +212,15 @@ def _show() -> int:
         if not where.startswith("$") and not cfg.token_permissions_ok(Path(where)):
             note = "  -- readable by others: chmod 600 it"
         print(f"  {name:<5} found in {_home_relative(Path(where)) if not where.startswith('$') else where}{note}")
+
+    from neuroatlas import catalog
+
+    try:
+        benches = catalog.catalog()
+        print(f"catalog: {len(benches)} benchmarks ({', '.join(benches)}); validation ok")
+    except catalog.CatalogError as exc:
+        print(f"catalog: INVALID -- {exc}")
+        return 1
     return 0
 
 

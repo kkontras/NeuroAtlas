@@ -42,6 +42,10 @@ class Command:
 COMMANDS = {
     "config": Command("neuroatlas.cli.config",
                       "Set up and inspect where data, caches, results and weights live."),
+    "list": Command("neuroatlas.cli.listing",
+                    "What exists: benchmarks, datasets, models, aliases, tasks."),
+    "show": Command("neuroatlas.cli.show",
+                    "Explain one benchmark and print the commands it runs."),
     "fetch": Command("neuroatlas.entrypoints.fetch",
                      "Obtain a dataset's raw corpus, or say exactly how to.",
                      downloads=lambda argv: "--download" in argv),
@@ -145,7 +149,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
         logging.getLogger().addHandler(logging.StreamHandler(log))
 
-    from neuroatlas import config
+    from neuroatlas import catalog, config, selectors
 
     try:
         config.apply_to_environ()
@@ -155,6 +159,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     except config.ConfigError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(2) from None
+    except (catalog.CatalogError, selectors.SelectionError) as exc:
+        # a benchmark, dataset or model name that does not exist: a usage error
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            # SystemExit("error: ...") from a verb: print it here, where it can
+            # be captured, and exit 1 as Python itself would.
+            print(exc.code, file=sys.stderr)
+            raise SystemExit(1) from None
+        raise
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         raise SystemExit(130) from None

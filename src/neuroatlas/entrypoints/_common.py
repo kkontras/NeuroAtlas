@@ -33,6 +33,24 @@ def add_parallel_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def resolve_models_arg(value: Optional[str]) -> List[str]:
+    """``--models`` -> checkpoint ids; ``[]`` means every registered checkpoint.
+
+    ``all`` and an absent flag keep their old meaning -- the runner's own
+    "everything" -- so the paper's command lines run exactly as they did.
+    Anything else goes through the selector: an alias (all_fm), a group
+    (eeg_fm), a family (reve) or checkpoint ids, comma-separated.
+    """
+    if value is None or value.strip().lower() == "all":
+        return []
+    from neuroatlas.selectors import SelectionError, expand_models
+
+    try:
+        return expand_models(value)
+    except SelectionError as exc:
+        raise SystemExit(f"error: {exc}") from None
+
+
 def apply_task_override(config: Dict[str, Any], args: argparse.Namespace) -> None:
     if getattr(args, "task", None):
         config["task"] = {"name": args.task}

@@ -48,3 +48,23 @@ groups:
 # timemoe, lagllama, sleepgpt and physioex as "runnable by name". None of
 # them had a wrapper any more, so `--models brainbert` did not work and the
 # note promising it did was wrong.
+
+# What `--models` accepts besides a family or a checkpoint id. Each alias
+# selects *ready* checkpoints; a group alias takes every checkpoint of the
+# group's families except untrained baselines, which only `all_random` (and
+# `all`) select -- a random-init CBraMod is not an EEG foundation model.
+aliases:
+  all_fm:
+    group: eeg_fm
+    description: every EEG foundation model
+  all_ts:
+    group: ts_fm
+    description: every general time-series foundation model
+  all_supervised:
+    group: supervised
+    description: every model trained with labels on other EEG data
+  all_random:
+    source_type: random_init
+    description: untrained baselines, the same architectures with random weights
+  all:
+    description: every ready checkpoint

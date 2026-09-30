@@ -1,0 +1,20 @@
+schema_version: 1
+name: epilepsy
+title: Seizure and abnormality detection
+domain: epilepsy
+question: >
+  Is a 10 s EEG window part of a seizure? For TUAB, NMT and Bonn, which label
+  whole recordings rather than seizures, is the recording abnormal?
+paper: App. C.1
+task: seizure_detection
+embed: --set window_s=10 --set stride_s=10
+probe: --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+datasets: [bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab, tusz]
+single: bonn
+planned:
+  - {name: aub_med, reason: "has a manifest and a reader, but run/default_runs.sh never probes it"}
+metrics:
+  headline: auroc
+  higher_is_better: true
+  dummy: 0.5
+  secondary: [auprc, balanced_accuracy, mcc, ovlp_f1, sensitivity_at_fpr_h_1_0]

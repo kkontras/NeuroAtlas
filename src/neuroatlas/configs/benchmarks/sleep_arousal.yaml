@@ -1,0 +1,16 @@
+schema_version: 1
+name: sleep_arousal
+title: Microarousal detection
+domain: sleep
+question: Does a 30 s epoch contain a microarousal?
+paper: App. C.2
+embed: --set window_s=30 --set stride_s=30
+probe: --probe-type linear --class-weight balanced --tune-c 1.0
+datasets:
+  - {slug: mass, task: mass_arousal, note: "subset SS01, the only one with arousal annotations"}
+  - {slug: physionet2026, task: arousal}
+single: mass
+metrics:
+  headline: macro_f1
+  higher_is_better: true
+  secondary: [balanced_accuracy, auroc, auprc]

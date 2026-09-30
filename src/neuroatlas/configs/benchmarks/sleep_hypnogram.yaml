@@ -1,0 +1,15 @@
+schema_version: 1
+name: sleep_hypnogram
+title: Hypnogram features
+domain: sleep
+question: >
+  How well do sleep-architecture features (total sleep time, stage
+  proportions, WASO, REM latency, fragmentation...) computed from predicted
+  hypnograms match those from the true ones?
+paper: App. C.2, Table 2
+derived_from: sleep_stage
+datasets: [dcsm, dod, isruc, mass, physionet2026, sleep_edf_expanded, ucddb, wsc]
+single: sleep_edf_expanded
+metrics:
+  headline: mae
+  higher_is_better: false

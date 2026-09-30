@@ -1,0 +1,25 @@
+schema_version: 1
+name: brain_age
+title: Brain age
+domain: brain_age
+question: >
+  How old is the sleeper? A ridge regressor on each recording's mean
+  embedding; the brain-age gap (predicted minus true age) is the clinical
+  readout. It reuses the 30 s sleep embeddings rather than reading the
+  recordings again.
+paper: App. C.3
+task: brain_age
+embed: --set window_s=30 --set stride_s=30
+probe: --set label_mode=age --aggregation mean
+datasets: [cfs, isruc, mros, physionet2026, sleep_edf_expanded, wsc]
+single: sleep_edf_expanded
+planned:
+  - {name: shhs, reason: "the README counts it among the brain-age cohorts; run/default_runs.sh does not probe it for age"}
+  - {name: mesa, reason: "as for shhs"}
+  - {name: hpap_lab_full, reason: "as for shhs"}
+  - {name: stages, reason: "as for shhs"}
+metrics:
+  headline: mae
+  higher_is_better: false
+  # the dummy is predicting the training mean age, which depends on the split
+  secondary: [pearson_r, r2]

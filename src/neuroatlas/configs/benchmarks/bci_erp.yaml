@@ -1,0 +1,22 @@
+schema_version: 1
+name: bci_erp
+title: Event-related potentials
+domain: bci
+question: >
+  Is an EEG segment the response to a target stimulus (P300, N170)? Leave-one-subject-out.
+paper: App. C.4
+# no task: each cohort's own (linear_probe); trial windows come from its manifest
+embed: --pooling mean
+probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+datasets: [bi2013a, bi2014a, bnci2014_008, epflp300, erpcore2021_n170]
+single: bi2013a
+metrics:
+  headline: balanced_accuracy
+  higher_is_better: true
+  # chance is 1/n_classes, which differs by cohort
+  secondary: [cohen_kappa, macro_f1]
+variants:
+  per_patch:
+    description: keep each window's patch tokens apart instead of averaging them
+    embed: --pooling per_patch
+    probe: --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

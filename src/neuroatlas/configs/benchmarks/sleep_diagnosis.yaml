@@ -1,0 +1,19 @@
+schema_version: 1
+name: sleep_diagnosis
+title: Recording-level diagnosis
+domain: sleep
+question: >
+  From one night's mean embedding: obstructive sleep apnea (DOD), cognitive
+  impairment (PhysioNet 2026), or which disorder (ISRUC's mixed cohort)?
+paper: App. C.2, Fig. 3d
+embed: --set window_s=30 --set stride_s=30
+probe: --probe-type linear --class-weight balanced --tune-c 1.0 --aggregation mean
+datasets:
+  - {slug: dod, task: osa}
+  - {slug: physionet2026, task: cognitive}
+  - {slug: isruc, task: pathology}
+single: dod
+metrics:
+  headline: balanced_accuracy
+  higher_is_better: true
+  secondary: [macro_f1, auroc]
