@@ -42,8 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neuroatlas config",
         description="Where NeuroAtlas finds your data and puts what it makes. "
-                    f"The settings file is {cfg.config_path()}; set "
-                    "$NEUROATLAS_HOME to keep it elsewhere.",
+                    "The settings file is $NEUROATLAS_HOME/config.yaml (default "
+                    "~/.neuroatlas/config.yaml); `neuroatlas config path` prints it.",
     )
     sub = parser.add_subparsers(dest="action", metavar="<action>")
 
@@ -55,10 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     for setting in cfg.SETTINGS.values():
         if setting.key == "data_root":
             continue
-        default = setting.default()
         init.add_argument(f"--{setting.key.replace('_', '-')}", metavar="DIR",
                           help=f"{setting.help[0].upper()}{setting.help[1:]}. "
-                               f"Default: {default if default else 'none'}.")
+                               f"Default: {setting.default_text}.")
     init.add_argument("--dataset-path", action="append", default=[], type=_dataset_key,
                       metavar="DATASET.KEY=PATH",
                       help="A dataset stored outside its default sub-folder, e.g. "

@@ -5,8 +5,6 @@ The largest public benchmark to date for evaluating EEG foundation models:
 and sleep medicine), brain-computer interfaces, and a newly introduced
 **brain-age estimation** task.
 
-Anonymous release for double-blind review.
-
 ## Why NeuroAtlas
 
 EEG foundation models (FMs) promise unified representations that transfer to
@@ -136,58 +134,62 @@ pretraining): `chronos`, `lag-llama`, `moirai`, `moment`, `timemoe`,
 ## Quickstart
 
 ```bash
-# 1. Set the data and cache roots (point at your local dataset mirrors)
-export EEG_DATA_ROOT=/path/to/eeg_datasets
-export EEG_CACHE_ROOT=/path/to/embedding_cache
-export PY_ENV_ROOT=/path/to/python_env  # optional
+pip install "neuroatlas[fm]"          # install torch for your CUDA version first
+neuroatlas config init --data-root /data/eeg
 
-# 2. Install
-pip install -e .
-
-# 3. Hugging Face token for gated model weights (never commit it)
-mkdir -p .secrets && printf '%s' 'hf_xxx' > .secrets/hf_token && chmod 600 .secrets/hf_token
-# .secrets/ is gitignored. The loader resolves a token from
-# $NEUROATLAS_HF_TOKEN_FILE, then .secrets/hf_token, then $HF_TOKEN.
-
-# 4. Run a smoke probe
-neuroatlas probe --dataset sleep_edf_expanded --models cbramod --set n_folds=1
+neuroatlas list benchmarks            # what can be run
+neuroatlas data status sleep_stage    # which datasets are here, and where they were looked for
+neuroatlas data download sleep_edf_expanded
+neuroatlas models download biot_pretrained
+neuroatlas check sleep_stage -m biot_pretrained     # one real batch, in seconds
+neuroatlas run sleep_stage -m biot_pretrained       # embed, probe over 5 folds
+neuroatlas results sleep_stage
 ```
 
-There is one entrypoint per verb, not per dataset: `fetch`, `prepare`,
-`embed`, `probe`, and `hypnogram` for the one paper result computed from
-probe output rather than from embeddings. `run/default_runs.sh` lists every
-experiment in the paper as a single command each.
+For a whole suite on a cluster, `neuroatlas submit <benchmark> -m all_fm
+--out runs/x` writes one HTCondor or SLURM job per dataset × model and
+`neuroatlas status --out runs/x` tracks them; `neuroatlas leaderboard`
+ranks across benchmarks. From Python, `neuroatlas.api` has the same verbs.
+
+- [docs/user_guide.md](docs/user_guide.md) -- every step, with real output
+- [docs/cli.md](docs/cli.md) -- every command and flag (generated from the code)
+
+Each benchmark names a protocol the paper ran: `neuroatlas show <benchmark>`
+prints the `embed` and `probe` command lines it expands to, and those are
+the lines of `run/default_runs.sh`, the record of every experiment in the
+paper. The five verbs underneath -- `fetch`, `prepare`, `embed`, `probe`,
+`hypnogram` -- remain available as `neuroatlas <verb>`.
 
 ## Repository layout
 
 ```
-src/
-├── benchmarking_helpers/   # Probe, runner, cache, metrics, channel-map utilities
-├── entrypoints/            # fetch / prepare / embed / probe / hypnogram
-└── extensions/
-    ├── datasets/           # Dataset specs, adapters, dataio and physioex readers
-    ├── models/backbones/   # Foundation-model wrappers
-    └── tasks/              # Task definitions (linear probe, regression, ...)
+src/neuroatlas/
+├── cli/                    # the `neuroatlas` command, one module per command
+├── api.py                  # the same verbs from Python
+├── catalog.py, selectors.py, config.py, data.py, models.py,
+│   check.py, run.py, submit.py, results.py
+├── benchmarking_helpers/   # engine: registry, runner, cache, probes, channel maps
+├── entrypoints/            # the verbs: fetch / prepare / embed / probe / hypnogram
+├── extensions/
+│   ├── datasets/           # dataset specs, adapters, readers, corpus builders
+│   ├── models/backbones/   # foundation-model wrappers
+│   └── tasks/              # linear probe, seizure detection, brain age, ...
+└── configs/                # shipped with the package
+    ├── benchmarks/         # one file per benchmark (neuroatlas list benchmarks)
+    ├── cohorts/            # one directory per corpus: identity, labels, splits, defaults
+    ├── channel_maps/       # per-cohort electrode maps for each model family
+    ├── folds/              # frozen train/val/test splits
+    ├── tasks/              # probe presets (--task <name>)
+    └── model_groups.yaml   # the paper's model groups and the -m aliases
 
-run/
-├── launch.sh               # <verb> --dataset D --models M, over a whole domain
-├── default_runs.sh         # every experiment in the paper, one line each
-└── _launch_sets.py         # which datasets and models each bundle expands to
-
-artifacts/                  # gitignored, not in a fresh clone
-├── models/foundation/      # EEG-FM weights; most are fetched from HuggingFace
-│                           # on first use, but REVE is a local artifact
-├── models/shhs/            # the supervised sleep baselines (CoRe-Sleep,
-│                           # SleepTransformer, SleePyCo) -- local, no auto-fetch
-└── models/supervised/      # Seizure-Transformer -- local, no auto-fetch
-
-src/neuroatlas/configs/cohorts/            # one directory per corpus: identity,
-                            # labels, splits, runtime defaults
-src/neuroatlas/configs/channel_maps/       # per-cohort channel-vocabulary maps
-src/neuroatlas/configs/folds/              # frozen train/val/test splits
-src/neuroatlas/configs/tasks/              # probe presets (--task <name>)
-tests/                      # Unit and integration tests (pytest)
+run/default_runs.sh         # every experiment in the paper, one line each
+docs/                       # user guide and command reference
+reproduction/               # a minimal end-to-end notebook
+artifacts/                  # gitignored: weights, caches and results of a checkout
 ```
+
+Settings, tokens and -- outside a checkout -- weights, caches and results
+live under `~/.neuroatlas` (`$NEUROATLAS_HOME`).
 
 ## Reproducibility notes
 
@@ -202,8 +204,8 @@ tests/                      # Unit and integration tests (pytest)
 
 ## License
 
-MIT. See `LICENSE` (placeholder for camera-ready).
+MIT; see `LICENSE`. The vendored DeepSOZ and Seizure-Transformer code keep their upstream licences (`third_party/*/LICENSE*`).
 
 ## Citation
 
-Anonymous submission. Citation block will be added after de-anonymization.
+Citation block to follow.

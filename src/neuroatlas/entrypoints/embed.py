@@ -156,8 +156,8 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--cache-root", default=None,
-                        help="Embedding cache root. Default: $EEG_CACHE_ROOT, else "
-                             f"{SHARED_EMBEDDING_CACHE_ROOT}.")
+                        help="Embedding cache root. Default: the cache_root setting "
+                             "($EEG_CACHE_ROOT), else <workspace>/artifacts/embedding_cache.")
     parser.add_argument("--output-root", default=None,
                         help="Run directory. Extraction writes no results here, but the "
                              "runner creates it (default: artifacts/embeddings/<dataset>).")

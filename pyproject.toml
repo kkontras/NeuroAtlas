@@ -8,6 +8,14 @@ dynamic = ["version"]
 description = "NeuroAtlas: a benchmark for EEG foundation models across epilepsy, sleep, brain age and BCI"
 readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["EEG", "foundation models", "benchmark", "sleep", "epilepsy", "BCI", "brain age"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 
 # Kept unpinned on purpose: the exact pins used for the paper live in
 # requirements-fm.txt (main stack) and requirements-tsfm.txt (jax-based TS-FMs,
