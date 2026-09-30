@@ -48,6 +48,8 @@ def ensure_checkpoint(checkpoint_path: str | Path, source_type: str, source_refe
             return _download_huggingface(path, source_reference)
         elif source_type == "github_release":
             return _download_github(path, source_reference)
+        elif source_type == "github_release_asset":
+            return _download_release_asset(path, source_reference)
         elif source_type == "figshare_private_share":
             return _download_figshare_private_share(path, source_reference)
         elif source_type == "github_figshare":
@@ -217,6 +219,66 @@ def _download_github(local_path: Path, repo_url: str) -> Path:
                 shutil.copy2(str(extra_src), str(extra_dst))
 
     logger.info("Downloaded %s from %s", local_path.name, repo_slug)
+    return local_path
+
+
+def _download_release_asset(local_path: Path, asset_url: str) -> Path:
+    """Fetch a file that is a GitHub release asset, by its direct URL.
+
+    Unlike _download_github, which clones a repository and copies a committed
+    file, this expects source_reference to be the asset link itself
+    (``.../releases/download/<tag>/<file>``). Three S-TEEGformer checkpoints and
+    the supervised sleep baselines are published that way.
+
+    A private repository answers 404 to an unauthenticated request, so the error
+    says so rather than reporting a missing file.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    def fetch(url, accept="application/octet-stream"):
+        request = urllib.request.Request(url, headers={"Accept": accept})
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        return urllib.request.urlopen(request)
+
+    logger.info("Downloading release asset %s", asset_url)
+    try:
+        with fetch(asset_url) as response, open(local_path, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        return local_path
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (401, 403, 404):
+            raise
+        # A browse-style /releases/download/ link 404s on a private repository
+        # even with a token; only the API asset endpoint honours one. Resolve
+        # the asset id and retry there before giving up.
+        if not token:
+            raise FileNotFoundError(
+                f"{asset_url} returned HTTP {exc.code}. If the repository is still "
+                f"private, set GITHUB_TOKEN to a token that can read it, or download "
+                f"the asset by hand and place it at {local_path}."
+            ) from exc
+        try:
+            _, _, rest = asset_url.partition("github.com/")
+            owner, repo, _, _, tag, filename = rest.split("/")[:6]
+            api = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+            with fetch(api, "application/vnd.github+json") as response:
+                release = json.load(response)
+            asset_id = next(a["id"] for a in release["assets"] if a["name"] == filename)
+            with fetch(f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}") as response, \
+                    open(local_path, "wb") as handle:
+                shutil.copyfileobj(response, handle)
+            return local_path
+        except Exception as inner:
+            raise FileNotFoundError(
+                f"{asset_url} returned HTTP {exc.code}, and the API fallback failed "
+                f"({inner}). Download the asset by hand and place it at {local_path}."
+            ) from exc
+    logger.info("Downloaded %s", local_path.name)
     return local_path
 
 

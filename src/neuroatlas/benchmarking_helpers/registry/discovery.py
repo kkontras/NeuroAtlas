@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from .contracts import CheckpointSpec, DatasetSpec, ModelSpec, TaskSpec
@@ -84,10 +85,37 @@ def _matches_filter(spec: CheckpointSpec, model_names: Optional[Iterable[str]]) 
     return spec.model_family.lower() in allowed or spec.identifier.lower() in allowed
 
 
+def _localise(value: Optional[str]) -> Optional[str]:
+    """Anchor a checkpoint path written relative to the checkout.
+
+    Registry entries say ``artifacts/models/...`` or ``src/neuroatlas/...``,
+    which only resolved when the process happened to start in the checkout.
+    Weights go under the models root (``$NEUROATLAS_MODELS_ROOT`` or
+    ``<workspace>/artifacts/models``); vendored files under the installed
+    package. Hub ids (``amazon/chronos-t5-base``) and absolute paths are left
+    as they are.
+    """
+    from neuroatlas import _paths
+
+    if not value or Path(value).is_absolute():
+        return value
+    if value.startswith("artifacts/models/"):
+        return str(_paths.models_dir(value[len("artifacts/models/"):]))
+    if value.startswith("src/neuroatlas/"):
+        return str(_paths.PACKAGE_ROOT / value[len("src/neuroatlas/"):])
+    return value
+
+
 def checkpoint_registry() -> List[CheckpointSpec]:
+    import dataclasses
+
     specs: List[CheckpointSpec] = []
     for model_spec in model_specs():
-        specs.extend(model_spec.checkpoints)
+        for spec in model_spec.checkpoints:
+            specs.append(dataclasses.replace(
+                spec,
+                checkpoint_path=_localise(spec.checkpoint_path),
+                source_reference=_localise(spec.source_reference)))
     return sorted(specs, key=lambda spec: (spec.model_family, spec.identifier))
 
 
