@@ -67,6 +67,8 @@ def submit_main(argv: Optional[List[str]] = None) -> None:
     sub.save_manifest(out, planned, args.backend, args.mode)
     parts = [f"skipped {len(planned['skipped'])}"] + [f"{k} {v}" for k, v in sorted(verdicts.items())]
     print("jobs: " + "   ".join(parts) + f"   queued (mode={args.mode}) {len(queued)}")
+    for bad in planned.get("invalid", []):
+        print(f"  {bad['dataset']}: no jobs -- {bad['error']}")
     if not queued:
         print("nothing to queue: every job has results for this mode. "
               "`neuroatlas status --out " + str(args.out) + "` shows them.")

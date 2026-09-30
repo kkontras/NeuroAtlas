@@ -85,7 +85,6 @@ def _script(job_cmd: List[str], env: Dict[str, str]) -> str:
 def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
               output_root: Optional[Path] = None) -> Dict[str, Any]:
     from neuroatlas import catalog, run as runmod, selectors
-    from neuroatlas.benchmarking_helpers.channels.channel_map import load_channel_map
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
     bench = catalog.load(benchmark)
@@ -95,6 +94,7 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
     python = sys.executable
     jobs: List[Job] = []
     skipped: List[Dict[str, str]] = []
+    invalid: List[Dict[str, str]] = []
     (out / "jobs").mkdir(parents=True, exist_ok=True)
     (out / "logs").mkdir(parents=True, exist_ok=True)
     root_args = ["--output-root", str(output_root)] if output_root else []
@@ -105,7 +105,10 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
             # one CPU job per dataset, over every model's staging results
             job_models = [("*", ",".join(ids))]
         else:
-            cmap = load_channel_map(dataset)
+            cmap, map_error = runmod.channel_map(dataset)
+            if map_error:
+                invalid.append({"dataset": dataset, "error": map_error})
+                continue
             job_models = []
             for i in ids:
                 if cmap is not None and cmap.is_skip(by_id[i].model_family):
@@ -127,7 +130,7 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
             jobs.append(Job(jid, bench.name, dataset, label, variant, str(rdir), str(script),
                             depends_on=bench.derived_from))
     return {"benchmark": bench.name, "suite": suite, "variant": variant, "models": ids,
-            "jobs": jobs, "skipped": skipped}
+            "jobs": jobs, "skipped": skipped, "invalid": invalid}
 
 
 def select(jobs: List[Job], mode: str) -> List[Job]:

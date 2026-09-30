@@ -48,10 +48,19 @@ def result_dir(benchmark: str, dataset: str, variant: str = "default",
     return out if variant == "default" else out / variant
 
 
-def _skipped(dataset: str, specs) -> List[str]:
+def channel_map(dataset: str):
+    """(map or None, error message or None). A map that fails validation is
+    reported against its dataset instead of stopping a whole suite."""
     from neuroatlas.benchmarking_helpers.channels.channel_map import load_channel_map
 
-    cmap = load_channel_map(dataset)
+    try:
+        return load_channel_map(dataset), None
+    except (ValueError, KeyError) as exc:
+        return None, f"channel map invalid: {str(exc).split(': ', 1)[-1]}"
+
+
+def _skipped(dataset: str, specs) -> List[str]:
+    cmap, _ = channel_map(dataset)
     if cmap is None:
         return []
     return [s.identifier for s in specs if cmap.is_skip(s.model_family)]
@@ -112,9 +121,13 @@ def plan(benchmark: str, models: str, suite: str = "single", variant: str = "def
         fold_list = _folds(slug, probe_argv)
         st = data.status(slug)
         seeds = "per fold"
-        plans.append(DatasetPlan(bench.name, slug, bench.task_for(slug) or "default", runnable,
+        _, map_error = channel_map(slug)
+        plans.append(DatasetPlan(bench.name, slug, bench.task_for(slug) or "default",
+                                 [] if map_error else runnable,
                                  skipped, fold_list, seeds, st.state, out,
                                  embeds[slug], probe_argv))
+        if map_error:
+            plans[-1].notes.append(f"{map_error}; not run")
         if not st.found and st.state != "fetched on first use":
             plans[-1].notes.append(f"data {st.state}: `neuroatlas data status {slug}`")
     return plans
@@ -170,8 +183,13 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
             summary["ok" if status == 0 else "failed"] += 1
             continue
         if not p.models:
-            print(f"\n{p.dataset}: no applicable model (channel map skips {', '.join(p.skipped)})")
-            summary["n/a"] += len(p.skipped)
+            reason = "; ".join(p.notes) or f"channel map skips {', '.join(p.skipped)}"
+            print(f"\n{p.dataset}: nothing to run ({reason})")
+            if any("channel map invalid" in n for n in p.notes):
+                summary["datasets_failed"].append(p.dataset)
+                summary["failed"] += 1
+            else:
+                summary["n/a"] += len(p.skipped)
             continue
         models = ["--models", ",".join(p.models)]
         ctx = contextlib.nullcontext()

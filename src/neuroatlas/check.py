@@ -46,7 +46,12 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status) -> PairCh
     from neuroatlas.benchmarking_helpers.runtime.runner import BenchmarkRunner
 
     pc = PairCheck(slug, spec.identifier, data_status.state, model_status.state, "none")
-    cmap = load_channel_map(slug)
+    try:
+        cmap = load_channel_map(slug)
+    except (ValueError, KeyError) as exc:
+        pc.channel_map, pc.error = "invalid", True
+        pc.notes.append(str(exc).split(": ", 1)[-1])
+        return pc
     if cmap is not None:
         if cmap.is_skip(spec.model_family):
             pc.channel_map = "n/a (skip)"
