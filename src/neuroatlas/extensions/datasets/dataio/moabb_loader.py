@@ -57,12 +57,23 @@ def loso_fold_count(slug: str) -> int:
     this answers without downloading anything.
     """
     cfg = MOABB_DATASETS.get(slug)
-    if cfg is None:
-        raise KeyError(
-            f"n_folds='loso' needs a subject count for {slug!r}, which is not a "
-            "registered MOABB cohort. Give an integer instead."
-        )
-    return int(cfg.n_subjects)
+    if cfg is not None:
+        return int(cfg.n_subjects)
+
+    # The cognitive/affective cohorts are not MOABB datasets -- they are read
+    # from preprocessed pickles -- but their subject list is pinned in
+    # DATASET_CONFIGS, which is the same answer without a download.
+    from neuroatlas.extensions.datasets.dataio.bci import DATASET_CONFIGS
+
+    bci_cfg = DATASET_CONFIGS.get(slug)
+    if bci_cfg is not None and bci_cfg.subjects:
+        return len(bci_cfg.subjects)
+
+    raise KeyError(
+        f"n_folds='loso' needs a subject count for {slug!r}, which is neither a "
+        "registered MOABB cohort nor a DATASET_CONFIGS entry with a subject "
+        "list. Give an integer instead."
+    )
 
 
 def resolve_confound_control(cfg, enabled: bool):

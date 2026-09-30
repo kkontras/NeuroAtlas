@@ -50,11 +50,28 @@ EVENTS_CHO2017 = {"left_hand": 0, "right_hand": 1}
 EVENTS_LEE2019_MI = {"right_hand": 0, "left_hand": 1}
 EVENTS_HINSS2021 = {"easy": 2, "medium": 3, "difficult": 4, "rest": 1}
 
+# --- Cognitive / affective cohorts -------------------------------------------
+# Not MOABB datasets: each is read from the preprocessed pickles their own
+# preprocess_*.py produced. Label integers are the ones actually stored, read
+# from those scripts rather than inferred -- see the note on ArithmeticTask.
+EVENTS_EEGMAT = {"rest": 0, "arithmetic": 1}
+# preprocess_arithmetic_task.py: rest=0, arithmetic=1, meditation/breathing=2.
+# Experiment 1 recorded meditation ("M"), experiment 2 breathing ("B"); both
+# map to 2, which is why the class is named for the pair.
+EVENTS_ARITHMETIC_TASK = {"rest": 0, "arithmetic": 1, "meditation_breathing": 2}
+# 1-5 self-report binarised at 3: <=3 low, >3 high. Not presence/absence.
+EVENTS_DREAMER_VALENCE = {"low_valence": 0, "high_valence": 1}
+EVENTS_DREAMER_AROUSAL = {"low_arousal": 0, "high_arousal": 1}
+
 # --- Targets (class names kept for this benchmark) ---
 TARGETS_PHYSIONET_MI = ["left_hand", "rest", "right_hand", "feet", "hands"]
 TARGETS_CHO2017 = ["left_hand", "right_hand"]
 TARGETS_LEE2019_MI = ["left_hand", "right_hand"]
 TARGETS_HINSS2021 = ["easy", "medium", "difficult", "rest"]
+TARGETS_EEGMAT = ["rest", "arithmetic"]
+TARGETS_ARITHMETIC_TASK = ["rest", "arithmetic", "meditation_breathing"]
+TARGETS_DREAMER_VALENCE = ["low_valence", "high_valence"]
+TARGETS_DREAMER_AROUSAL = ["low_arousal", "high_arousal"]
 
 # --- Subject lists ---
 SUBJECTS_PHYSIONET_MI = [
@@ -63,6 +80,14 @@ SUBJECTS_PHYSIONET_MI = [
 SUBJECTS_CHO2017 = [x for x in range(1, 53) if x not in {32, 46, 49}]
 SUBJECTS_LEE2019_MI = list(range(1, 55))
 SUBJECTS_HINSS2021 = list(range(1, 16))
+SUBJECTS_EEGMAT = list(range(36))            # ids 0..35, one per PhysioNet subject
+# preprocess_arithmetic_task.py declares 52 (exp1 S01-S21 -> 1001-1021, exp2
+# S02-S33 excluding S07 -> 2002-2033). The pickles hold 45: experiment 2's
+# S02-S09 are absent, because the script skips any subject whose directory or
+# EDF is missing from the raw tree. 45 is what the embeddings and probes were
+# built from, so it is what this cohort declares.
+SUBJECTS_ARITHMETIC_TASK = list(range(1001, 1022)) + list(range(2010, 2034))
+SUBJECTS_DREAMER = list(range(1, 24))        # 23 subjects x 18 clips
 
 # --- Channel lists ---
 CHANNELS_PHYSIONET_MI = [
@@ -90,6 +115,21 @@ CHANNELS_LEE2019_MI = [
     "CP5", "CP1", "CP2", "CP6", "FC3", "FC4",
     "C5", "C1", "C2", "C6", "CP3", "CPz", "CP4",
 ]
+# 19 standard 10-20, as preprocess_eegmat.py / preprocess_arithmetic_task.py
+# pick them. The two differ only in ordering; the set is identical.
+CHANNELS_EEGMAT = [
+    "Fp1", "Fp2", "F3", "F4", "F7", "F8", "T7", "T8", "C3", "C4",
+    "P7", "P8", "P3", "P4", "O1", "O2", "Fz", "Cz", "Pz",
+]
+CHANNELS_ARITHMETIC_TASK = [
+    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T7", "C3", "Cz",
+    "C4", "T8", "P7", "P3", "Pz", "P4", "P8", "O1", "O2",
+]
+# Emotiv EPOC, 14 channels.
+CHANNELS_DREAMER = [
+    "AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
+    "O2", "P8", "T8", "FC6", "F4", "F8", "AF4",
+]
 CHANNELS_HINSS2021 = [
     "Fp1", "Fz", "F3", "F7", "FT9", "FC5", "FC1", "C3",
     "T7", "CP5", "CP1", "Pz", "P3", "P7", "O1", "Oz", "O2",
@@ -105,6 +145,9 @@ SFREQ_PHYSIONET_MI = 160
 SFREQ_CHO2017 = 512
 SFREQ_LEE2019_MI = 1000
 SFREQ_HINSS2021 = 500
+SFREQ_EEGMAT = 500
+SFREQ_ARITHMETIC_TASK = 256
+SFREQ_DREAMER = 128
 
 # ---------------------------------------------------------------------------
 # Additional MOABB MI datasets (broad_mi_loso sweep)
@@ -312,6 +355,34 @@ class BCIDatasetConfig:
 
 
 DATASET_CONFIGS: Dict[str, BCIDatasetConfig] = {
+    # --- Cognitive / affective cohorts. Read from preprocessed pickles; the
+    # moabb_name is a label only, since load_preprocessed_dataset resolves the
+    # file before any MOABB path is considered.
+    "eegmat": BCIDatasetConfig(
+        moabb_name="EEGMat", subjects=SUBJECTS_EEGMAT, channels=CHANNELS_EEGMAT,
+        events=EVENTS_EEGMAT, targets=TARGETS_EEGMAT, native_sfreq=SFREQ_EEGMAT,
+        resample_sfreq=128.0, fmin=0.1, fmax=64.0, notch_freq=50.0, use_car=True,
+        tmin=0.0, tmax=4.0, trial_duration=4.0,
+    ),
+    "arithmetic_task": BCIDatasetConfig(
+        moabb_name="ArithmeticTask", subjects=SUBJECTS_ARITHMETIC_TASK,
+        channels=CHANNELS_ARITHMETIC_TASK, events=EVENTS_ARITHMETIC_TASK,
+        targets=TARGETS_ARITHMETIC_TASK, native_sfreq=SFREQ_ARITHMETIC_TASK,
+        resample_sfreq=128.0, fmin=0.1, fmax=64.0, notch_freq=50.0, use_car=True,
+        tmin=0.0, tmax=1.0, trial_duration=1.0,
+    ),
+    "dreamer_valence": BCIDatasetConfig(
+        moabb_name="DREAMER", subjects=SUBJECTS_DREAMER, channels=CHANNELS_DREAMER,
+        events=EVENTS_DREAMER_VALENCE, targets=TARGETS_DREAMER_VALENCE,
+        native_sfreq=SFREQ_DREAMER, resample_sfreq=128.0, fmin=0.1, fmax=64.0,
+        notch_freq=50.0, use_car=True, tmin=0.0, tmax=4.0, trial_duration=4.0,
+    ),
+    "dreamer_arousal": BCIDatasetConfig(
+        moabb_name="DREAMER", subjects=SUBJECTS_DREAMER, channels=CHANNELS_DREAMER,
+        events=EVENTS_DREAMER_AROUSAL, targets=TARGETS_DREAMER_AROUSAL,
+        native_sfreq=SFREQ_DREAMER, resample_sfreq=128.0, fmin=0.1, fmax=64.0,
+        notch_freq=50.0, use_car=True, tmin=0.0, tmax=4.0, trial_duration=4.0,
+    ),
     "physionet_mi": BCIDatasetConfig(
         moabb_name="PhysionetMI",
         subjects=SUBJECTS_PHYSIONET_MI,
@@ -1187,6 +1258,29 @@ from pathlib import Path as _Path
 _DATA_DIR = data_dir("preprocessed")
 
 PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = {
+    # Cognitive/affective cohorts: <Dataset>_preprocessed_<variant>.pkl, the
+    # naming their preprocess_*.py writes. steegformer first only because it is
+    # the smallest; any variant carries the same signal.
+    "eegmat": [
+        str(_DATA_DIR / "EEGMat" / "EEGMat_preprocessed_steegformer.pkl"),
+        str(_DATA_DIR / "EEGMat" / "EEGMat_preprocessed_labram.pkl"),
+        str(_DATA_DIR / "EEGMat" / "EEGMat_preprocessed_bendr.pkl"),
+    ],
+    "arithmetic_task": [
+        str(_DATA_DIR / "ArithmeticTask" / "ArithmeticTask_preprocessed_steegformer.pkl"),
+        str(_DATA_DIR / "ArithmeticTask" / "ArithmeticTask_preprocessed_labram.pkl"),
+        str(_DATA_DIR / "ArithmeticTask" / "ArithmeticTask_preprocessed_bendr.pkl"),
+    ],
+    "dreamer_valence": [
+        str(_DATA_DIR / "DREAMER" / "DREAMER_valence_preprocessed_steegformer.pkl"),
+        str(_DATA_DIR / "DREAMER" / "DREAMER_valence_preprocessed_labram.pkl"),
+        str(_DATA_DIR / "DREAMER" / "DREAMER_valence_preprocessed_bendr.pkl"),
+    ],
+    "dreamer_arousal": [
+        str(_DATA_DIR / "DREAMER" / "DREAMER_arousal_preprocessed_steegformer.pkl"),
+        str(_DATA_DIR / "DREAMER" / "DREAMER_arousal_preprocessed_labram.pkl"),
+        str(_DATA_DIR / "DREAMER" / "DREAMER_arousal_preprocessed_bendr.pkl"),
+    ],
     # PhysionetMI: repo-local .pkl exists → try it first
     "physionet_mi": [
         str(_DATA_DIR / "PhysionetMI" / "physionetMI_preprocessed.pkl"),

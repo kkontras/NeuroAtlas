@@ -6,11 +6,10 @@ question: Emotion (DREAMER valence and arousal) and mental arithmetic (EEGMat, A
 paper: App. C.4
 embed: --pooling mean
 probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-datasets: []
-planned:
-  - {name: dreamer, reason: "channel maps exist; no cohort manifest or reader yet"}
-  - {name: eegmat, reason: "channel map exists; no cohort manifest or reader yet"}
-  - {name: arithmetic_task, reason: "channel map exists; no cohort manifest or reader yet"}
+# DREAMER is one dataset in the paper and two cohorts here, one per label axis,
+# which is how its pickles, embeddings and probes are stored.
+datasets: [dreamer_valence, dreamer_arousal, eegmat, arithmetic_task]
+single: eegmat
 metrics:
   headline: balanced_accuracy
   higher_is_better: true

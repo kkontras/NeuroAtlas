@@ -1,0 +1,77 @@
+# eegmat — dataset manifest
+#
+# Schema: _schema.yaml
+# Facts read from the preprocessing script that produced this cohort's pickles
+# and from the pickles themselves; see provenance below.
+
+schema_version: 1
+
+slug: eegmat
+name: EEGMat
+domain: bci
+paper_dataset: true
+
+description: >
+  EEG During Mental Arithmetic Tasks: resting state against serial-subtraction
+  cognitive workload, 36 subjects, 19-channel 10-20.
+
+cohort:
+  centre: "Taras Shevchenko National University / Igor Sikorsky KPI, Kyiv, Ukraine"
+  country: UA
+  powerline_hz: 50
+
+acquisition:
+  kind: physionet
+  ref: eegmat/1.0.0
+  note: >
+    Read from the preprocessed pickles produced by preprocess_eegmat.py, which
+    is what the published embeddings and probes were built from. There is no
+    download path in this repository.
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: trial
+  default: trial_class
+  modes:
+    trial_class:
+      note: >
+        rest=0, arithmetic=1, as preprocess_eegmat.py writes them. Raw is 72
+        EDFs, two per subject (_1 rest, _2 task).
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py (get_subject_split)
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  batch_size: 64
+  fold: 0
+  n_folds: 5
+  num_workers: 0
+
+spec:
+  datamodule: neuroatlas.extensions.datasets.adapters.cognitive.EEGMatBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+
+provenance:
+  last_verified: 2026-09-30
+  note: >
+    36 subjects, 4.0 s windows, resampled to 128 Hz. Classes: rest (0), arithmetic (1).
+    Labels verified against preprocess_eegmat.py rather than inferred from the
+    stored integers.

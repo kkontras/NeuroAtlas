@@ -351,18 +351,27 @@ python -m neuroatlas.entrypoints.hypnogram --datasets ucddb
 python -m neuroatlas.entrypoints.hypnogram --datasets wsc
 
 # ==========================================================================
-# Paper cohorts with no DatasetSpec, so nothing above runs them. Listed so
-# the gap is visible rather than implied by absence.
+# All of the paper's datasets are now registered.
 #
-#   bci     DREAMER (valence + arousal), EEGMat, ArithmeticTask
-#           (no dossier, no adapter and no fold manifest -- nothing exists
-#            for these three yet)
+# The registry holds 43 paper cohorts for 42 paper datasets: DREAMER is split
+# into dreamer_valence and dreamer_arousal, which is how its pickles, its
+# embeddings and its probes are stored, and how the paper reports it.
 #
-# 39 registered + 3 of these = the paper's 42.
-#
-# HMC, HomePAP, MESA and STAGES were listed here too until they were
-# registered; all four now have a dossier and run above.
-#
+# EEGMat, ArithmeticTask and DREAMER read preprocessed pickles rather than a
+# downloadable corpus -- `fetch` has nothing to do for them. Point
+# --set preprocessed_path=<file> at the pickle, or place it where
+# dataio/bci.py's PREPROCESSED_SEARCH_PATHS looks.
+
+python -m neuroatlas.entrypoints.embed --models all --dataset dreamer_valence --pooling mean
+python -m neuroatlas.entrypoints.embed --models all --dataset dreamer_arousal --pooling mean
+python -m neuroatlas.entrypoints.embed --models all --dataset eegmat --pooling mean
+python -m neuroatlas.entrypoints.embed --models all --dataset arithmetic_task --pooling mean
+
+python -m neuroatlas.entrypoints.probe --models all --dataset dreamer_valence --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all --dataset dreamer_arousal --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all --dataset eegmat --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all --dataset arithmetic_task --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+
 # Brain age (App. B.3) is reported on 10 cohorts: CFS, HomePAP, ISRUC, MESA,
 # MrOS, PhysioNet 2026, SHHS, SleepEDF SC, STAGES, WSC. Six run above -- the
 # six whose dossier declares an `age` label mode.
