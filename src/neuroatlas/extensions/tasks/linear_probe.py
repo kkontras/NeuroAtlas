@@ -100,6 +100,27 @@ def embedding_pooling(mode: str = "mean"):
         _POOLING = previous
 
 
+_MAX_BATCHES: Optional[int] = None
+
+
+@contextlib.contextmanager
+def limit_batches(n: Optional[int]):
+    """Within this block, stop each extraction after *n* batches.
+
+    For smoke tests only. The cache written is truncated, so the caller must
+    point the run at a cache root of its own -- `neuroatlas run
+    --limit-batches` uses <cache_root>/_limited -- or a later full run would
+    read the truncated cache as complete.
+    """
+    global _MAX_BATCHES
+    previous = _MAX_BATCHES
+    _MAX_BATCHES = None if n is None else int(n)
+    try:
+        yield
+    finally:
+        _MAX_BATCHES = previous
+
+
 def current_pooling() -> str:
     """The pooling this run is extracting and reading."""
     return _POOLING
@@ -440,7 +461,10 @@ def _extract_or_load_embeddings(
         if skip_rows:
             mode = "efficient" if efficient_resume else "re-walking"
             desc += f" (resuming from {skip_rows} rows, {mode})"
+        n_extracted = 0
         for loader_idx, batch in tqdm(raw_iter, total=total_batches, desc=desc, leave=True):
+            if _MAX_BATCHES is not None and n_extracted >= _MAX_BATCHES:
+                break
             batch_len = len(batch["meta"])
             if not efficient_resume and rows_seen + batch_len <= skip_rows:
                 if not writer.has_restored_items:
@@ -450,6 +474,7 @@ def _extract_or_load_embeddings(
                 del batch
                 continue
             rows_seen += batch_len
+            n_extracted += 1
             features = np.asarray(_extract(backbone, batch))
             labels = _flatten_labels(batch)
             meta = [_sanitize_meta(m) for m in batch["meta"]]

@@ -296,6 +296,81 @@ class BenchmarkRunner:
         key = build_cache_key(probe_parts)
         return self.output_root / "probes" / dataset_name / checkpoint_id / key
 
+    @staticmethod
+    def _pair_config(dataset_config: Dict[str, Any], cmap: Optional[ChannelMap],
+                     checkpoint_spec) -> Dict[str, Any]:
+        """The dataset config one checkpoint sees: its channels, and recording
+        statistics for the models that normalise by them."""
+        if cmap is not None:
+            dataset_config = {**dataset_config, "channel_specs": list(cmap.channels_used)}
+        if checkpoint_spec.model_family.lower() in {"reve", "biot", "sleepfm", "steegformer", "neurogpt"}:
+            dataset_config = {**dataset_config, "compute_recording_stats": True}
+        return dataset_config
+
+    def _prepare_pair(self, dataset_name: str, dataset_config: Dict[str, Any],
+                      checkpoint_spec, cmap: Optional[ChannelMap], *, load_weights: bool = True):
+        """The datamodule and backbone for one (dataset, checkpoint), exactly as
+        a run builds them: channel map, recording stats, sequence windowing,
+        the precomputed-cache stub. `neuroatlas check` uses this too, so what
+        it verifies is what a run executes.
+
+        ``load_weights=False`` returns ``backbone=None`` -- for checking the
+        data side when the weights are not on this machine.
+        """
+        dataset_spec = load_dataset_spec(dataset_name)
+        (self.cache_root / dataset_name).mkdir(parents=True, exist_ok=True)
+        datamodule = dataset_spec.create_datamodule(dataset_config, checkpoint=checkpoint_spec)
+        if self.embed_chunk is not None:
+            datamodule.embed_chunk = self.embed_chunk
+        if cmap is not None:
+            datamodule = _wrap_datamodule_with_channel_map(
+                datamodule, cmap, checkpoint_spec.model_family
+            )
+
+        # Sequence windowing is an *extraction-time* concern: it groups raw
+        # epochs into the multi-epoch context a model was pretrained on.
+        # When the datamodule serves precomputed embeddings there is no
+        # signal left to window, and wrapping it fails on the no-op loader
+        # ("'_EmptyLoader' object has no attribute 'dataset'"). EEGBenchmarks
+        # has no wrapper here at all, which is why CoRe-Sleep ran fine on the
+        # precomputed brain-age datasets there.
+        precomputed = _precomputed_cache_available(datamodule, checkpoint_spec)
+        seq_len = getattr(checkpoint_spec, "expected_sequence_length", 1)
+        if seq_len > 1 and precomputed:
+            print(
+                f"[runner] {dataset_name}/{checkpoint_spec.identifier}: skipping "
+                f"sequential wrapper (expected_sequence_length={seq_len}) — this "
+                f"datamodule serves precomputed embeddings.",
+                flush=True,
+            )
+        if seq_len > 1 and not precomputed:
+            from .sequential_epochs import SequentialDataModuleWrapper
+            overrides = getattr(checkpoint_spec, "runtime_overrides", {}) or {}
+            stride = int(overrides.get("stride", 1))
+            target_idx = overrides.get("target_idx", "all")
+            emb_stride_raw = overrides.get("embedding_stride")
+            emb_stride = int(emb_stride_raw) if emb_stride_raw is not None else None
+            emb_target = overrides.get("embedding_target_idx")
+            datamodule = SequentialDataModuleWrapper(
+                datamodule,
+                window_size=seq_len,
+                stride=stride,
+                target_idx=target_idx,
+                batch_size=int(overrides.get("sequential_batch_size", 1)),
+                embedding_stride=emb_stride,
+                embedding_target_idx=emb_target,
+            )
+
+        # Re-check: the wrappers above can change what the datamodule
+        # exposes, so this is not simply the `precomputed` value from before.
+        if _precomputed_cache_available(datamodule, checkpoint_spec):
+            backbone = _PrecomputedStubBackbone(checkpoint_spec)
+        elif load_weights:
+            backbone = load_backbone(checkpoint_spec)
+        else:
+            backbone = None
+        return datamodule, backbone
+
     def _run_one(self, dataset_name: str, dataset_config: Dict[str, Any], checkpoint_spec) -> BenchmarkResult:
         dataset_spec = load_dataset_spec(dataset_name)
 
@@ -332,62 +407,11 @@ class BenchmarkRunner:
                 },
             )
 
-        if cmap is not None:
-            dataset_config = {**dataset_config, "channel_specs": list(cmap.channels_used)}
-
-        if checkpoint_spec.model_family.lower() in {"reve", "biot", "sleepfm", "steegformer", "neurogpt"}:
-            dataset_config = {**dataset_config, "compute_recording_stats": True}
+        dataset_config = self._pair_config(dataset_config, cmap, checkpoint_spec)
 
         try:
-            (self.cache_root / dataset_name).mkdir(parents=True, exist_ok=True)
-            datamodule = dataset_spec.create_datamodule(dataset_config, checkpoint=checkpoint_spec)
-            if self.embed_chunk is not None:
-                datamodule.embed_chunk = self.embed_chunk
-            if cmap is not None:
-                datamodule = _wrap_datamodule_with_channel_map(
-                    datamodule, cmap, checkpoint_spec.model_family
-                )
-
-            # Sequence windowing is an *extraction-time* concern: it groups raw
-            # epochs into the multi-epoch context a model was pretrained on.
-            # When the datamodule serves precomputed embeddings there is no
-            # signal left to window, and wrapping it fails on the no-op loader
-            # ("'_EmptyLoader' object has no attribute 'dataset'"). EEGBenchmarks
-            # has no wrapper here at all, which is why CoRe-Sleep ran fine on the
-            # precomputed brain-age datasets there.
-            precomputed = _precomputed_cache_available(datamodule, checkpoint_spec)
-            seq_len = getattr(checkpoint_spec, "expected_sequence_length", 1)
-            if seq_len > 1 and precomputed:
-                print(
-                    f"[runner] {dataset_name}/{checkpoint_spec.identifier}: skipping "
-                    f"sequential wrapper (expected_sequence_length={seq_len}) — this "
-                    f"datamodule serves precomputed embeddings.",
-                    flush=True,
-                )
-            if seq_len > 1 and not precomputed:
-                from .sequential_epochs import SequentialDataModuleWrapper
-                overrides = getattr(checkpoint_spec, "runtime_overrides", {}) or {}
-                stride = int(overrides.get("stride", 1))
-                target_idx = overrides.get("target_idx", "all")
-                emb_stride_raw = overrides.get("embedding_stride")
-                emb_stride = int(emb_stride_raw) if emb_stride_raw is not None else None
-                emb_target = overrides.get("embedding_target_idx")
-                datamodule = SequentialDataModuleWrapper(
-                    datamodule,
-                    window_size=seq_len,
-                    stride=stride,
-                    target_idx=target_idx,
-                    batch_size=int(overrides.get("sequential_batch_size", 1)),
-                    embedding_stride=emb_stride,
-                    embedding_target_idx=emb_target,
-                )
-
-            # Re-check: the wrappers above can change what the datamodule
-            # exposes, so this is not simply the `precomputed` value from before.
-            if _precomputed_cache_available(datamodule, checkpoint_spec):
-                backbone = _PrecomputedStubBackbone(checkpoint_spec)
-            else:
-                backbone = load_backbone(checkpoint_spec)
+            datamodule, backbone = self._prepare_pair(
+                dataset_name, dataset_config, checkpoint_spec, cmap)
             effective_extract_only = self.extract_only or self.embed_chunk is not None
             from neuroatlas.extensions.tasks.linear_probe import (
                 require_cached_embeddings,
@@ -439,7 +463,7 @@ class BenchmarkRunner:
             )
 
     def run(self) -> List[BenchmarkResult]:
-        from . import ensure_dataloader_sharing_strategy
+        from .. import ensure_dataloader_sharing_strategy
 
         ensure_dataloader_sharing_strategy()
 

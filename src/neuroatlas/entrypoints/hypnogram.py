@@ -447,7 +447,11 @@ def process_dataset(dataset: str) -> List[Dict[str, Any]]:
     if not path.exists():
         logger.warning("skipping %s: %s not found", dataset, path)
         return []
+    return rows_from_hypnograms(path, dataset)
 
+
+def rows_from_hypnograms(path: Path, dataset: str) -> List[Dict[str, Any]]:
+    """Feature rows for every (model, fold, recording) in one hypnograms.json."""
     logger.info("loading %s ...", path)
     with open(path) as f:
         data = json.load(f)

@@ -37,20 +37,20 @@ class Setting:
     env: str
     default: Callable[[], Optional[Path]]
     help: str
+    default_text: str = "none"      # the default as `--help` states it, machine-independent
 
 
-# The order here is the order `config show` prints.
+# The order here is the order `config show` prints. <workspace> is the source
+# checkout when running from one, else $NEUROATLAS_HOME.
 SETTINGS: Dict[str, Setting] = {s.key: s for s in (
     Setting("data_root", "EEG_DATA_ROOT", lambda: None,
             "raw datasets, one sub-folder each"),
     Setting("cache_root", "EEG_CACHE_ROOT", lambda: _paths.artifacts_dir("embedding_cache"),
-            "saved embeddings; can grow large"),
+            "saved embeddings; can grow large", "<workspace>/artifacts/embedding_cache"),
     Setting("output_root", "NEUROATLAS_OUTPUT_ROOT", lambda: _paths.artifacts_dir("benchmarks"),
-            "probe results (results.json, results.csv)"),
+            "probe results (results.json, results.csv)", "<workspace>/artifacts/benchmarks"),
     Setting("models_root", "NEUROATLAS_MODELS_ROOT", lambda: _paths.artifacts_dir("models"),
-            "model weights"),
-    Setting("shared_embedding_root", "NEUROATLAS_SHARED_EMBEDDING_ROOT", lambda: None,
-            "read-only embedding cache your site already computed"),
+            "model weights", "<workspace>/artifacts/models"),
 )}
 
 # Keys a config file may hold besides the roots.
