@@ -134,7 +134,7 @@ import os
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("NEUROATLAS_ROOT", Path.cwd().parent)).resolve()
-if not (REPO_ROOT / "configs" / "folds").is_dir():
+if not (REPO_ROOT / "src" / "neuroatlas" / "configs" / "folds").is_dir():
     raise SystemExit(f"{REPO_ROOT} is not a NeuroAtlas checkout. Set NEUROATLAS_ROOT.")
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
@@ -145,7 +145,7 @@ CHBMIT_ROOT = Path(os.environ.get("CHBMIT_ROOT", REPO_ROOT / "chbmit_cache" / "r
 WORK = REPO_ROOT / "artifacts" / "minimal_repro"
 WORK.mkdir(parents=True, exist_ok=True)
 
-FOLD = 0        # single fold, taken from configs/folds/
+FOLD = 0        # single fold, taken from src/neuroatlas/configs/folds/
 SEED = 0
 
 # Sleep is scored in 30 s epochs, which is the clinical convention and what the
@@ -208,7 +208,7 @@ Every number below depends on one decision: which people the model learns from, 
 it is judged on. So it comes first, before any EEG file is opened.
 
 The splits are **not** computed here. They were decided once, written to
-`configs/folds/`, and committed. This notebook reads them as they are — which is the only
+`src/neuroatlas/configs/folds/`, and committed. This notebook reads them as they are — which is the only
 way your results can be compared with the paper's. Recomputing them would let a library
 version or a seed quietly change who is in which group.
 
@@ -216,7 +216,7 @@ Each file holds five folds; this notebook uses fold 0 throughout.
 """)
 
 code(r'''
-from benchmarking_helpers.registry.fold_manifest import (
+from neuroatlas.benchmarking_helpers.registry.fold_manifest import (
     SPLIT_RULE,
     check_subject_grouping,
     load_fold_split,
@@ -523,14 +523,14 @@ Every model was pretrained on its own electrode names and none agree. Sleep-EDF 
 CBraMod its own labels. Getting this wrong crashes nothing — it feeds a model a channel it
 has never seen, and the embeddings quietly get worse.
 
-So the mapping is data, not code: `configs/channel_maps/<dataset>.yaml`, one file per
+So the mapping is data, not code: `src/neuroatlas/configs/channel_maps/<dataset>.yaml`, one file per
 dataset, with a `per_model` block per model family.
 """)
 
 code(r'''
 import yaml   # ships with the conda/pip base in practice; part of pyyaml
 
-channel_map_path = REPO_ROOT / "configs" / "channel_maps" / "sleep_edf_expanded.yaml"
+channel_map_path = REPO_ROOT / "src" / "neuroatlas" / "configs" / "channel_maps" / "sleep_edf_expanded.yaml"
 channel_map = yaml.safe_load(channel_map_path.read_text())
 
 print(f"{channel_map_path.relative_to(REPO_ROOT)}\n")
@@ -592,7 +592,7 @@ stack trace later.
 """)
 
 code(r'''
-from benchmarking_helpers import checkpoint_registry
+from neuroatlas.benchmarking_helpers import checkpoint_registry
 
 registry = checkpoint_registry()
 by_id = registry if isinstance(registry, dict) else {c.identifier: c for c in registry}
@@ -706,7 +706,7 @@ def load_backbone(identifier):
     """Instantiate a backbone. Weights download on the first call and are then cached."""
     module_name, class_name, _ = ALL_MODELS[identifier]
     module = importlib.import_module(
-        f"extensions.models.backbones.{module_name}")
+        f"neuroatlas.extensions.models.backbones.{module_name}")
     return getattr(module, class_name)(by_id[identifier])
 
 
@@ -1308,7 +1308,7 @@ repository's reader handles that one step. Everything after is explicit.
 """)
 
 code(r'''
-from extensions.datasets.adapters.chbmit import CHBMITBenchmarkDataModule
+from neuroatlas.extensions.datasets.adapters.chbmit import CHBMITBenchmarkDataModule
 
 # Look for the BIDS tree itself, not just the download directory: a download that
 # is still running, or was interrupted before unzipping, leaves the directory in
@@ -1318,7 +1318,7 @@ RUN_EPILEPSY = any(BIDS_ROOT.glob("sub-*")) if BIDS_ROOT.is_dir() else False
 
 if not RUN_EPILEPSY:
     print(f"No CHB-MIT BIDS tree with sub-* directories under {BIDS_ROOT}.")
-    print("Get it with:  python -m entrypoints.fetch --dataset chbmit")
+    print("Get it with:  python -m neuroatlas.entrypoints.fetch --dataset chbmit")
     print("or unzip Zenodo record 10259996 (BIDS_CHB-MIT.zip) into $CHBMIT_ROOT.")
     print("That is about 22 GB, and it has to finish unzipping before this section runs.")
     print("Skipping section 7d.")
@@ -1567,7 +1567,7 @@ paper's stack rather than merely run the notebook.
 
 * `python reproduction/build_notebook.py` regenerates this notebook — edit the generator,
   not the `.ipynb`.
-* `run/default_runs.sh` lists every experiment the paper reports; `src/entrypoints/` holds the
+* `run/default_runs.sh` lists every experiment the paper reports; `src/neuroatlas/entrypoints/` holds the
   five verbs that produced the paper's tables.
 * Run `check_subject_grouping` against any fold manifest you add. It catches the split bug
   from section 1.

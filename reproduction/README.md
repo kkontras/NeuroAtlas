@@ -96,7 +96,7 @@ wget -r -N -c -np -nH --cut-dirs=1 -P "$(dirname "$SLEEPEDF_ROOT")" \
      https://physionet.org/files/sleep-edfx/1.0.0/
 
 # CHB-MIT, about 22 GB, covers the seizure detection section
-python -m entrypoints.fetch --dataset chbmit --download   # Zenodo record 10259996
+python -m neuroatlas.entrypoints.fetch --dataset chbmit --download   # Zenodo record 10259996
 ```
 
 Point the notebook at them with `SLEEPEDF_ROOT` and `CHBMIT_ROOT`. Without them it falls
@@ -111,7 +111,7 @@ The protocol is.
 
 ## How subjects are divided into train and test
 
-Fold 0 only, read verbatim from `configs/folds/` rather than recomputed. That is the only
+Fold 0 only, read verbatim from `src/neuroatlas/configs/folds/` rather than recomputed. That is the only
 way a reproduction lands on the paper's partitions. The adapters used here (`chbmit`,
 `sleep_edf_expanded`, `sleepedf_raw_brain_age`) accept a `folds_manifest` key that makes
 them take frozen subject lists from disk instead of running their own k-fold at import

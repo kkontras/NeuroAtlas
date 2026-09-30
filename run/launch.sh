@@ -5,7 +5,7 @@
 # This replaces ~80 shell wrappers that were each the same script with a
 # different dataset slug. They existed because every dataset used to have its
 # own entrypoint; now there are four verbs and the per-dataset facts live in
-# configs/cohorts/<slug>/cohort.yaml, so a launcher has nothing left to carry.
+# src/neuroatlas/configs/cohorts/<slug>/cohort.yaml, so a launcher has nothing left to carry.
 #
 # Usage
 #   run/launch.sh <verb> [options]
@@ -89,18 +89,18 @@ for ds in $DATASETS; do
     model_args=(); [[ -n "$MODELS" ]] && model_args=(--models "$MODELS")
     case "$VERB" in
         fetch)
-            run "$PYTHON_BIN" -m entrypoints.fetch --dataset "$ds" ;;
+            run "$PYTHON_BIN" -m neuroatlas.entrypoints.fetch --dataset "$ds" ;;
         prepare)
             # most cohorts need none; `prepare` says so and exits non-zero
-            run "$PYTHON_BIN" -m entrypoints.prepare --dataset "$ds" \
+            run "$PYTHON_BIN" -m neuroatlas.entrypoints.prepare --dataset "$ds" \
                 ${EXTRA:+$EXTRA} || true ;;
         embed)
-            run "$PYTHON_BIN" -m entrypoints.embed --dataset "$ds" \
+            run "$PYTHON_BIN" -m neuroatlas.entrypoints.embed --dataset "$ds" \
                 "${model_args[@]}" ${EXTRA:+$EXTRA} ;;
         probe)
             while IFS= read -r task_args; do
                 # shellcheck disable=SC2086  -- task_args is a flag string
-                run "$PYTHON_BIN" -m entrypoints.probe --dataset "$ds" \
+                run "$PYTHON_BIN" -m neuroatlas.entrypoints.probe --dataset "$ds" \
                     $task_args "${model_args[@]}" ${EXTRA:+$EXTRA}
             done < <(sets probes "$ds" "$AXIS") ;;
     esac

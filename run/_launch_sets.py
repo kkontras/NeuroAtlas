@@ -34,7 +34,7 @@ def in_the_paper(manifest: dict) -> bool:
 
 
 def datasets(domain: str, paper_only: bool) -> list[str]:
-    from benchmarking_helpers.registry.discovery import dataset_specs
+    from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
 
     out = []
     for spec in sorted(dataset_specs(), key=lambda s: s.slug):
@@ -59,7 +59,7 @@ def datasets(domain: str, paper_only: bool) -> list[str]:
 def models(group: str) -> list[str]:
     import yaml
 
-    cfg = yaml.safe_load((REPO / "configs" / "model_groups.yaml").read_text())
+    cfg = yaml.safe_load((REPO / "src" / "neuroatlas" / "configs" / "model_groups.yaml").read_text())
     groups = cfg["groups"]
     if group == "all":
         return sorted({f for g in groups.values() for f in g["families"]})
@@ -86,7 +86,7 @@ def models(group: str) -> list[str]:
 # with other disorders (Fig. 3d). It is NOT Parkinson's or Alzheimer's -- those
 # cohorts exist in the registry but the paper does not evaluate them.
 #
-# Each entry is a shipped preset in configs/tasks/, which already carries the
+# Each entry is a shipped preset in src/neuroatlas/configs/tasks/, which already carries the
 # right label mode and the subject-level aggregation.
 DIAGNOSIS_TASKS = {
     "dod": ["osa"],                     # OSA vs healthy

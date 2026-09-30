@@ -1,0 +1,111 @@
+# aub_med — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: aub_med
+name: Aub Med
+domain: epilepsy
+paper_dataset: false
+# named once in Appendix B.1 prose and in no result: the seven continuously-
+# labelled cohorts scored in the paper are TUSZ, Siena, SeizeIT1, CHB-MIT,
+# SeizeIT2, Helsinki and Epilepsiae
+
+description: >
+  AUB-MED / Nasreddine Epileptic EEG dataset (American University of
+  Beirut Medical Center) — binary seizure detection from 21-channel scalp
+  EEG at 500 Hz, mapped to canonical 19-channel 10-20 and resampled to 256
+  Hz at load. 6 patients, ~23 recordings with seizure clock-time
+  annotations. Patient-disjoint k-fold. Direct-EDF backend — no HDF5
+  cache.
+
+cohort:
+  centre: "American University of Beirut, Lebanon"
+  country: LB
+  powerline_hz: 50
+
+acquisition:
+  kind: mendeley
+  ref: 10.17632/5pc2j46cbc
+
+signal:
+  montage: bipolar
+  window_s: 10.0
+  stride_s: null
+  overlap_threshold: 0.0
+  notch_freq: null
+
+labels:
+  granularity: window
+  # one label per window; event-level metrics (any-overlap, FA/h) are computed on top of the window scores
+  default: binary
+  modes:
+    binary: {}
+
+splits:
+  derivation: >
+    StratifiedKFold(shuffle=True, random_state=42) over sorted patient ids,
+    stratified on whether the patient has any seizure; folds are capped at
+    the patient count, so n_folds=6 over 6 patients is leave-one-patient-out
+  derived_by: src/neuroatlas/extensions/datasets/adapters/siena.py:54-83 (_patient_splits_generic, shared with aub_med)
+  # No fold manifest: there is no file to inspect, but the split is
+  # reproducible because the splitter is seeded and the subject order
+  # is sorted.
+  manifest: null
+  grouping: patient
+  n_folds: 6                                # = the patient count: leave-one-patient-out.
+                                            # NOT a typo for the 5 every other epilepsy
+                                            # cohort uses — AUB-MED has 6 patients
+                                            # (p10-p15) and the splitter caps folds at
+                                            # the subject count anyway.
+
+runtime_defaults:
+  annotations_dir: "${EEG_DATA_ROOT}/aub_med/annotations"
+  balance: weighted_sampler
+  batch_size: 64
+  fold: 0
+  label_mode: binary
+  montage: bipolar
+  n_folds: 6
+  normalize: none
+  num_workers: 4
+  overlap_threshold: 0.0
+  raw_dir: "${EEG_DATA_ROOT}/aub_med/raw"
+  signal_cache_size: 8
+  stride_s: null
+  window_s: 10.0
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  montage:
+    values:
+      - bipolar
+      - unipolar
+    enforced_by: dataio.aub_med
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.aub_med.AUBMedBenchmarkDataModule
+  default_task: seizure_detection
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  last_verified: 2026-09-21

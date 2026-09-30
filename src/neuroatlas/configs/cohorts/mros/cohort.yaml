@@ -1,0 +1,86 @@
+# mros_raw_brain_age — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: mros
+name: Mros Raw Brain Age
+domain: sleep
+paper_dataset: true
+description: >
+  MrOS brain age from raw EDF — all EEG channels (C3-A2 + C4-A1), 256 Hz
+  online.
+
+cohort:
+  centre: "MrOS Sleep Study (NSRR), USA"
+  country: US
+  powerline_hz: 60
+  inherits_from: mros
+
+acquisition:
+  kind: nsrr
+  ref: mros
+
+signal:
+  notch_freq: null
+  channels:
+    - C3-A2
+    - C4-A1
+
+labels:
+  granularity: recording
+  # one label for the whole recording; window scores are aggregated to the recording before scoring — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      granularity: window   # one label per 30 s epoch
+    age:
+      granularity: recording   # one label per recording
+      note: chronological age in years; regression, see spec.default_task
+splits:
+  derivation: >
+    nested StratifiedKFold over subjects, stratified on age bins: the outer
+    split (shuffle=True, random_state=`seed`, default 42) picks the test
+    subjects, an inner StratifiedKFold on the remainder picks validation
+    using fold+1. Deterministic for a given seed
+  derived_by: src/neuroatlas/extensions/datasets/adapters/mros.py:504-525
+  # No fold manifest: reproducible because the splitter is seeded,
+  # but there is no file to inspect or to pin across repo versions.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  batch_size: 256
+  channels:
+    - C3-A2
+    - C4-A1
+  crop_wake_mins: null
+  data_root: "${EEG_DATA_ROOT}/raw-sleep/mros"
+  fold: 0
+  n_folds: 5
+  num_workers: 4
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.mros.MrOSRawBrainAgeDataModule
+  default_task: brain_age
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - fold
+    - n_folds
+    - channels
+    - crop_wake_mins
+
+provenance:
+  last_verified: 2026-09-21

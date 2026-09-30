@@ -1,0 +1,138 @@
+# bonn — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: bonn
+name: Bonn
+domain: epilepsy
+paper_dataset: true
+
+description: >
+  Bonn EEG epilepsy dataset (Andrzejak et al. 2001). 500 pre-segmented
+  single-channel clips (4097 samples at 173.61 Hz, ~23.6 s) across five
+  sets Z/O/N/F/S — healthy surface (Z, O), interictal intracranial (N, F),
+  and ictal intracranial (S). Configurable label_mode (binary_s_vs_rest,
+  binary_ae, three_class, five_class, recording_type, state) and variable
+  sub-window length.
+
+cohort:
+  centre: "University of Bonn, Germany"
+  country: DE
+  powerline_hz: 50
+
+acquisition:
+  kind: manual
+
+signal:
+  montage: unipolar
+  window_s: null
+  stride_s: null
+  notch_freq: null
+
+labels:
+  granularity: recording
+  # one label per recording; window scores are aggregated to the recording before scoring
+  default: binary_s_vs_rest
+  modes:
+    binary_s_vs_rest:
+      implemented_by: dataio.bonn._label_mode_spec
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+  also_implemented:
+    - binary_ae
+    - three_class
+    - five_class
+    - recording_type
+    - state
+    - lateralization
+    - seizure_intracranial
+    - eyes_open_closed
+splits:
+  derivation: >
+    nested StratifiedKFold over the 500 single-channel clips. NOT
+    subject-grouped: the public Bonn distribution ships no per-clip subject
+    identifiers, so every clip carries subject_idx = -1 and a grouped splitter
+    would put all 500 in one group. Every published Bonn benchmark uses plain
+    StratifiedKFold over clips and accepts the within-subject leakage.
+  derived_by: src/neuroatlas/extensions/datasets/adapters/bonn.py:96
+  # No fold manifest: reproducible because the splitter is seeded, but there
+  # is no file to inspect.
+  manifest: null
+  grouping: clip                            # NOT patient — see derivation. This
+                                            # is the one cohort in the benchmark
+                                            # whose folds are not subject-disjoint,
+                                            # so its numbers are not comparable
+                                            # with the subject-independent ones.
+  n_folds: 5
+
+pipeline:
+  # How `prepare` builds this cohort's optional fast-path cache.
+  # The flag names differ per builder, so they are recorded here
+  # rather than guessed.
+  preprocessor:
+    # Optional. The default backend reads the raw corpus directly -- see
+    # `backend`/runtime_defaults below -- so this cache only speeds up large
+    # sweeps. `prepare --dataset bonn` is never a prerequisite for `embed`.
+    optional: true
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_bonn
+    args:
+      raw: --raw-dir
+      out: --output
+
+runtime_defaults:
+  # raw_dir, not the HDF5 cache: Bonn is 500 plain-text clips of 4097 samples,
+  # so `fetch --dataset bonn` is enough to run it. cache_root/cache_filename
+  # stay for the prebuilt fast path, which `prepare` writes.
+  raw_dir: "${EEG_DATA_ROOT}/bonn/raw"
+  balance: weighted_sampler
+  batch_size: 64
+  cache_filename: bonn_173hz_segments.h5
+  cache_root: "${REPO_ROOT}/bonn_cache/hdf5"
+  fold: 0
+  label_mode: binary_s_vs_rest
+  n_folds: 5
+  normalize: none
+  num_workers: 0
+  seed: 42
+  stride_s: null
+  window_s: null
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - binary_s_vs_rest
+    enforced_by: dataio.bonn._label_mode_spec
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.bonn.BonnBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  last_verified: 2026-09-21
+  known_issues:
+    - "Folds are not subject-independent: the corpus ships no subject
+       identifiers, so the split is over clips. Numbers are not comparable
+       with the subject-disjoint cohorts — see splits.derivation."

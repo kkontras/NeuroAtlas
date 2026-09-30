@@ -150,7 +150,7 @@ mkdir -p .secrets && printf '%s' 'hf_xxx' > .secrets/hf_token && chmod 600 .secr
 # $NEUROATLAS_HF_TOKEN_FILE, then .secrets/hf_token, then $HF_TOKEN.
 
 # 4. Run a smoke probe
-python -m entrypoints.probe --dataset sleep_edf_expanded --models cbramod --set n_folds=1
+neuroatlas probe --dataset sleep_edf_expanded --models cbramod --set n_folds=1
 ```
 
 There is one entrypoint per verb, not per dataset: `fetch`, `prepare`,
@@ -181,22 +181,22 @@ artifacts/                  # gitignored, not in a fresh clone
 │                           # SleepTransformer, SleePyCo) -- local, no auto-fetch
 └── models/supervised/      # Seizure-Transformer -- local, no auto-fetch
 
-configs/cohorts/            # one directory per corpus: identity,
+src/neuroatlas/configs/cohorts/            # one directory per corpus: identity,
                             # labels, splits, runtime defaults
-configs/channel_maps/       # per-cohort channel-vocabulary maps
-configs/folds/              # frozen train/val/test splits
-configs/tasks/              # probe presets (--task <name>)
+src/neuroatlas/configs/channel_maps/       # per-cohort channel-vocabulary maps
+src/neuroatlas/configs/folds/              # frozen train/val/test splits
+src/neuroatlas/configs/tasks/              # probe presets (--task <name>)
 tests/                      # Unit and integration tests (pytest)
 ```
 
 ## Reproducibility notes
 
 - All probes use deterministic seeds via
-  `benchmarking_helpers.seed_everything`.
+  `neuroatlas.benchmarking_helpers.seed_everything`.
 - Embeddings are cached on first extraction and reused across probe variants.
   Cache layout is documented in
-  `src/benchmarking_helpers/runtime/cache.py`.
-- Channel-map YAMLs in `configs/channel_maps/` define per-dataset channel
+  `src/neuroatlas/benchmarking_helpers/runtime/cache.py`.
+- Channel-map YAMLs in `src/neuroatlas/configs/channel_maps/` define per-dataset channel
   translations for each foundation-model family. They are required to
   reproduce the cross-dataset evaluation.
 

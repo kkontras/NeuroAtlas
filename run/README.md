@@ -21,8 +21,8 @@ Wrappers should only:
 
 Benchmark orchestration logic belongs in:
 
-- `src/benchmarking_helpers/`
-- `src/extensions/tasks/`
+- `src/neuroatlas/benchmarking_helpers/`
+- `src/neuroatlas/extensions/tasks/`
 
 ## Current direction
 

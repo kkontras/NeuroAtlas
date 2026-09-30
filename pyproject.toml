@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eegbenchmarks"
-version = "0.1.0"
-description = "EEGBenchmarks: checkpoint-aware EEG sleep benchmarking with linear probing and native-head evaluation"
+name = "neuroatlas"
+dynamic = ["version"]
+description = "NeuroAtlas: a benchmark for EEG foundation models across epilepsy, sleep, brain age and BCI"
 readme = "README.md"
 requires-python = ">=3.10"
 
@@ -20,9 +20,24 @@ dependencies = [
     "h5py",
     "edfio",
     "pyyaml",   # cohort manifests and channel maps -- read by every run
+    "pyedflib", # EDF reader behind the PhysioEx-style sleep cohorts; imported by dataset discovery
+    "huggingface_hub",  # gated and hub-hosted model weights
 ]
 
+[project.scripts]
+neuroatlas = "neuroatlas.cli:main"
+
 [project.optional-dependencies]
+# The model stack. Install torch yourself first, to match your CUDA version;
+# requirements-fm.txt has the exact pins the paper used.
+fm = [
+    "torch",
+    "transformers",
+    "safetensors",
+    "einops",
+    "timm",
+    "braindecode",
+]
 # Exactly what reproduction/neuroatlas_minimal_repro.ipynb needs.
 notebook = [
     "torch",
@@ -31,7 +46,7 @@ notebook = [
     "momentfm",             # generic time-series FM
     "chronos-forecasting",  # generic time-series FM
     "matplotlib",           # hypnogram plot
-    "pyyaml",               # configs/channel_maps/*.yaml
+    "pyyaml",               # src/neuroatlas/configs/channel_maps/*.yaml
     "xlrd",                 # Sleep-EDF ships SC-subjects.xls as legacy .xls
 ]
 # The 14 MOABB BCI cohorts. Imported lazily, so the rest of the benchmark runs
@@ -53,5 +68,29 @@ sleep = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.dynamic]
+version = {attr = "neuroatlas.__version__"}
+
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["neuroatlas*"]
+exclude = ["*.__pycache__"]
+
+# The shipped tables (cohort manifests, channel maps, folds, task presets) and
+# the vendored DeepSOZ checkpoint with the upstream licences. Everything else
+# a run needs -- weights, caches, corpora -- is the user's, never shipped.
+[tool.setuptools.package-data]
+neuroatlas = [
+    "configs/**/*.yaml",
+    "configs/**/*.json",
+    "configs/**/*.md",
+    "extensions/models/backbones/third_party/*/LICENSE*",
+    "extensions/models/backbones/third_party/*/*.txt",
+    "extensions/models/backbones/third_party/*/*.tar",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
