@@ -12,7 +12,7 @@ They exist in two on-disk shapes, both handled here:
 
 **partition** — ``folds[k] = [subject_ids]``, where each entry is the *test*
     partition for fold ``k``.  Used by the unversioned sleep-side manifests:
-    sleepedf, shhs_*, stages_*, mesa, isruc, ...  Explicit splits are derived
+    shhs_*, stages_*, mesa, isruc, ...  Explicit splits are derived
     with the rule documented in those files and implemented identically in
     ``entrypoints/probe_from_embeddings._load_fold_split``::
 
@@ -20,8 +20,8 @@ They exist in two on-disk shapes, both handled here:
         val   = folds[(k + 1) % n_folds]
         train = the remaining folds
 
-Some partition manifests (e.g. ``sleepedf.json``) additionally carry a
-materialized ``splits`` block.  When present it is used as a cross-check and a
+A partition manifest may additionally carry a materialized ``splits`` block.
+No manifest shipped here does, but when present it is used as a cross-check and a
 mismatch raises, so the derivation cannot silently drift from the frozen file.
 
 This module exists because ``patient_splits.load_folds`` accepts only
@@ -144,7 +144,7 @@ def load_fold_split(
     ``configs_root`` bypasses (1) entirely and is used by the tests.
 
     Args:
-        dataset: Manifest slug, e.g. ``"chbmit"`` or ``"sleepedf"``.
+        dataset: Manifest slug, e.g. ``"chbmit"`` or ``"sleep_edf_expanded"``.
         fold: Zero-based fold index.
         configs_root: Override the manifest directory. When given, only that
             directory is searched.
