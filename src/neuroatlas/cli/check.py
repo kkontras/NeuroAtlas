@@ -91,7 +91,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             print(left_out)
     if nothing:
         print(f"nothing was checked: no pair could be pushed through ({skipped} skipped for "
-              f"missing data or weights; the ↳ lines say what to fetch)", file=sys.stderr)
+              f"missing data or weights; the indented lines under each say what to fetch)", file=sys.stderr)
     elif args.strict and skipped and not errors:
         print(f"--strict: {skipped} pair(s) skipped for missing data or weights",
               file=sys.stderr)

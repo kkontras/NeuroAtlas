@@ -166,7 +166,7 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         num_workers: DataLoader workers.
         window_s: Window duration in seconds.
         stride_s: Window stride in seconds.
-        montage: ``"unipolar"`` (19 ch) or ``"bipolar"`` (18 ch).
+        montage: ``"unipolar"`` (19 electrodes, the default) or ``"bipolar"`` (the 20-pair TCP montage).
         label_mode: ``"binary"`` for seizure detection.
         normalize: ``"none"`` or ``"per_window_zscore"``.
         balance: ``"weighted_sampler"`` or ``"none"``.
@@ -186,7 +186,7 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         num_workers: int = 4,
         window_s: float = 30.0,
         stride_s: Optional[float] = None,
-        montage: str = "bipolar",
+        montage: str = "unipolar",
         label_mode: str = "binary",
         normalize: str = "none",
         balance: str = "weighted_sampler",

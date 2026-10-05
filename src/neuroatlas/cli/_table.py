@@ -7,7 +7,7 @@ One schema for every format:
   ``null`` in JSON (never the string "n/a", never NaN, which is not JSON);
 * a field that does not apply is :data:`NOT_APPLICABLE`: ``-`` in a table,
   ``null`` in JSON;
-* the lines a table prints under a row (``↳ ...``) are its ``note``, a column
+* the indented lines a table prints under a row are its ``note``, a column
   of CSV/Markdown and a field of JSON, so a machine reads the same reasons a
   person does;
 * JSON may carry more fields than the table shows (``extra``), never fewer.
@@ -66,7 +66,7 @@ def _json_value(value: Any) -> Any:
 def add_format_arg(parser) -> None:
     parser.add_argument("--format", choices=FORMATS, default="table",
                         help="Output format (default: table). csv, md and json carry the "
-                             "table's ↳ lines as a `note` column; json uses null for "
+                             "table's indented note lines as a `note` column; json uses null for "
                              "a missing value.")
 
 
@@ -129,4 +129,4 @@ def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],
     for i, row in enumerate(cells):
         out.write(line(row) + "\n")
         for note in notes.get(i, []):
-            out.write(f"    ↳ {note}\n")
+            out.write(f"      {note}\n")
