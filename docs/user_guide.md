@@ -52,7 +52,7 @@ The full recipe, with what each step does to the environment, is in the
 in a clone of the repository:
 
 ```bash
-python3.11 -m venv .venv && source .venv/bin/activate
+conda create -n neuroatlas python=3.11 -y && conda activate neuroatlas   # or: python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[fm]" -c requirements-fm.txt     # the paper's exact versions; torch's default build is CUDA 13
 ```
 
