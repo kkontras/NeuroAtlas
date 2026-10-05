@@ -1,17 +1,16 @@
-# EEGBenchmarks core runtime requirements
+# The paper's exact versions, as a pip constraints file. Install with
 #
-# Target environment:
-# - Python 3.11
-# - CUDA-matched PyTorch installed separately
+#     pip install -e ".[fm]" -c requirements-fm.txt
 #
-# Install order:
-# 1. install torch / torchvision / torchaudio first
-# 2. pip install -r requirements-fm.txt
-# 3. optionally add -r requirements-dev.txt
+# pyproject's [fm] extra lists every package a run imports; this file pins
+# each to the version the paper used (Python 3.11). torch is not pinned: pip
+# takes its default build, or keeps a CUDA build you installed first.
+# `pip install -r requirements-fm.txt` still works, but installs packages
+# nothing imports (torchmetrics, numba, colorama, ...).
 #
 # MOABB is NOT here: the 14 MOABB BCI cohorts import it lazily. For them,
 # after this file:
-#     pip install -e ".[bci]"                 # moabb's runtime deps that fit these pins
+#     pip install -e ".[fm,bci]" -c requirements-fm.txt   # moabb's runtime deps that fit these pins
 #     pip install --no-deps "moabb==1.2.0"    # the last moabb on numpy<2
 # Every later moabb needs numpy>=2. 1.2.0 declares scikit-learn<1.6,
 # urllib3<2 and seaborn<0.13, which this stack exceeds; with --no-deps they
@@ -19,7 +18,7 @@
 # moabb 1.7.2's), and `pip check` lists them. The two paper cohorts newer than
 # 1.2.0, Dreyer2023 and Kim2025BetaRange, are vendored in the package.
 #
-# The generic time-series FMs: `pip install -e ".[ts]"` (chronos-forecasting),
+# The generic time-series FMs: `pip install -e ".[fm,ts]" -c requirements-fm.txt` (chronos-forecasting),
 # then `pip install --no-deps "momentfm==0.1.4"` -- momentfm declares
 # transformers==4.33.3 / numpy==1.25.2 / huggingface-hub==0.24.0 and would
 # downgrade this stack; it runs with it, but `pip check` lists those three

@@ -19,55 +19,52 @@ and its Python API. Paper: [arXiv:2605.14698](https://arxiv.org/abs/2605.14698).
 
 ## Install
 
-Python 3.10 or newer; 3.11 is what the paper used and what is tested.
-Install from a clone. The distribution is named `neuroatlas-bench` (a built
-wheel is `neuroatlas_bench-<version>-py3-none-any.whl`); the command and the
-import stay `neuroatlas`. It is not on PyPI yet. The PyPI name `neuroatlas`
-belongs to an unrelated project: do not install it. The GitHub repository
-is not public yet (2026-10-05); until it is, cloning needs access from the
-authors.
+From a clone, with Python 3.11 (3.10 or newer works; 3.11 is what the
+paper used). The repository is private for now: cloning needs access from
+the authors.
 
 ```bash
 git clone https://github.com/kkontras/NeuroAtlas.git && cd NeuroAtlas
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip
-
-pip install torch torchvision torchaudio   # first; see the note below
-pip install -r requirements-fm.txt         # the paper's exact versions
-pip install -e ".[fm]"                     # the neuroatlas command
-pip check                                  # No broken requirements found.
+pip install -e ".[fm]" -c requirements-fm.txt
 ```
 
-In a fresh venv this took 4 min for torch, 2 min for `requirements-fm.txt`
-and seconds for the rest; the venv is 6.5 GB.
+That is the whole install for the EEG foundation models, the supervised
+baselines and every sleep, epilepsy and brain-age dataset. `[fm]` lists
+everything a run imports; `-c requirements-fm.txt` pins each package to the
+version the paper used. In a fresh environment it took 5 minutes; the
+environment is 6.3 GB, most of it
+PyTorch.
 
-**PyTorch.** `pip install torch` currently gives a CUDA 13 build (2.14.1+cu130
-on 2026-10-02), with kernels for GPUs of compute capability 7.5 and newer
-only (Turing onwards). `nvidia-smi` must report CUDA 13.0 or higher. For an
-older GPU or driver, install a CUDA 12 build from pytorch.org instead.
-
-**Optional extras**, after the block above:
+**Everything else** (the 14 MOABB BCI datasets, Chronos and MOMENT) is two
+more lines:
 
 ```bash
-pip install -e ".[ts]"                       # Chronos
-pip install --no-deps "momentfm==0.1.4"      # MOMENT
-pip install -e ".[fm,bci]"                   # the 14 MOABB BCI datasets: see below
-pip install --no-deps "moabb==1.2.0"
+pip install -e ".[fm,bci,ts]" -c requirements-fm.txt
+pip install --no-deps "moabb==1.2.0" "momentfm==0.1.4"
 ```
 
-- `momentfm` declares old pins of transformers, numpy and huggingface-hub;
-  installed with `--no-deps` it runs with this stack. From then on
-  `pip check` lists those three pins, and later installs print a pip
-  "dependency conflicts" error about them. Both are expected.
-- The BCI datasets stay on the paper's numpy 1.26.4. The `bci` extra holds
-  MOABB's dependencies that fit this stack; MOABB itself goes in with
-  `--no-deps`, as 1.2.0, the last release on numpy<2. `pip check` then also
-  reports its declared caps (scikit-learn<1.6, urllib3<2, seaborn<0.13),
-  which are harmless: BNCI2014_001 and BNCI2014_004 trials and labels come
-  out bit-identical to moabb 1.7.2's. Dreyer2023 and Kim2025BetaRange,
-  newer than moabb 1.2.0, ship inside the package.
-- Moirai needs its own environment (Python 3.10, torch 2.4.1):
-  `requirements-tsfm.txt` has the recipe.
+The second line is separate because both packages declare old pins that
+would downgrade the stack: moabb 1.2.0 (the last release on the paper's
+numpy 1.26.4) declares scikit-learn<1.6, urllib3<2 and seaborn<0.13;
+momentfm declares transformers==4.33.3, numpy==1.25.2 and
+huggingface-hub==0.24.0. Both run with this stack (BNCI2014_001 and
+BNCI2014_004 trials come out bit-identical to moabb 1.7.2's), so they go in
+without their dependencies, and `pip check` lists those declared pins;
+that is expected. Dreyer2023 and Kim2025BetaRange, newer than moabb 1.2.0,
+ship inside the package. Moirai needs its own environment (Python 3.10,
+torch 2.4.1): `requirements-tsfm.txt` has the recipe.
+
+**The name.** The package is `neuroatlas-bench` (a built wheel is
+`neuroatlas_bench-<version>-py3-none-any.whl`); the command and the import
+are `neuroatlas`. It is not on PyPI yet, and the PyPI project called
+`neuroatlas` is an unrelated one: do not `pip install neuroatlas`.
+
+**PyTorch.** pip installs the default build, currently CUDA 13 (2.14.1+cu130
+on 2026-10-02), with kernels for GPUs of compute capability 7.5 and newer
+(Turing onwards); `nvidia-smi` must report CUDA 13.0 or higher. For an older
+GPU or driver, install a CUDA 12 build from pytorch.org before the line
+above; pip keeps it.
 
 `neuroatlas models status` says `package missing`, with the install line,
 for a model whose package is not installed.
@@ -450,7 +447,7 @@ src/neuroatlas/
 run/default_runs.sh         # every experiment in the paper, one line each
 docs/                       # user guide and command reference
 reproduction/               # a minimal end-to-end notebook
-requirements-fm.txt         # the paper's exact versions
+requirements-fm.txt         # the paper's exact versions (a pip constraints file)
 requirements-tsfm.txt       # the separate Moirai environment
 ```
 
