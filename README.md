@@ -25,9 +25,13 @@ the authors.
 
 ```bash
 git clone https://github.com/kkontras/NeuroAtlas.git && cd NeuroAtlas
-python3.11 -m venv .venv && source .venv/bin/activate
+conda create -n neuroatlas python=3.11 -y && conda activate neuroatlas
 pip install -e ".[fm]" -c requirements-fm.txt
 ```
+
+Conda only provides Python here; every package comes from pip, pinned by
+`requirements-fm.txt`. A plain venv works the same: replace the second line
+with `python3.11 -m venv .venv && source .venv/bin/activate`.
 
 That is the whole install for the EEG foundation models, the supervised
 baselines and every sleep, epilepsy and brain-age dataset. `[fm]` lists
