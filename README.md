@@ -8,7 +8,7 @@ metrics. This repository is the benchmark harness: the `neuroatlas` command
 and its Python API. Paper: [arXiv:2605.14698](https://arxiv.org/abs/2605.14698).
 
 - [Install](#install)
-- [The commands](#the-commands)
+- [The commands](#the-commands) and a [cheat sheet](#command-cheat-sheet) of every command
 - [Test it by hand](#test-it-by-hand): one pass through every command, with
   the output to expect
 - [What is in the benchmark](#why-neuroatlas): domains, datasets, models,
@@ -102,6 +102,124 @@ baselines), `all_random` (2 untrained baselines), `all`. Dataset selections
 
 Downloads are off by default for every command except `data download`,
 `models download` and `fetch`; `--online` allows them for one command.
+
+## Command cheat sheet
+
+Every command, in the order you would use them. The examples use open data
+(Sleep-EDF, Siena, BNCI2014_001); `neuroatlas <command> --help` has the
+options.
+
+**Is it installed**
+```bash
+neuroatlas --version                 # neuroatlas 0.1.0
+neuroatlas --help                    # every command
+```
+
+**Paths**
+```bash
+neuroatlas config init --data-root ~/eeg/data --cache-root ~/eeg/cache \
+    --output-root ~/eeg/results --models-root ~/eeg/models
+neuroatlas config show               # every setting, and where its value came from
+neuroatlas config path               # where config.yaml is
+neuroatlas config set sleep_edf_expanded.data_root /path/to/existing/sleep-edf   # use a copy you already have
+neuroatlas config unset sleep_edf_expanded.data_root
+```
+
+**What exists**
+```bash
+neuroatlas list benchmarks           # 12 benchmarks: datasets, task, headline metric
+neuroatlas list datasets             # the 43 dataset entries: domain, access, size, benchmarks
+neuroatlas list models               # 44 checkpoints: family, group, input rate/window, embedding size
+neuroatlas list models --benchmark epilepsy   # the checkpoints one benchmark evaluates
+neuroatlas list aliases              # all_fm, all_ts, all_supervised, all_random, all
+neuroatlas list tasks                # probe tasks and their presets
+neuroatlas show sleep_stage          # what it measures, and the exact embed/probe commands it runs
+```
+
+**Datasets**
+```bash
+neuroatlas data status                                     # every dataset: found / missing / how to get it
+neuroatlas data status sleep_stage epilepsy bci_motor_imagery
+neuroatlas data download sleep_edf_expanded --dry-run      # what it would fetch, and where
+neuroatlas data download sleep_edf_expanded --mirror aws   # 8.1 GB
+neuroatlas data download siena                             # 4.7 GB, Zenodo
+neuroatlas data download bnci2014_001                      # MOABB (needs the BCI install lines)
+neuroatlas data prepare --list                             # optional speed-up caches; none is required
+neuroatlas data prepare bonn --dry-run                        # e.g. Bonn's fast-path cache
+```
+Credentialed datasets (NSRR, TUH) and manual ones print where to get them
+and the folder layout to use.
+
+**Weights**
+```bash
+neuroatlas models status all_fm                            # found / auto / hub (cached) / manual / package missing
+neuroatlas models download biot_pretrained,cbramod_pretrained,deepsoz_hem_pretrained
+neuroatlas models download all_fm
+```
+
+**Check before any long job** (one real batch per dataset × model)
+```bash
+neuroatlas check sleep_stage -m biot_pretrained
+neuroatlas check epilepsy --dataset siena -m cbramod_pretrained
+neuroatlas check bci_motor_imagery --dataset bnci2014_001 -m biot_pretrained,cbramod_pretrained
+neuroatlas check sleep_stage -m all_fm --dataset full --format json   # machine-readable
+```
+
+**Run whole benchmarks** (extract embeddings where missing, probe every fold)
+```bash
+neuroatlas run sleep_stage -m biot_pretrained --dry-run     # the plan: datasets, folds, runs, data state
+neuroatlas run bci_motor_imagery --dataset bnci2014_001 -m biot_pretrained --debug   # fold 0 only
+neuroatlas run sleep_stage -m biot_pretrained               # ~40 min
+neuroatlas run brain_age -m biot_pretrained                 # reuses the sleep embeddings
+neuroatlas run sleep_hypnogram -m biot_pretrained           # from the staging results
+neuroatlas run epilepsy --dataset siena -m cbramod_pretrained
+```
+
+**The steps underneath, by hand** (`show` prints them for any benchmark,
+dataset and model)
+```bash
+neuroatlas show epilepsy --dataset siena -m cbramod_pretrained
+neuroatlas embed --models cbramod_pretrained --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+neuroatlas probe --models cbramod_pretrained --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 \
+    --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+
+neuroatlas embed --models biot_pretrained --dataset sleep_edf_expanded
+neuroatlas probe --models biot_pretrained --dataset sleep_edf_expanded --task sleep_staging
+
+neuroatlas embed --models biot_pretrained --dataset bnci2014_001 --pooling mean
+neuroatlas probe --models biot_pretrained --dataset bnci2014_001 --pooling mean --set n_folds=loso \
+    --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+
+neuroatlas hypnogram --datasets sleep_edf_expanded         # finds the staging results by itself
+neuroatlas embed --list-datasets                           # every dataset the verbs accept
+```
+
+**Results**
+```bash
+neuroatlas results sleep_stage       # mean ± std over folds, folds done/expected, normalised score
+neuroatlas results brain_age
+neuroatlas results epilepsy -v       # -v also shows why failed folds failed
+neuroatlas results sleep_stage --format csv
+```
+
+**Cluster** (`submit` writes the job files; it submits nothing)
+```bash
+neuroatlas submit sleep_stage -m all_fm --out runs/sleep_fm                    # HTCondor
+neuroatlas submit sleep_stage -m all_fm --out runs/sleep_fm --backend slurm    # SLURM
+neuroatlas status --out runs/sleep_fm
+```
+
+**Python**
+```python
+from neuroatlas import api
+api.benchmarks()
+api.data_status("sleep_stage")
+api.check("sleep_stage", models="biot_pretrained")
+api.results("sleep_stage")
+```
+
+With any command: `-v` shows more, `--log run.log` keeps everything, and
+`--online` allows downloads (off except in the download commands).
 
 ## Test it by hand
 
