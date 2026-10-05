@@ -57,6 +57,7 @@ positional arguments:
     set       Change one setting.
     unset     Remove one setting, returning it to its default.
     path      Print where the settings file is.
+    token     Save a Hugging Face, GitHub or NSRR token (asked for, never shown).
 
 options:
   -h, --help  show this help message and exit
@@ -143,6 +144,25 @@ Print where the settings file is.
 
 options:
   -h, --help  show this help message and exit
+```
+
+
+### config token
+
+```
+usage: neuroatlas config token [-h] [--remove] {github,hf,nsrr}
+
+Save a token where neuroatlas reads it: $NEUROATLAS_HOME/<name>_token, chmod 600. It
+is asked for without being shown, or read from stdin (`neuroatlas config token hf <
+file`), and never printed. hf: gated model weights (REVE, ...); github: private
+release assets (CoRe-Sleep, SleepTransformer); nsrr: the NSRR sleep cohorts.
+
+positional arguments:
+  {github,hf,nsrr}  Which token.
+
+options:
+  -h, --help        show this help message and exit
+  --remove          Delete the saved token.
 ```
 
 

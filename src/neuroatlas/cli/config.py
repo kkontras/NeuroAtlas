@@ -81,7 +81,60 @@ def build_parser() -> argparse.ArgumentParser:
     unset.add_argument("key")
 
     sub.add_parser("path", help="Print where the settings file is.")
+
+    token = sub.add_parser(
+        "token", help="Save a Hugging Face, GitHub or NSRR token (asked for, never shown).",
+        description="Save a token where neuroatlas reads it: $NEUROATLAS_HOME/<name>_token, "
+                    "chmod 600. It is asked for without being shown, or read from stdin "
+                    "(`neuroatlas config token hf < file`), and never printed. hf: gated "
+                    "model weights (REVE, ...); github: private release assets (CoRe-Sleep, "
+                    "SleepTransformer); nsrr: the NSRR sleep cohorts.")
+    token.add_argument("name", choices=sorted(_TOKENS), help="Which token.")
+    token.add_argument("--remove", action="store_true", help="Delete the saved token.")
     return parser
+
+
+# name -> (service, the variables that take precedence over the file)
+_TOKENS = {
+    "hf": ("Hugging Face", ("HF_TOKEN",)),
+    "github": ("GitHub", ("GITHUB_TOKEN", "GH_TOKEN")),
+    "nsrr": ("NSRR", ("NSRR_TOKEN",)),
+}
+
+
+def _token(args: argparse.Namespace) -> int:
+    service, variables = _TOKENS[args.name]
+    path = cfg.token_file(args.name)
+    if args.remove:
+        if path.is_file():
+            path.unlink()
+            print(f"removed the {service} token ({_home_relative(path)})")
+        else:
+            print(f"no {service} token saved at {_home_relative(path)}")
+        return 0
+    if sys.stdin.isatty():
+        import getpass
+
+        value = getpass.getpass(f"{service} token (input hidden): ")
+    else:
+        value = sys.stdin.read()
+    value = value.strip()
+    if not value or any(c.isspace() for c in value):
+        print(f"error: that is not a {service} token (empty, or it contains spaces)",
+              file=sys.stderr)
+        return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.is_file()
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(value + "\n")
+    os.chmod(path, 0o600)
+    print(f"{'replaced' if existed else 'saved'} the {service} token: {_home_relative(path)} "
+          f"(chmod 600); `neuroatlas config show` lists where each token is found")
+    shadowing = [v for v in variables if os.environ.get(v)]
+    if shadowing:
+        print(f"  note: ${shadowing[0]} is set in this shell and is used instead of the file")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -277,8 +330,7 @@ def _show() -> int:
                          ("github", "GitHub, for private release assets")):
         where = cfg.locate_token(name)
         if where is None:
-            print(f"  {name:<5} not found  ({advice}: put it in "
-                  f"{_home_relative(cfg.token_file(name))}, chmod 600)")
+            print(f"  {name:<5} not found  ({advice}: `neuroatlas config token {name}`)")
             continue
         note = ""
         if not where.startswith("$") and not cfg.token_permissions_ok(Path(where)):
@@ -313,6 +365,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         "show": _show,
         "set": lambda: _set(args),
         "unset": lambda: _set(args, unset=True),
+        "token": lambda: _token(args),
     }[args.action]()
     if status:
         raise SystemExit(status)

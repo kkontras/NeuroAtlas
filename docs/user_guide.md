@@ -119,7 +119,7 @@ read-only, missing) and where its value came from (`$VARIABLE`, `file` or
 `default`), the MOABB folder, the offline rule, and where each token was
 found -- never its value.
 
-**Tokens** go next to the config file, `chmod 600`; `config show` warns
+**Tokens** go next to the config file, `chmod 600`: `neuroatlas config token hf` (or `github`, `nsrr`) asks for one without showing it and saves it there; `--remove` deletes it. `config show` warns
 about a token file others can read. Only gated downloads need one.
 
 | token | for | looked for, in this order |

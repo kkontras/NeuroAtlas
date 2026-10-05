@@ -341,8 +341,8 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
                 type(exc).__name__ in ("GatedRepoError", "RepositoryNotFoundError")
                 or any(f" {code} " in f" {exc} " for code in ("401", "403"))):
             hint = (f" The repository needs a Hugging Face token with access: accept its terms on "
-                    f"https://huggingface.co/{hub_repo(source_reference)}, then put the token in "
-                    f"{home() / 'hf_token'} (chmod 600) or $HF_TOKEN.")
+                    f"https://huggingface.co/{hub_repo(source_reference)}, then save the token with "
+                    f"`neuroatlas config token hf` (or set $HF_TOKEN).")
         raise FileNotFoundError(
             f"Download failed for {path} from {source_reference}: "
             f"{type(exc).__name__}: {str(exc).strip()}{hint}"
@@ -356,7 +356,7 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
 _HF_TOKEN_SOURCES = (
     "NEUROATLAS_HF_TOKEN_FILE",           # explicit override, a path
     "$NEUROATLAS_HOME/hf_token",          # written next to config.yaml
-    "${REPO}/.secrets/hf_token",           # per-checkout, gitignored
+    "<checkout>/.secrets/hf_token",        # per-checkout, gitignored
     "~/.cache/huggingface/token",          # what `huggingface-cli login` writes
 )
 
@@ -390,7 +390,8 @@ def resolve_hf_token() -> str | None:
 
     logger.warning(
         "No Hugging Face token found (looked at $HF_TOKEN, then %s). "
-        "Gated models will fail to download; the open ones are unaffected.",
+        "Gated models will fail to download; the open ones are unaffected. "
+        "`neuroatlas config token hf` saves one.",
         ", ".join(_HF_TOKEN_SOURCES[1:]),
     )
     return None
@@ -420,6 +421,7 @@ _HF_FILENAME_MAP = {
     # checkpoint_path's basename. Only needed when the HF repo stores the
     # weight under a subfolder (e.g. neurolm's "checkpoints/VQ.pt").
     "Weibang/NeuroLM": "checkpoints/VQ.pt",
+    "wenhuic/Neuro-GPT": "pretrained_model/pytorch_model.bin",
 }
 
 
@@ -473,25 +475,26 @@ def _download_huggingface(local_path: Path, repo_id: str) -> Path:
         return _download_safetensors_as_torch(local_path, repo_id, token)
 
     repo_filename = _HF_FILENAME_MAP.get(repo_id, local_path.name)
-    # local_dir is chosen so that hf_hub_download(local_dir/repo_filename)
-    # lands at local_path exactly. local_path may be nested inside a
-    # per-model subtree (artifacts/models/foundation/<model>/...).
-    if "/" in repo_filename:
-        depth = repo_filename.count("/")
+    tail = Path(repo_filename).parts
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    if local_path.parts[-len(tail):] == tail:
+        # The repository's layout ends the way local_path does (NeuroLM's
+        # checkpoints/VQ.pt under .../neurolm/checkpoints/): download in place.
         local_dir = local_path
-        for _ in range(depth + 1):
+        for _ in tail:
             local_dir = local_dir.parent
+        downloaded = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                          local_dir=str(local_dir), token=token))
     else:
-        local_dir = local_path.parent
-    local_dir.mkdir(parents=True, exist_ok=True)
-    downloaded = hf_hub_download(
-        repo_id=repo_id,
-        filename=repo_filename,
-        local_dir=str(local_dir),
-        token=token,
-    )
+        # It does not (NeuroGPT's pretrained_model/pytorch_model.bin, kept as
+        # .../neurogpt/pytorch_model.bin): fetch next to it, then move it there.
+        with tempfile.TemporaryDirectory(dir=local_path.parent) as tmp:
+            fetched = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                           local_dir=tmp, token=token))
+            shutil.move(str(fetched), str(local_path))
+        downloaded = local_path
     logger.info("Downloaded %s from HuggingFace %s", repo_filename, repo_id)
-    return Path(downloaded)
+    return downloaded
 
 
 def _download_hub_checkpoint_folder(local_path: Path, repo_id: str, folder: HubFolder,
@@ -625,9 +628,9 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
         if not token:
             raise FileNotFoundError(
                 f"{asset_url} returned HTTP {exc.code}. If the repository is still "
-                f"private, put a GitHub token that can read it in "
-                f"{home() / 'github_token'} (chmod 600) or $GITHUB_TOKEN, or download "
-                f"the asset by hand and place it at {local_path}."
+                f"private, save a GitHub token that can read it with `neuroatlas config "
+                f"token github` (or set $GITHUB_TOKEN), or download the asset by hand "
+                f"and place it at {local_path}."
             ) from exc
         try:
             _, _, rest = asset_url.partition("github.com/")

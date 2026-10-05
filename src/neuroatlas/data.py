@@ -615,8 +615,8 @@ def refusal(plan: DownloadPlan) -> Optional[str]:
         if why:
             return why
         if user_config.locate_token(plan.stdin_token) is None:
-            return (f"no {plan.stdin_token} token; put it in "
-                    f"{user_config.token_file(plan.stdin_token)} (chmod 600)")
+            return (f"no {plan.stdin_token} token: `neuroatlas config token {plan.stdin_token}` "
+                    f"saves it ({user_config.token_file(plan.stdin_token)}, chmod 600)")
     need = plan.size_gb or (NSRR_MIN_FREE_GB if plan.handler == "nsrr" else None)
     if need and plan.unpack:
         need *= 2            # the archive and what it unpacks to, until the archive goes
