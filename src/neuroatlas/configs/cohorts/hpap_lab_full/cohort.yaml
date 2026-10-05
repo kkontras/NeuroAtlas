@@ -1,0 +1,101 @@
+# hpap_lab_full — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# Written by hand 2026-09-27; this cohort had an adapter but never a
+# DatasetSpec, so there was nothing to migrate. Facts from the paper
+# (App. B.2), the paper's dataset table, src/neuroatlas/configs/folds/hpap_lab_full.json
+# and the adapter.
+
+schema_version: 1
+
+slug: hpap_lab_full
+name: HomePAP (lab, full montage)
+domain: sleep
+paper_dataset: true          # App. B.2, one of the 15 sleep cohorts; paper [70,101]
+
+description: >
+  HomePAP: a multi-centre trial comparing home versus laboratory management
+  of obstructive sleep apnea. This spec is the laboratory arm recorded with
+  the full PSG montage -- the subset the paper evaluates -- not the
+  home-recorded or split-night arms, which carry fewer channels.
+
+cohort:
+  centre: "Multi-centre (NSRR homepap), USA"
+  country: US
+  powerline_hz: 60
+
+acquisition:
+  kind: nsrr
+  ref: homepap
+
+signal:
+  notch_freq: 60.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      classes: [W, N1, N2, N3, REM]
+      note: 5-class AASM staging per 30 s epoch
+      implemented_by: adapters.hpap_lab_full
+
+splits:
+  # Points at the single copy under src/neuroatlas/configs/folds/ rather than a duplicate
+  # here -- both live under configs/, so this is a sibling directory. Ten cohorts keep both, and Sleep-EDF showed where that
+  # ends: src/neuroatlas/configs/folds/sleepedf.json and the dossier copy drifted apart and
+  # one of them leaked. fold_manifest_path resolves this relative to the
+  # dossier, and load_fold_split finds the same file by its own search order.
+  manifest: ../../folds/hpap_lab_full.json
+  derivation: >
+    5-fold patient-level partition, frozen. folds["k"] is fold k's test
+    group; val is group k+1 and train is the rest (fold_manifest.py's
+    `partition` rule). Verified: the five test groups are disjoint and
+    cover all 191 subjects, with no train/test or train/val overlap.
+  derived_by: src/neuroatlas/extensions/datasets/adapters/physioex_base.py  # _resolve_splits
+  grouping: patient
+  n_folds: 5
+  n_subjects: 191
+
+pipeline:
+  # No prepare step: the adapter reads the NSRR EDFs as they are.
+  preprocessor: null
+
+runtime_defaults:
+  # The lab/full arm only. The sibling `hpap` root covers home/ + lab/
+  # together and is a different cohort, so it is deliberately not used here.
+  data_root: "${EEG_DATA_ROOT}/data/Guido/homepap/polysomnography/edfs/lab"
+  batch_size: 8
+  num_workers: 0
+  fold: 0
+  n_folds: 5                    # the manifest's five folds: `run` probes all five, as the paper did
+  signal_kind: raw
+  pipeline_name: legacy
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.hpap_lab_full.HPAPLabFullBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys: [fold, signal_kind, pipeline_name]
+
+provenance:
+  last_verified: null
+  known_issues:
+    - "Never loaded. HomePAP's corpus is not on the machine this was written
+       on; data_root comes from configs/dataset_paths_sofia.yaml and the
+       channel handling from adapters/hpap_lab_full.py, neither checked."
+    - "The manifest ids are recording ids (homepap-lab-full-1600003), so
+       `grouping: patient` holds only if HomePAP has one lab-full recording
+       per subject. Unverified -- if it does not, the folds are
+       recording-level and could leak a subject across splits."
+    - "App. B.3 uses this cohort for brain age, but the loader carries no
+       demographics, so there is no `age` label mode here and brain age
+       cannot run on it. Adding it means joining the NSRR
+       homepap-baseline-dataset-*.csv on subject id -- the same work SHHS needs."

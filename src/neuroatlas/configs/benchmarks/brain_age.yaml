@@ -1,0 +1,36 @@
+schema_version: 1
+name: brain_age
+title: Brain age
+domain: brain_age
+question: >
+  How old is the sleeper? A ridge regressor on each subject's mean
+  embedding (each recording's, for ISRUC and WSC); the brain-age gap
+  (predicted minus true age) is the clinical readout. It reuses the 30 s
+  sleep embeddings rather than reading the recordings again, and re-splits
+  them the way the paper did: Sleep-EDF is the Sleep Cassette subset only,
+  folds are subject-level and stratified on age (configs/tasks/brain_age.json).
+paper: App. C.3
+task: brain_age
+embed: --set window_s=30 --set stride_s=30
+probe: --set label_mode=age --aggregation mean
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - cfs
+  - {slug: isruc, embed: ""}
+  - mros
+  - {slug: physionet2026, embed: ""}
+  - {slug: sleep_edf_expanded, embed: ""}
+  - {slug: wsc, embed: ""}
+single: sleep_edf_expanded
+planned:
+  # The paper reports brain age on these too; here their readers carry no
+  # participant ages yet (each declares only a sleep_stage label mode).
+  - {name: shhs, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
+  - {name: mesa, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
+  - {name: hpap_lab_full, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
+  - {name: stages, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
+metrics:
+  headline: mae
+  higher_is_better: false
+  # the dummy is predicting the training mean age, which depends on the split
+  secondary: [pearson_r, r2]

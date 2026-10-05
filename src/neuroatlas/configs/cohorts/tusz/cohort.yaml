@@ -1,0 +1,199 @@
+# TUSZ (TUH EEG Seizure Corpus) — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+#
+# TUSZ is ONE dataset with two loaders. It used to be registered twice, as
+# `tusz` and `tusz_edf_direct`, which made the same corpus look like two
+# cohorts in every listing and every results table. The choice of loader is
+# what it always was — an implementation detail — so it is now `backend`.
+
+schema_version: 1
+
+slug: tusz
+name: TUH EEG Seizure Corpus (TUSZ)
+domain: epilepsy
+paper_dataset: true
+
+description: >
+  TUH EEG Seizure Corpus v2.0.3 — binary and multi-class seizure detection
+  from 19-channel unipolar EEG at 256 Hz. Supports official 3-split and
+  patient-level k-fold evaluation. Readable either from a prebuilt HDF5
+  cache (default) or straight from the raw EDF (--set backend=edf).
+
+cohort:
+  centre: "Temple University Hospital, USA"
+  country: US
+  powerline_hz: 60
+
+acquisition:
+  kind: tuh
+  ref: tuh_eeg_seizure/v2.0.3
+  upstream: https://isip.piconepress.com/projects/nedc/html/tuh_eeg/
+
+signal:
+  montage: bipolar
+  montage_conflict:
+    resolved_to: bipolar
+    reason: kept the DatasetSpec value to preserve current behaviour
+    sources:
+      DatasetSpec.config_defaults: bipolar
+      embed_dataset._DEFAULT_MONTAGE: bipolar
+      description: unipolar
+    open_question: audit OQ-11.2 — needs a maintainer decision
+  window_s: 10.0
+  stride_s: null
+  overlap_threshold: 0.0
+  notch_freq: null
+
+labels:
+  granularity: window
+  # one label per window; event-level metrics (any-overlap, FA/h) are computed on top of the window scores
+  default: binary
+  modes:
+    binary:
+      implemented_by: dataio.tusz
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+  also_implemented:
+    - multiclass
+    - age
+    - epilepsy
+    - onset
+    - missing_channels
+    - sex
+splits:
+  manifest_note: >
+    The paper's protocol is 5-fold patient-level cross-validation over the
+    whole corpus (train/, dev/ and eval/ pooled: 675 patients), not the
+    official partition: its epilepsy probe drew these folds stratified on
+    "has any seizure window" (3c6721c configs/folds/tusz.json, re-derived and
+    identical from the paper-era embeddings). split_mode=kfold (the default)
+    reads this file on both backends; split_mode=official takes the corpus's
+    own train/dev/eval partition instead, the same for every fold.
+  manifest: folds.json
+  derived_by: src/neuroatlas/extensions/datasets/adapters/tusz.py / adapters/tusz_edf.py
+  derivation: >
+    folds_manifest=none only: StratifiedKFold(shuffle=True, random_state=42)
+    over sorted patient ids, stratified on any seizure
+  grouping: patient
+  n_folds: 5
+  mode: kfold
+
+# Two loaders over the same corpus. `backend` selects one; the keys under
+# `defaults` replace the runtime_defaults below when that backend is chosen,
+# and every other --set key still applies. Merging these two was the point of
+# retiring the `tusz_edf_direct` slug — see provenance.replaces.
+backends:
+  hdf5:
+    loader: adapters.tusz.TUSZDataModule
+    reads: a prebuilt HDF5 cache under cache_root
+    recording_stats: via_dataio
+    note: >
+      The default. Needs the cache to exist; build it before the first run.
+      Supports patient-level k-fold as well as the official split.
+  edf:
+    loader: adapters.tusz_edf.TUSZEDFDirectDataModule
+    reads: raw EDF + .csv_bi annotations, streamed, no cache written or read
+    note: >
+      Nothing to build, but it re-reads the EDFs every epoch, so it is far
+      slower. k-fold (the paper's folds, from folds.json: the three official
+      trees pooled, embedded once into one cache every fold is cut from) or
+      the official train/dev/eval split.
+    defaults:
+      raw_root: "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_seizure/v2.0.3/edf"
+      stride_s: 10.0
+      balance: none
+      lru_recordings: 2
+    recording_stats: eager                  # cache_recording_stats_tusz.py writes
+                                            # artifacts/recording_stats/tusz_edf_direct/<id>.npz
+                                            # (the directory keeps the old name)
+    unsupported:                            # keys the HDF5 backend takes and this one does not
+      - cache_root
+      - corpus_version
+      - overlap_threshold
+
+pipeline:
+  # How `prepare` builds this cohort's optional fast-path cache.
+  # The flag names differ per builder, so they are recorded here
+  # rather than guessed.
+  preprocessor:
+    # Optional. The default backend reads the raw corpus directly -- see
+    # `backend`/runtime_defaults below -- so this cache only speeds up large
+    # sweeps. `prepare --dataset tusz` is never a prerequisite for `embed`.
+    optional: true
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_tusz
+    args:
+      raw: --raw-root
+      out: --cache-root
+    shard:
+      index: --shard-index
+      count: --num-shards
+
+runtime_defaults:
+  backend: edf                              # raw EDF, so a fresh checkout
+                                            # works after `fetch` alone.
+                                            # `hdf5` is the fast path once a
+                                            # cache has been built.
+  balance: weighted_sampler
+  batch_size: 64
+  cache_root: ${EEG_CACHE_ROOT}/prepared/tusz
+  corpus_version: v2.0.3
+  fold: 0
+  label_mode: binary
+  montage: bipolar
+  n_folds: 5
+  normalize: none
+  num_workers: 4
+  overlap_threshold: 0.0
+  split_mode: kfold                         # the paper's 5 patient-level folds
+                                            # (splits.manifest); `official` is
+                                            # TUSZ's own train/dev/eval
+  stride_s: null
+  window_s: 10.0
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  backend:
+    values:
+      - hdf5
+      - edf
+    enforced_by: neuroatlas.extensions.datasets.tusz._create_tusz_datamodule
+  label_mode:
+    values:
+      - binary
+    enforced_by: dataio.tusz
+  montage:
+    values:
+      - bipolar
+      - unipolar
+    enforced_by: dataio.tusz
+  split_mode:
+    values:
+      - official
+      - kfold
+    enforced_by: dataio.tusz
+
+spec:
+  default_task: seizure_detection
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys: []
+
+provenance:
+  last_verified: 2026-09-21
+  replaces:
+    - tusz_edf_direct        # retired 2026-09-21; same corpus v2.0.3, second
+                             # loader only. Now `--dataset tusz --set backend=edf`.
+  known_issues:
+    - "Montage conflict: the description says unipolar, the spec and
+       embed_dataset._DEFAULT_MONTAGE both say bipolar. Kept bipolar to
+       preserve behaviour — audit OQ-11.2."
+

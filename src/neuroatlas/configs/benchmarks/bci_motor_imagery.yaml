@@ -1,0 +1,32 @@
+schema_version: 1
+name: bci_motor_imagery
+title: Motor imagery
+domain: bci
+question: >
+  Which movement is the person imagining in one trial? Tested on people the probe never saw (leave-one-subject-out).
+paper: App. C.4
+# no task: each cohort's own (linear_probe); trial windows come from its manifest
+embed: --pooling mean
+probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+datasets: [bnci2014_001, bnci2014_004, bnci2015_001, dreyer2023, liu2024, shin2017a, weibo2014]
+single: bnci2014_001
+metrics:
+  headline: balanced_accuracy
+  higher_is_better: true
+  # chance is 1/n_classes, which differs by cohort
+  secondary: [cohen_kappa, macro_f1]
+variants:
+  per_patch:
+    description: keep each window's patch tokens apart instead of averaging them
+    embed: --pooling per_patch
+    probe: --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  confound_control:
+    description: >
+      band 4-40 Hz and start 1 s after the cue, so the score cannot come
+      from the cue's evoked response or the eye movement towards it
+    embed: --set confound_control=true --pooling mean
+    probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  confound_control_per_patch:
+    description: both of the above
+    embed: --set confound_control=true --pooling per_patch
+    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

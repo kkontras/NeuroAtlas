@@ -52,6 +52,11 @@ artifacts/
 data/*
 !data/README.md
 
+# Raw corpora an earlier version downloaded into the checkout
+# (<checkout>/<slug>_cache/raw). Nothing writes there any more -- downloads go
+# under the data root -- but old copies must never be committed.
+*_cache/
+
 # Planning docs
 *.docx
 

@@ -1,0 +1,144 @@
+# siena — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: siena
+name: Siena Scalp EEG Database
+domain: epilepsy
+paper_dataset: true
+
+description: >
+  Siena Scalp EEG Database — binary seizure detection from 19-channel
+  unipolar EEG resampled to 256 Hz. 14 adult subjects, 128 hours, 47
+  seizures. Patient-level k-fold evaluation.
+
+cohort:
+  centre: "University of Siena, Italy"
+  country: IT
+  powerline_hz: 50
+  population: adult
+
+acquisition:
+  kind: zenodo
+  ref: "10640762"
+  file: BIDS_Siena.zip                      # the record's only file
+  upstream: "https://physionet.org/content/siena-scalp-eeg/1.0.0/"
+  note: >
+    Zenodo record 10640762 is the SzCORE BIDS conversion of the PhysioNet
+    release, which is what the loader reads.
+  size_gb: 4.5                              # Zenodo API: 4.489 GB (2026-10-02)
+  checksum: md5:3145f577a6caa35a84f89f4c6ce0f9d7   # Zenodo API, the zip
+  expect: {glob: "*_eeg.edf", count: 41}    # 41 EDFs in the zip
+
+signal:
+  montage: bipolar
+  montage_conflict:
+    resolved_to: bipolar
+    reason: kept the DatasetSpec value to preserve current behaviour
+    sources:
+      DatasetSpec.config_defaults: bipolar
+      embed_dataset._DEFAULT_MONTAGE: unipolar
+      description: unipolar
+    open_question: audit OQ-11.2 — needs a maintainer decision
+  window_s: 10.0
+  overlap_threshold: 0.0
+  notch_freq: null
+
+labels:
+  granularity: window
+  # one label per window; event-level metrics (any-overlap, FA/h) are computed on top of the window scores
+  default: binary
+  modes:
+    binary: {}
+
+splits:
+  derivation: >
+    StratifiedKFold(shuffle=True, random_state=42) over sorted patient ids;
+    folds capped at the patient count (Siena has 14 subjects)
+  derived_by: src/neuroatlas/extensions/datasets/adapters/siena.py:81
+  # No fold manifest: there is no file to inspect, but the split is
+  # reproducible because the splitter is seeded and the subject order
+  # is sorted.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+  note: >
+    split_mode=paper_recordings swaps these folds for the recording-level
+    ones the published numbers came from (folds_paper_recordings.json in
+    this directory; not patient-disjoint).
+
+pipeline:
+  recording_stats: via_dataio
+
+runtime_defaults:
+  backend: bids
+  balance: weighted_sampler
+  batch_size: 64
+  bids_root: "${EEG_DATA_ROOT}/siena/BIDS_Siena"
+  cache_root: "${EEG_CACHE_ROOT}/prepared/siena"
+  fold: 0
+  label_mode: binary
+  montage: bipolar
+  n_folds: 5
+  normalize: none
+  # num_workers: not pinned; see chbmit/cohort.yaml.
+  overlap_threshold: 0.0
+  # patient: patient-disjoint folds, as the paper states (the default).
+  # paper_recordings: the recording-level folds the published numbers were drawn
+  # on (folds_paper_recordings.json); see provenance.known_issues.
+  split_mode: patient
+  window_s: 10.0
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  split_mode:
+    values:
+      - patient
+      - paper_recordings
+    enforced_by: adapters.siena.SPLIT_MODES
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.siena.SienaBenchmarkDataModule
+  default_task: seizure_detection
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- the published Siena numbers were not drawn
+       on these folds. The paper's epilepsy probe saw subject id 'raw' for
+       every window (a path-parsing bug in its embeddings), fell back to
+       grouping by recording, and split Siena's 40 recordings, not its 14
+       patients: 30 of the 33 (fold, test patient) pairs also have recordings
+       in train or val (fold 0: all 6; 5 of them in train), and 40,419 of the
+       49,285 test windows (283 of 312 seizure windows) belong to such
+       patients. These folds are patient-level, as the paper states (App. B.1,
+       C.1), so they do not reproduce its Siena numbers; --set
+       split_mode=paper_recordings does (frozen in folds_paper_recordings.json,
+       checked against all 26 paper prediction files). Evidence:
+       fixwork/R1_siena_bonn/REPORT.md."
+    - "The paper-era Siena embeddings hold 40 of the release's 41 recordings:
+       sub-14 run-03 (14,642 s, one 83 s focal seizure) is missing from them,
+       and their labels mark no seizure window in sub-14 run-02 although its
+       events list one (17,540-17,581 s). The published Siena numbers are
+       therefore over 45 of the release's 47 seizures.
+       split_mode=paper_recordings leaves run-03 out of every fold."

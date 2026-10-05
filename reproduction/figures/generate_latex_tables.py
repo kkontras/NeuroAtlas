@@ -5,10 +5,11 @@ All tables fit within NeurIPS single-column text width (~5.5in).
 Tracks are sub-rows within each dataset instead of extra columns.
 """
 
+import os
 from pathlib import Path
 import numpy as np
 
-OUT = Path("${EEG_DATA_ROOT}/EEGBenchmarks/artifacts/tables")
+OUT = Path(os.path.expandvars("${EEG_DATA_ROOT}/EEGBenchmarks/artifacts/tables"))
 OUT.mkdir(parents=True, exist_ok=True)
 
 MODELS = ["BENDR", "EEGPT", "NeuroLM", "LaBraM", "CBraMod"]

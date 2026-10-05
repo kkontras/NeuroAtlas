@@ -1,0 +1,355 @@
+"""
+MASS benchmark datamodule adapter.
+
+Wraps :class:`MASSDataset` (from ``dataio/mass.py``) into the standard
+:class:`BenchmarkDataModule` interface with train/val/test dataloaders,
+patient-level fold splitting, and the canonical batch contract.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+from neuroatlas.benchmarking_helpers.runtime.subject_sampler import SubjectBatchSampler
+from neuroatlas.extensions.datasets.dataio.mass import (
+    DEFAULT_CHANNELS,
+    MASSDataset,
+    SubjectRecord,
+    scan_mass_subjects,
+)
+
+from ._runtime_keys import SLEEP_STAGE_ONLY
+from .base import BenchmarkDataModule
+
+
+# ---------------------------------------------------------------------------
+# Collate
+# ---------------------------------------------------------------------------
+
+def _collate_mass(batch: List[Dict[str, object]]) -> Dict[str, object]:
+    eeg = torch.stack([item["eeg"] for item in batch], dim=0)
+    labels = torch.tensor(
+        [item["sleep_stage"] for item in batch], dtype=torch.long,
+    )
+    meta: List[Dict[str, object]] = []
+    for item in batch:
+        m: Dict[str, object] = {
+            "dataset": "mass",
+            "subject_id": item["subject_id"],
+            "subset": item["subset"],
+            "epoch_index": item["epoch_idx"],
+            "sleep_stage": item["sleep_stage"],
+            "channels": item["channels"],
+            "sampling_rate": item.get("sampling_rate"),
+            "epoch_seconds": item["epoch_seconds"],
+        }
+        for key in ("recording_mean", "recording_std", "recording_q95", "recording_q95_bipolar"):
+            if key in item:
+                m[key] = item[key]
+        if "fold_assignments" in item:
+            m["fold_assignments"] = item["fold_assignments"]
+        if "arousal_fraction" in item:
+            m["arousal_fraction"] = item["arousal_fraction"]
+        meta.append(m)
+    return {
+        "signals": {"eeg": eeg},
+        "label": labels,
+        "meta": meta,
+        "raw_batch": batch,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fold splitting
+# ---------------------------------------------------------------------------
+
+def _patient_splits(
+    all_records: Sequence[SubjectRecord],
+    num_folds: int,
+    fold: int,
+    seed: int = 42,
+) -> Tuple[List[SubjectRecord], List[SubjectRecord], List[SubjectRecord]]:
+    """Patient-level k-fold split, stratified by MASS subset.
+
+    Each subset (SS01..SS05) is shuffled independently with a deterministic
+    seed and split into ``num_folds`` chunks. Fold *k* is the union of the
+    k-th chunk from every subset, so every fold holds ~1/num_folds of each
+    subset's subjects. For fold *k*: test = chunk k, val = chunk (k+1) mod n,
+    train = the rest.
+    """
+    # Deduplicate by subject_id, keep first record per subject
+    seen: Dict[str, SubjectRecord] = {}
+    for r in all_records:
+        if r.subject_id not in seen:
+            seen[r.subject_id] = r
+
+    # Group unique records by subset
+    by_subset: Dict[str, List[SubjectRecord]] = {}
+    for r in seen.values():
+        by_subset.setdefault(r.subset, []).append(r)
+
+    train_records: List[SubjectRecord] = []
+    val_records: List[SubjectRecord] = []
+    test_records: List[SubjectRecord] = []
+
+    rng = np.random.RandomState(seed)
+    for subset_name in sorted(by_subset):
+        records = by_subset[subset_name]
+        indices = np.arange(len(records))
+        rng.shuffle(indices)
+        chunks = np.array_split(indices, num_folds)
+        test_idx = set(chunks[fold % num_folds].tolist())
+        val_idx = set(chunks[(fold + 1) % num_folds].tolist())
+        for i, rec in enumerate(records):
+            if i in test_idx:
+                test_records.append(rec)
+            elif i in val_idx:
+                val_records.append(rec)
+            else:
+                train_records.append(rec)
+
+    return train_records, val_records, test_records
+
+
+# ---------------------------------------------------------------------------
+# Loader adapter
+# ---------------------------------------------------------------------------
+
+# The shared wrapper; the local name is kept so call sites are unchanged.
+from ._loader_adapters import ContractMetaLoader as _LoaderAdapter  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# BenchmarkDataModule
+# ---------------------------------------------------------------------------
+
+class MASSBenchmarkDataModule(BenchmarkDataModule):
+    """BenchmarkDataModule for the MASS dataset collection.
+
+    Loads raw EDF files on the fly, computes patient-level k-fold splits at
+    runtime, and yields batches in the standard benchmark format.
+
+    Parameters
+    ----------
+    data_root : str
+        Parent directory containing ``SS01/`` … ``SS05/``.
+    subsets : list of int
+        Which MASS subsets to include (default: all five).
+    batch_size : int
+        Batch size for dataloaders.
+    fold : int
+        Zero-based fold index.
+    num_folds : int
+        Total number of CV folds.
+    num_workers : int
+        DataLoader worker count.
+    channel_specs : str or list
+        Channel selection — see :func:`read_channels`.
+    epoch_seconds : float
+        Epoch duration in seconds.
+    bandpass : tuple of (low, high) or None
+        Bandpass filter cutoffs in Hz.
+    notch : float or None
+        Notch filter frequency in Hz.
+        Amplitude range published for BENDR's SCALE channel.
+    compute_recording_stats : bool
+        If True, compute per-recording mean/std/q95 after filtering.
+    """
+
+    RUNTIME_KEYS_FIXED = SLEEP_STAGE_ONLY
+
+    def __init__(
+        self,
+        data_root: str,
+        subsets: Sequence[int] = (1, 2, 3, 4, 5),
+        batch_size: int = 8,
+        fold: int = 0,
+        num_folds: int = 5,
+        num_workers: int = 0,
+        channel_specs: List[str] = DEFAULT_CHANNELS,
+        epoch_seconds: float = 30,
+        bandpass: Optional[Tuple[float, float]] = None,
+        notch: Optional[float] = None,
+        highpass: Optional[float] = None,
+        signal_kind: str = "raw",
+        compute_recording_stats: bool = False,
+        use_all_eeg_channels: bool = False,
+        subset_filter: Optional[List[str]] = None,
+    ) -> None:
+        if signal_kind != "raw":
+            raise ValueError(
+                f"MASS currently only supports signal_kind='raw', got {signal_kind!r}."
+            )
+        meta: Dict[str, object] = {
+            "canonical_label_space": ["W", "N1", "N2", "N3", "REM"],
+            "epoch_seconds": epoch_seconds,
+            "channel_policy": ["eeg"],
+            "signal_kind": signal_kind,
+            "fold": fold,
+            "num_folds": num_folds,
+            "subsets": list(subsets),
+        }
+        if subset_filter:
+            meta["subset_filter"] = sorted(subset_filter)
+        super().__init__(name="mass", metadata=meta)
+
+        self._channel_names = list(channel_specs)
+        self._batch_size = batch_size
+        self._num_workers = num_workers
+        self._fold = fold
+        self._num_folds = num_folds
+        self._compute_recording_stats = compute_recording_stats
+        self._subset_filter = set(subset_filter) if subset_filter else None
+
+        self._all_records = scan_mass_subjects(data_root, subsets=subsets)
+
+        # Compute fold assignments (cheap — just shuffle + chunk, no annotation reading)
+        self._fold_assignments: Dict[str, Dict[str, str]] = {}
+        for f in range(num_folds):
+            train_f, val_f, test_f = _patient_splits(self._all_records, num_folds=num_folds, fold=f)
+            fold_key = f"fold_{f}"
+            for r in train_f:
+                self._fold_assignments.setdefault(r.subject_id, {})[fold_key] = "train"
+            for r in val_f:
+                self._fold_assignments.setdefault(r.subject_id, {})[fold_key] = "valid"
+            for r in test_f:
+                self._fold_assignments.setdefault(r.subject_id, {})[fold_key] = "test"
+
+        self._ds_kwargs = dict(
+            channel_specs=channel_specs,
+            epoch_seconds=epoch_seconds,
+            bandpass=bandpass,
+            notch=notch,
+            highpass=highpass,
+            compute_recording_stats=compute_recording_stats,
+            use_all_eeg_channels=use_all_eeg_channels,
+        )
+
+        # Datasets created lazily — annotation reading deferred until actually needed
+        self._train_ds: Optional[MASSDataset] = None
+        self._val_ds: Optional[MASSDataset] = None
+        self._test_ds: Optional[MASSDataset] = None
+        self._all_ds: Optional[MASSDataset] = None
+
+    def _get_split_records(self) -> Tuple[List[SubjectRecord], List[SubjectRecord], List[SubjectRecord]]:
+        return _patient_splits(self._all_records, num_folds=self._num_folds, fold=self._fold)
+
+    def _get_train_ds(self) -> MASSDataset:
+        if self._train_ds is None:
+            train_records, _, _ = self._get_split_records()
+            self._train_ds = MASSDataset(subject_records=train_records, **self._ds_kwargs)
+        return self._train_ds
+
+    def _get_val_ds(self) -> MASSDataset:
+        if self._val_ds is None:
+            _, val_records, _ = self._get_split_records()
+            self._val_ds = MASSDataset(subject_records=val_records, **self._ds_kwargs)
+        return self._val_ds
+
+    def _get_test_ds(self) -> MASSDataset:
+        if self._test_ds is None:
+            _, _, test_records = self._get_split_records()
+            self._test_ds = MASSDataset(subject_records=test_records, **self._ds_kwargs)
+        return self._test_ds
+
+    def _get_all_ds(self) -> MASSDataset:
+        if self._all_ds is None:
+            self._all_ds = MASSDataset(
+                subject_records=self._all_records,
+                fold_assignments=self._fold_assignments,
+                **self._ds_kwargs,
+            )
+        return self._all_ds
+
+    def _make_loader(self, dataset: MASSDataset, shuffle: bool) -> _LoaderAdapter:
+        dataset._ensure_index_built()
+        subject_ids = [dataset._index[i][0] for i in range(len(dataset))]
+        sampler = SubjectBatchSampler(
+            subject_ids, batch_size=self._batch_size, shuffle=shuffle,
+        )
+        loader = DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=self._num_workers,
+            collate_fn=_collate_mass,
+            pin_memory=False,
+        )
+        channels = self._channel_names
+        return _LoaderAdapter(
+            loader,
+            unit="uV",
+            channels=channels,
+        )
+
+    def train_dataloader(self) -> _LoaderAdapter:
+        return self._make_loader(self._get_train_ds(), shuffle=True)
+
+    def val_dataloader(self) -> _LoaderAdapter:
+        return self._make_loader(self._get_val_ds(), shuffle=False)
+
+    def test_dataloader(self) -> _LoaderAdapter:
+        return self._make_loader(self._get_test_ds(), shuffle=False)
+
+    # -- global embedding cache ----------------------------------------------
+
+    def cache_context(self, purpose: str = "default") -> Dict[str, object]:
+        context = dict(self.metadata)
+        if purpose == "global_embeddings":
+            context.pop("fold", None)
+            context.pop("subset_filter", None)
+        return context
+
+    def supports_global_embedding_cache(self) -> bool:
+        return True
+
+    def full_embedding_dataloader(self) -> _LoaderAdapter:
+        if self.embed_chunk is not None:
+            from neuroatlas.benchmarking_helpers.registry.contracts import chunk_records
+            records = chunk_records(self._all_records, *self.embed_chunk)
+            ds = MASSDataset(subject_records=records, fold_assignments=self._fold_assignments, **self._ds_kwargs)
+            return self._make_loader(ds, shuffle=False)
+        return self._make_loader(self._get_all_ds(), shuffle=False)
+
+    def split_global_embedding_payload(
+        self, payload: "EmbeddingPayload",
+    ) -> Dict[str, "EmbeddingPayload"]:
+        from neuroatlas.benchmarking_helpers import EmbeddingPayload
+
+        fold_key = f"fold_{self._fold}"
+
+        def _subset(split_name: str) -> EmbeddingPayload:
+            keep = [
+                i for i, m in enumerate(payload.metadata)
+                if m.get("fold_assignments", {}).get(fold_key) == split_name
+            ]
+            if self._subset_filter:
+                keep = [
+                    i for i in keep
+                    if payload.metadata[i].get("subset") in self._subset_filter
+                ]
+            if not keep:
+                from collections import Counter
+                seen: Counter = Counter()
+                for m in payload.metadata:
+                    fa = m.get("fold_assignments") or {}
+                    seen[fa.get(fold_key, "<missing>")] += 1
+                raise ValueError(
+                    f"No embedding rows for {split_name!r} in {fold_key}. "
+                    f"Values seen under {fold_key}: {dict(seen)}"
+                )
+            idx = np.asarray(keep, dtype=int)
+            return EmbeddingPayload(
+                features=payload.features[idx],
+                labels=payload.labels[idx],
+                metadata=[payload.metadata[i] for i in keep],
+            )
+
+        return {
+            "train": _subset("train"),
+            "val": _subset("valid"),
+            "test": _subset("test"),
+        }

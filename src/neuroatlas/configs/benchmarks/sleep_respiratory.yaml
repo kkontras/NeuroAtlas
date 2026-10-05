@@ -1,0 +1,18 @@
+schema_version: 1
+name: sleep_respiratory
+title: Respiratory event detection
+domain: sleep
+question: Does a 30 s epoch contain an apnea or hypopnea?
+paper: App. C.2
+task: respiratory
+embed: --set window_s=30 --set stride_s=30
+probe: --probe-type linear --class-weight balanced --tune-c 1.0
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: physionet2026, embed: ""}
+  - {slug: ucddb, embed: ""}
+single: ucddb
+metrics:
+  headline: macro_f1
+  higher_is_better: true
+  secondary: [balanced_accuracy, auroc, auprc]

@@ -1,0 +1,119 @@
+# sz1 — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: sz1
+name: SeizeIT1
+domain: epilepsy
+paper_dataset: true
+
+description: >
+  SeizeIt1 — binary seizure detection from 19-channel unipolar EEG
+  resampled to 256 Hz. Anonymous Institution wearable-EEG cohort. Hospital
+  annotations (_a1.tsv). Patient-level k-fold evaluation.
+
+cohort:
+  centre: "UZ Leuven, Belgium"
+  country: BE
+  powerline_hz: 50
+
+acquisition:
+  kind: internal
+  note: >
+    The SeizeIT1 recordings this reader expects (<path>/<patient>/...) are the
+    authors' internal copy.
+
+signal:
+  montage: unipolar
+  window_s: 10.0
+  overlap_threshold: 0.0
+  notch_freq: null
+
+labels:
+  granularity: window
+  # one label per window; event-level metrics (any-overlap, FA/h) are computed on top of the window scores
+  default: binary
+  modes:
+    binary: {}
+
+splits:
+  manifest_note: >
+    The paper's folds, frozen: the paper's epilepsy probe drew them over 60
+    subjects stratified on "has any seizure window" (42 do). Both backends
+    read this file (adapters/sz1.py _resolve_splits); the EDF reader cannot
+    see seizure presence without reading every annotation, and its own
+    splitter, which saw one class, drew other folds. --set
+    folds_manifest=none derives folds with that splitter instead (needed
+    for a fold count other than 5; not the paper's folds).
+  manifest: folds.json
+  derived_by: src/neuroatlas/extensions/datasets/adapters/sz1.py  # _resolve_splits
+  grouping: patient
+  n_folds: 5
+
+pipeline:
+  # How `prepare` builds this cohort's optional fast-path cache.
+  # The flag names differ per builder, so they are recorded here
+  # rather than guessed.
+  preprocessor:
+    # Optional. The default backend reads the raw corpus directly -- see
+    # `backend`/runtime_defaults below -- so this cache only speeds up large
+    # sweeps. `prepare --dataset sz1` is never a prerequisite for `embed`.
+    optional: true
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_sz1
+    args:
+      raw: --data-root
+      out: --cache-root
+    shard:
+      index: --shard-index
+      count: --num-shards
+
+runtime_defaults:
+  backend: edf
+  balance: weighted_sampler
+  batch_size: 64
+  cache_root: ""
+  data_root: "${EEG_DATA_ROOT}/SeizeIT1/Data"
+  fold: 0
+  label_mode: binary
+  montage: unipolar
+  n_folds: 5
+  normalize: none
+  num_workers: 4
+  overlap_threshold: 0.0
+  window_s: 10.0
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  backend:
+    values:
+      - edf
+      - hdf5
+    enforced_by: dataio.sz1
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.sz1.SeizeIt1BenchmarkDataModule
+  default_task: seizure_detection
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  last_verified: 2026-09-21

@@ -1,0 +1,56 @@
+# The (Bonn, model) channel plan, applied by the runner before each wrapper
+# sees a batch (benchmarking_helpers/channels/channel_map.py).
+#
+# Bonn (Andrzejak et al. 2001) is 500 single-channel clips. The corpus names
+# no electrode, so the reader labels its one channel FZ, a neutral midline
+# position that lets the wrappers that place channels by 10-20 name accept it
+# (dataio/bonn.py). The label is nominal, not anatomy.
+#
+# Every registered model family has an entry: `mode: label_pass_through`
+# (the wrapper receives FZ unchanged and resolves it itself, as it did before
+# this map existed) or `skip` (not run: the pair shows n/a, with the note
+# below as the reason). A family with no entry would be an invalid pair.
+# Checked with `neuroatlas check epilepsy --dataset bonn -m all` (2026-10-03):
+# CBraMod, DeepSOZ-HEM, EEGPT, LaBraM, NeuroGPT, NeuroLM, NeuroRVQ, REVE,
+# Seizure-Transformer, SleepFM and S-TEEGformer embedded a batch to finite,
+# non-constant features; BIOT and EEGNetv4 refused the channel (the skips
+# below). SleePyCo refused the benchmark's 10 s window, as it does on every
+# epilepsy cohort -- a window matter, not a channel one, so it stays
+# pass-through here as in the other epilepsy maps (as do CoRe-Sleep and
+# SleepTransformer, 30 s models, and Chronos, MOMENT and Moirai, univariate
+# models that embed each channel alone; not run here: weights or package
+# absent).
+
+dataset: bonn
+channels_available: [FZ]
+channels_used: [FZ]
+
+per_model:
+  biot: skip
+  eegnetv4: skip
+  brain_age_cnn: {mode: label_pass_through}
+  cbramod: {mode: label_pass_through}
+  chronos: {mode: label_pass_through}
+  core_sleep: {mode: label_pass_through}
+  deepsoz_hem: {mode: label_pass_through}
+  eegpt: {mode: label_pass_through}
+  labram: {mode: label_pass_through}
+  moirai: {mode: label_pass_through}
+  moment: {mode: label_pass_through}
+  neurogpt: {mode: label_pass_through}
+  neurolm: {mode: label_pass_through}
+  neurorvq: {mode: label_pass_through}
+  reve: {mode: label_pass_through}
+  seizure_transformer: {mode: label_pass_through}
+  sleep_transformer: {mode: label_pass_through}
+  sleepfm: {mode: label_pass_through}
+  sleepyco: {mode: label_pass_through}
+  steegformer: {mode: label_pass_through}
+
+notes:
+  biot: "Not run on Bonn's single channel: BIOT reads bipolar double-banana pairs, and one electrode forms no pair, so the wrapper refuses the input (zero matched slots)."
+  eegnetv4: "Not run on Bonn's single channel: the EEGNetv4 wrapper reads C3, Cz and C4 by name, and Bonn's one channel (labelled FZ) is none of them, so every window would reach the network as zeros; the wrapper refuses the input."
+  chronos: "Univariate model: the one channel is embedded as it is."
+  moment: "Univariate model: the one channel is embedded as it is."
+  moirai: "Univariate model: the one channel is embedded as it is."
+  reve: "REVE places the channel at FZ in its position bank; the label is the reader's nominal one, not Bonn's electrode."

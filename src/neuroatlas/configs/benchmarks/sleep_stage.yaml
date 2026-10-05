@@ -1,0 +1,32 @@
+schema_version: 1
+name: sleep_stage
+title: Sleep staging
+domain: sleep
+question: Which sleep stage (W, N1, N2, N3, REM) is each 30 s epoch?
+paper: App. C.2
+task: sleep_staging
+embed: --set window_s=30 --set stride_s=30
+probe: ""
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - cfs
+  - {slug: dcsm, embed: ""}
+  - {slug: dod, embed: ""}
+  - hmc
+  - hpap_lab_full
+  - {slug: isruc, embed: ""}
+  - {slug: mass, embed: ""}
+  - mesa
+  - mros
+  - {slug: physionet2026, embed: ""}
+  - {slug: shhs, embed: ""}
+  - {slug: sleep_edf_expanded, embed: ""}
+  - stages
+  - {slug: ucddb, embed: ""}
+  - {slug: wsc, embed: ""}
+single: sleep_edf_expanded
+metrics:
+  headline: balanced_accuracy
+  higher_is_better: true
+  dummy: 0.2
+  secondary: [cohen_kappa, macro_f1]

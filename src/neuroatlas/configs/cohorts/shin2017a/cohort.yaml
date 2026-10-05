@@ -1,0 +1,106 @@
+# Shin2017A — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+#
+# Written because this cohort IS in the paper but was invisible to every tool
+# that filters on `paper_dataset`: MOABB specs are generated from a table in
+# extensions/datasets/moabb_*.py with no manifest, so the flag defaulted to
+# false. Facts below come from the paper's dataset table.
+
+schema_version: 1
+
+slug: shin2017a
+name: Shin2017A
+domain: bci
+paper_dataset: true          # paper [74]
+
+description: >
+  MOABB Shin2017A motor-imagery benchmark (2-class MI, 30 ch (paradigm
+  A)).
+
+cohort:
+  powerline_hz: 50           # unverified: MOABB does not record the recording
+                             # site, and nothing applies this yet (audit OQ-3.2)
+
+acquisition:
+  kind: moabb
+  ref: shin2017a
+  note: >
+    `neuroatlas data download shin2017a` has MOABB fetch it into
+    $MNE_DATA (`neuroatlas config show` prints the folder).
+  checksum: TBD              # MOABB verifies its own downloads
+  nemar: nm000267                         # moabb 1.7: shin2017a downloads NEMAR/nm000267
+  size_gb: 4.97                         # NEMAR manifest, sourcedata/ (what MOABB fetches; 2026-10-02)
+  moabb_folder: MNE-eegfnirs-data   # where moabb 1.2.0 keeps it under $MNE_DATA (1.6+: NEMAR/<id>)
+
+signal:
+  montage: as-published      # MOABB returns the dataset's own channel set
+
+labels:
+  granularity: trial
+  # one label per trial (a cue-locked epoch), which is the unit the BCI
+  # protocols score
+  default: trial_class
+  modes:
+    trial_class:
+      implemented_by: adapters.moabb_generic
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train. n_folds = the subject count gives leave-one-subject-out.
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py:2014-2042
+  # No fold manifest; reproducible because the permutation is seeded.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+pipeline:
+  paradigm: motor_imagery
+  # What `prepare` builds: dataio/bci.py's default-variant pickle for this
+  # cohort (DATASET_CONFIGS[slug]: 4-40 Hz, 100 Hz, notch, CAR, 4 s trials).
+  # `embed` and `run` do NOT read it -- like every other BCI cohort this one
+  # is loaded through adapters.moabb_generic, which epochs MOABB's download
+  # itself -- and it is not the preprocessing behind the paper's BCI numbers
+  # either (per-model pickles; see known_issues). Kept so the pickle can still
+  # be built (`neuroatlas data prepare`); optional, so `data status`, `check`
+  # and `show` treat this cohort by its raw data. Whether `run` should
+  # read prepared pickles is the authors' call.
+  required: false
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_moabb_mi
+    args:
+      slug: --slug
+      out: --output
+
+runtime_options:
+  # Reached with `--set confound_control=true` on `embed` and `probe`.
+  # Motor imagery only: `embed` refuses it on a P300, ERP or SSVEP cohort,
+  # where the cue-locked response is the signal rather than a confound.
+  confound_control:
+    default: false
+    effect: >
+      holds the passband to the 4-40 Hz motor range and starts each trial
+      1 s after the cue, so the evoked response and the eye movement towards
+      the cue are outside the window: 1-4 s after the cue. Off uses the
+      paradigm's own passband and the paper's 4 s trial, 0-4 s after the cue
+      (moabb_loader.trial_window). The two are cached separately, and the gap
+      between them is how much of a score came from the cue rather than the
+      imagery.
+    implemented_by: extensions/datasets/dataio/moabb_loader.py:resolve_confound_control
+
+provenance:
+  added: "2026-09-23"
+  migrated_from:
+    - src/neuroatlas/extensions/datasets/moabb_*.py   # description, paradigm
+  known_issues:
+    - "BCI preprocessing differs from the paper's. The paper's BCI embeddings
+       were extracted from per-model pickles (trackA: each model's own
+       passband and rate, e.g. 0.1-75 Hz / 200 Hz / 50 Hz notch for the
+       LaBraM-format pickle; trackD: 4-40 Hz and 1-4 s). `run` epochs MOABB
+       at 128 Hz with the paradigm's 4-40 Hz band and no notch, so off and
+       on confound control differ here only in the start of the window,
+       not in the band. The 4 s trial window is the paper's."
+    - "cohort.powerline_hz is a placeholder: MOABB does not expose the
+       recording site and nothing reads this field yet."

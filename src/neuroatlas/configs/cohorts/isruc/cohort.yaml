@@ -1,0 +1,112 @@
+# isruc — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: isruc
+name: ISRUC-Sleep
+domain: sleep
+paper_dataset: true
+
+description: >
+  ISRUC-SLEEP benchmark adapter. Three subgroups (I: sleep-disordered, II:
+  sleep-disordered with repeat sessions, III: healthy controls) with
+  2-rater hypnograms; primary label is the local 2-rater consensus,
+  per-rater labels ride in meta.
+
+cohort:
+  centre: "ISRUC, University of Coimbra, Portugal"
+  country: PT
+  powerline_hz: 50
+
+acquisition:
+  kind: manual
+  upstream: https://sleeptight.isr.uc.pt/
+  note: >
+    Download the three subgroups from the site's "Download Dataset" page. The
+    reader expects subgroupI/<n>/<n>.rec with <n>_1.txt and <n>_2.txt (the two
+    scorers), subgroupIII/ the same, subgroupII/<n>/<rec>/<rec>.rec, and the
+    Details_subgroup_{I,II,III}_Submission.xlsx sheets.
+  expect: {glob: "*.rec", count: 126}       # 100 + 8x2 + 10 recordings (Khalighi et al. 2016)
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      implemented_by: adapters.isruc._collate_isruc
+    diagnosis:
+      granularity: recording   # one label for the whole recording; window scores are aggregated to the recording before scoring
+      implemented_by: adapters.isruc._collate_isruc
+    has_diagnosis:
+      granularity: recording   # one label for the whole recording; window scores are aggregated to the recording before scoring
+      implemented_by: adapters.isruc._collate_isruc
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+    age:
+      granularity: recording   # one age per subject; window predictions are mean-pooled to the subject before the ridge fit
+      note: >
+        chronological age in years; regression via `--task brain_age`
+        (Appendix B.3 re-labels this cohort, it does not add a dataset)
+      implemented_by: adapters.isruc._age_labels
+  also_implemented:
+    - sex
+splits:
+  manifest: folds.json
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  batch_size: 32
+  data_root: "${EEG_DATA_ROOT}/data/isruc"
+  label_mode: sleep_stage
+  num_folds: 5
+  signal_kind: raw
+  subgroups:
+    - I
+    - II
+    - III
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - sleep_stage
+      - diagnosis
+      - has_diagnosis
+    enforced_by: adapters.isruc._collate_isruc
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.isruc.ISRUCBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - num_folds
+    - subgroups
+    - label_mode
+
+provenance:
+  last_verified: 2026-09-21

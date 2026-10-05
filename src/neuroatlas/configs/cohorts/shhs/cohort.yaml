@@ -1,0 +1,96 @@
+# shhs — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: shhs
+name: Sleep Heart Health Study (SHHS)
+domain: sleep
+paper_dataset: true
+
+description: >
+  Sleep Heart Health Study benchmark adapter.
+
+cohort:
+  centre: "Sleep Heart Health Study (NSRR), USA"
+  country: US
+  powerline_hz: 60
+
+acquisition:
+  kind: nsrr
+  ref: shhs
+  unusable_download: >
+    The SHHS reader reads the CoRe-Sleep preprocessed version of SHHS, not the
+    raw EDFs NSRR serves, and no script in this repository builds it. The raw
+    download (about 50 GB) would sit unused; ask the authors for the
+    preprocessed copy and set shhs.data_root to it.
+
+signal:
+  notch_freq: null
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      classes:
+        - W
+        - N1
+        - N2
+        - N3
+        - REM
+      note: 5-class AASM staging per 30 s epoch
+splits:
+  manifest: null
+  grouping: patient
+
+runtime_defaults:
+  batch_size: 2
+  data_root: "${EEG_DATA_ROOT}/SHHS/no_backup"
+  signal_kind: stft
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  signal_kind:
+    values:
+      - raw
+      - stft
+      - both
+    enforced_by: dataio.shhs
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.shhs.SHHSBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+    time_frequency: stft
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+
+provenance:
+  last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- which SHHS folds the paper's foundation-model
+       staging numbers used is not established. This reader runs one fixed
+       split (SleepTransformer's data_split_eval.mat, as before the
+       restructure); the pre-restructure combined probes
+       (artifacts/probes_combined_perC/shhs_combined) used five folds from
+       configs/folds/shhs_combined.json over 8,444 recordings, which this
+       reader does not read (it indexes the CoRe-Sleep patient .mat lists)."

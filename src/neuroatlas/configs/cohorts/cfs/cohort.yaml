@@ -1,0 +1,110 @@
+# cfs_raw_2ch — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: cfs
+name: Cleveland Family Study (CFS)
+domain: sleep
+paper_dataset: true
+description: >
+  CFS (Cleveland Family Study, NSRR visit5) raw EDF — bipolar C3-M2 +
+  C4-M1, 128 → 256 Hz online, 0.5 Hz HP + 60 Hz notch (Butterworth-SOS),
+  µV-canonical. Carries both nsrr_age and sleep_stage in items.json so the
+  same cache serves brain-age regression and sleep-stage classification
+  probes.
+
+cohort:
+  centre: "Cleveland Family Study (NSRR), USA"
+  country: US
+  powerline_hz: 60
+  inherits_from: cfs
+
+acquisition:
+  kind: nsrr
+  ref: cfs
+
+signal:
+  notch_freq: null
+  channels:
+    - C3-M2
+    - C4-M1
+
+labels:
+  granularity: recording
+  # one label for the whole recording; window scores are aggregated to the recording before scoring — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      granularity: window   # one label per 30 s epoch
+    age:
+      granularity: recording   # one label per recording
+      note: chronological age in years; regression, see spec.default_task
+splits:
+  derivation: >
+    nested StratifiedKFold over subjects, stratified on age bins: the outer
+    split (shuffle=True, random_state=`seed`, default 42) picks the test
+    subjects, an inner StratifiedKFold on the remainder picks validation
+    using fold+1. Deterministic for a given seed
+  derived_by: src/neuroatlas/extensions/datasets/adapters/cfs.py:583-601
+  # No fold manifest: reproducible because the splitter is seeded,
+  # but there is no file to inspect or to pin across repo versions.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  age_bins:
+    - 0
+    - 18
+    - 35
+    - 50
+    - 65
+    - 200
+  bandpass_hz:
+    - 0.5
+    - 0
+  batch_size: 256
+  channels:
+    - C3-M2
+    - C4-M1
+  crop_wake_mins: null
+  data_root: "${EEG_DATA_ROOT}/raw-sleep/cfs"
+  fold: 0
+  n_folds: 5
+  name: cfs
+  notch_hz: 60.0
+  num_workers: 4
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.cfs.CFSRawDataModule
+  default_task: brain_age
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - fold
+    - n_folds
+    - channels
+    - crop_wake_mins
+    - bandpass_hz
+    - notch_hz
+
+provenance:
+  last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- two pre-restructure protocols disagree on
+       CFS sleep-staging folds. This reader's age-binned folds are the
+       brain-age protocol (05fd2a8 datasets/cfs: one cache for both tasks);
+       the c-tuned staging probes (artifacts/probes_perC_sleep3/cfs_bp_2ch)
+       used 3c6721c configs/folds/cfs_bp_2ch.json, a subject round-robin
+       (seed 42). The two share about a fifth of each test fold."

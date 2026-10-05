@@ -1,0 +1,18 @@
+schema_version: 1
+name: sleep_hypnogram
+title: Hypnogram features
+domain: sleep
+question: >
+  How well do sleep-architecture features (total sleep time, stage
+  proportions, WASO, REM latency, fragmentation...) computed from predicted
+  hypnograms match those from the true ones?
+paper: App. C.2, Table 2
+derived_from: sleep_stage
+datasets: [dcsm, dod, isruc, mass, physionet2026, sleep_edf_expanded, ucddb, wsc]
+single: sleep_edf_expanded
+metrics:
+  # Pearson r between each feature from the predicted and the true hypnogram,
+  # averaged over the 34 features. Their MAEs are in different units (minutes,
+  # percentages, counts), so no average of those means anything.
+  headline: pearson_r
+  higher_is_better: true
