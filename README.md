@@ -312,7 +312,7 @@ bnci2014_001  cbramod_pretrained  found (18/18 files)  hub (cached)  none       
 pairs: 2   forward passes: 2   errors: 0   skipped: 0   n/a: 0   time: 48.9s
 ```
 
-A pair that cannot run says why on its own line (`↳ ...`): missing data or
+A pair that cannot run says why on an indented line under it: missing data or
 weights with the command that fetches them, a model that is not part of
 the benchmark, or a channel map that rules it out (`n/a`).
 

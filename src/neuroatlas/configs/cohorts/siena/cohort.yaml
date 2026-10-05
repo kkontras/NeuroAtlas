@@ -37,15 +37,18 @@ acquisition:
   expect: {glob: "*_eeg.edf", count: 41}    # 41 EDFs in the zip
 
 signal:
-  montage: bipolar
+  # Referential, as recorded and as the paper's Siena embeddings were made
+  # (na_seizure_probe/siena: montage=unipolar). The montage each model gets is
+  # set per model by configs/channel_maps/siena.yaml: unipolar, except BIOT,
+  # which gets the 20-pair bipolar TCP montage it was pretrained on.
+  montage: unipolar
   montage_conflict:
-    resolved_to: bipolar
-    reason: kept the DatasetSpec value to preserve current behaviour
-    sources:
-      DatasetSpec.config_defaults: bipolar
-      embed_dataset._DEFAULT_MONTAGE: unipolar
-      description: unipolar
-    open_question: audit OQ-11.2 — needs a maintainer decision
+    resolved_to: unipolar, per model (BIOT bipolar)
+    reason: >-
+      the recording, the dataset description, the pre-restructure embed default
+      and the paper's embeddings are all unipolar; the bipolar default (kept
+      "to preserve current behaviour") gave every model bipolar pairs and left
+      Seizure-Transformer, DeepSOZ and S-TEEGformer unable to run (2026-10-05).
   window_s: 10.0
   overlap_threshold: 0.0
   notch_freq: null
@@ -84,7 +87,7 @@ runtime_defaults:
   cache_root: "${EEG_CACHE_ROOT}/prepared/siena"
   fold: 0
   label_mode: binary
-  montage: bipolar
+  montage: unipolar
   n_folds: 5
   normalize: none
   # num_workers: not pinned; see chbmit/cohort.yaml.

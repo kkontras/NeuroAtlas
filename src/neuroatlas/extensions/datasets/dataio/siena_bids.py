@@ -62,7 +62,7 @@ class SienaBIDSDataset(Dataset):
         recording_indices: Subset of recording indices for k-fold filtering.
         label_mode: ``"binary"`` for seizure detection.
         normalize: ``"none"`` or ``"per_window_zscore"``.
-        montage: ``"unipolar"`` (19 ch) or ``"bipolar"`` (18 ch).
+        montage: ``"unipolar"`` (19 electrodes, the default) or ``"bipolar"`` (the 20-pair TCP montage).
         overlap_threshold: Seizure fraction above which binary label is 1.
         signal_cache_size: Max recordings to keep in the LRU signal cache.
         index_cache_path: Optional path to a pickle cache for the BIDS index.
@@ -76,7 +76,7 @@ class SienaBIDSDataset(Dataset):
         recording_indices: Optional[Sequence[int]] = None,
         label_mode: str = "binary",
         normalize: str = "none",
-        montage: str = "bipolar",
+        montage: str = "unipolar",
         overlap_threshold: float = 0.0,
         signal_cache_size: int = 8,
         index_cache_path: Optional[str] = None,

@@ -97,7 +97,7 @@ def cmd_status(args) -> int:
         columns += ["path", "path_key", "setting", "n_files", "expected", "found", "note"]
     elif args.verbose:
         columns += ["path", "key"]
-    # The renderer turns the notes into the table's ↳ lines, or into the
+    # The renderer turns the notes into the table's indented lines, or into the
     # `note` field of every row in machine formats.
     render(rows, [c for c in columns if c != "note"], args.format, notes)
     if args.format != "table":

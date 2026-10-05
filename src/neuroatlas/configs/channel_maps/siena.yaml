@@ -1,48 +1,39 @@
 # The (Siena, model) channel plan, applied by the runner before each wrapper
 # sees a batch (benchmarking_helpers/channels/channel_map.py).
 #
-# Montage: the 20-pair bipolar TCP montage the reader derives (montage:
-# bipolar, the manifest default and what embed_chbmit_siena ran with; the
-# manifest records the unipolar/bipolar question as audit OQ-11.2).
+# Montage, per model: Siena is recorded referential (19 electrodes), and each
+# model gets the derivation it was pretrained on. Unipolar for every family
+# (the paper's Siena embeddings are unipolar: na_seizure_probe/siena, metadata
+# montage=unipolar), except BIOT, pretrained on 16-18 bipolar channels (paper
+# Table 1), which gets the 20-pair bipolar TCP montage derived from them.
+# `montage` is the default, `model_montage` the exceptions; the runner sets
+# the reader's montage per pair, and the montage is part of the embedding
+# cache key.
 #
-# Every registered model family has an entry: a rename, `mode:
-# label_pass_through` (the wrapper receives these labels unchanged and
-# resolves them itself, as it did before the map was applied at run time),
-# or `skip` (not run: the pair shows n/a). A family with no entry is an
-# invalid pair, refused before any data is read.
+# Every registered model family has an entry: a rename (keyed on its
+# montage's labels), `mode: label_pass_through` (the wrapper receives the
+# labels unchanged and resolves them itself), or `skip` (not run: the pair
+# shows n/a). A family with no entry is an invalid pair, refused before any
+# data is read.
 
 dataset: siena
 channels_available:
   [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
-channels_used:
-  [FP1-F7, F7-T3, T3-T5, T5-O1,
-   FP2-F8, F8-T4, T4-T6, T6-O2,
-   T3-C3, C3-CZ, CZ-C4, C4-T4,
-   FP1-F3, F3-C3, C3-P3, P3-O1,
-   FP2-F4, F4-C4, C4-P4, P4-O2]
+
+montage: unipolar
+montages:
+  unipolar:
+    [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
+  bipolar:
+    [FP1-F7, F7-T3, T3-T5, T5-O1,
+     FP2-F8, F8-T4, T4-T6, T6-O2,
+     T3-C3, C3-CZ, CZ-C4, C4-T4,
+     FP1-F3, F3-C3, C3-P3, P3-O1,
+     FP2-F4, F4-C4, C4-P4, P4-O2]
+model_montage:
+  biot: bipolar
 
 per_model:
-  reve:
-    FP1-F7: FP1-F7
-    F7-T3: F7-T3
-    T3-T5: T3-T5
-    T5-O1: T5-O1
-    FP2-F8: FP2-F8
-    F8-T4: F8-T4
-    T4-T6: T4-T6
-    T6-O2: T6-O2
-    T3-C3: T3-C3
-    C3-CZ: C3-CZ
-    CZ-C4: CZ-C4
-    C4-T4: C4-T4
-    FP1-F3: FP1-F3
-    F3-C3: F3-C3
-    C3-P3: C3-P3
-    P3-O1: P3-O1
-    FP2-F4: FP2-F4
-    F4-C4: F4-C4
-    C4-P4: C4-P4
-    P4-O2: P4-O2
   biot:
     # BIOT's slots use the modern names (T7/T8/P7/P8 for T3/T4/T5/T6); the
     # wrapper aliases single electrodes but not pairs, so without these six
@@ -70,10 +61,11 @@ per_model:
   cbramod:
     mode: label_pass_through
     non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+  reve: {mode: label_pass_through}
   brain_age_cnn: {mode: label_pass_through}
   chronos: {mode: label_pass_through}
   core_sleep: {mode: label_pass_through}
-  deepsoz_hem: skip
+  deepsoz_hem: {mode: label_pass_through}
   eegnetv4: skip
   eegpt: {mode: label_pass_through}
   labram: {mode: label_pass_through}
@@ -86,12 +78,10 @@ per_model:
   sleep_transformer: {mode: label_pass_through}
   sleepfm: {mode: label_pass_through}
   sleepyco: {mode: label_pass_through}
-  steegformer: skip
+  steegformer: {mode: label_pass_through}
 
 notes:
-  eegnetv4: "Not run on the 20-pair bipolar montage: the EEGNetv4 wrapper reads C3, Cz and C4 by name, none of which is a channel here, so every window became zeros and embedded identically."
-  steegformer: "Not run on the 20-pair bipolar montage: S-TEEGformer resolves monopolar 10-20 names only, and none of the 20 pairs matches its vocabulary (0 of 20 matched)."
-  deepsoz_hem: "Not run on the 20-pair bipolar montage: DeepSOZ-HEM's channel transformer has a slot for 16 of the pairs (each routed to an anchor electrode) and none for the central chain T3-C3, C3-CZ, CZ-C4, C4-T4, so the wrapper rejects the input. It runs on the 19-electrode unipolar montage (checked on Helsinki)."
-  reve: "Siena 20-pair bipolar TCP montage — REVE midpoints each A-B pair in the position bank."
-  biot: "Exact renames, not approximations: T3=T7, T4=T8, T5=P7, T6=P8 in the 10-10 system, so F7-T3 is BIOT's F7-T7 slot. All 16 slots are filled directly; the four central-chain pairs feed no slot."
-  cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged."
+  biot: "Bipolar: BIOT was pretrained on 16-18 bipolar channels (paper Table 1), so it gets the 20-pair TCP montage derived from Siena's referential electrodes. The renames are exact, not approximations: T3=T7, T4=T8, T5=P7, T6=P8 in the 10-10 system, so F7-T3 is BIOT's F7-T7 slot. All 16 slots are filled directly; the four central-chain pairs feed no slot."
+  eegnetv4: "Not run on epilepsy: the EEGNetv4 checkpoints are motor-imagery models, and the paper includes EEGNet in the motor-imagery comparison only (App. 'Supervised BCI/MI Model')."
+  cbramod: "Label pass-through (index-based ACPE) of the 19 unipolar electrodes."
+  reve: "Label pass-through: REVE places each of the 19 unipolar electrodes by name in its position bank."

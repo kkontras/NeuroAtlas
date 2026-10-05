@@ -130,17 +130,18 @@ def default_montage(datamodule) -> Optional[str]:
 
 
 def montage_context(datamodule, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Add the montage to a cache context when it is not the cohort's default.
+    """Add the montage to a cache context.
 
     The readers re-reference the signal by montage (unipolar electrodes or
-    bipolar pairs: other channels, other values), but their metadata never
-    carried it, so ``--set montage=unipolar`` on a bipolar cohort found the
-    bipolar embeddings under the same key and read them as its own. Only a
-    non-default montage enters the key: adding it always would change every
-    existing key and orphan every cache extracted so far (the pooling key
-    follows the same rule, tasks/linear_probe._cache_spec). A context that
-    already carries the montage is left alone: TUSZ's metadata names it, and
-    EPILEPSIAE's ``channel_policy`` is its montage.
+    bipolar pairs: other channels, other values), so the montage is part of
+    what an embedding is. It used to enter the key only when it differed from
+    the cohort's default, which kept old keys stable but meant that changing a
+    default (Siena: bipolar -> unipolar, the montage the paper used, with
+    BIOT on its bipolar pairs) would read the old embeddings as the new
+    montage's. It now always enters the key, so a cache names its montage;
+    caches made before this are not reused. A context that already carries
+    the montage is left alone: TUSZ's metadata names it, and EPILEPSIAE's
+    ``channel_policy`` is its montage.
 
     TUAB's ``montage_filter`` (keep only recordings of these montage types)
     changes which recordings exist, so a filter, never the default, enters
@@ -148,8 +149,7 @@ def montage_context(datamodule, context: Dict[str, Any]) -> Dict[str, Any]:
     """
     montage = getattr(datamodule, "_montage", None)
     if (montage is not None and "montage" not in context
-            and context.get("channel_policy") != montage
-            and montage != default_montage(datamodule)):
+            and context.get("channel_policy") != montage):
         context["montage"] = montage
     kept = getattr(datamodule, "_montage_filter", None)
     if kept and "montage_filter" not in context:

@@ -370,11 +370,11 @@ run uses, then it stops: nothing trained, cached or downloaded. On Sleep-EDF:
 dataset             model               data                   weights          channel_map  forward           time
 sleep_edf_expanded  biot_pretrained     found (197/197 files)  found            applied      (32, 256) finite  2.8s
 sleep_edf_expanded  labram_pretrained   found (197/197 files)  auto             applied      -                 0.0s
-    ↳ weights auto: forward skipped; `neuroatlas models download labram_pretrained`
+      weights auto: forward skipped; `neuroatlas models download labram_pretrained`
 sleep_edf_expanded  cbramod_pretrained  found (197/197 files)  hub (cached)     applied      (32, 200) finite  1.0s
 sleep_edf_expanded  reve_pretrained     found (197/197 files)  hub (cached)     applied      (32, 512) finite  6.1s
 sleep_edf_expanded  moment_small        found (197/197 files)  package missing  applied      -                 0.0s
-    ↳ weights package missing: forward skipped (momentfm is not installed: pip install --no-deps "momentfm==0.1.4" (weights: hub))
+      weights package missing: forward skipped (momentfm is not installed: pip install --no-deps "momentfm==0.1.4" (weights: hub))
 pairs: 5   forward passes: 3   errors: 0   skipped: 2   n/a: 0   time: 9.9s
 ```
 

@@ -52,7 +52,7 @@ Runtime behaviour:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Union
 
@@ -73,6 +73,28 @@ class ChannelMap:
     per_model: Dict[str, Union[Dict[str, str], str]]
     notes: Dict[str, str]
     pass_through: FrozenSet[str] = frozenset()   # families declared label_pass_through
+    # Per-model montages (optional). A dataset that can serve more than one
+    # montage names them (`montages: {unipolar: [...], bipolar: [...]}`), the
+    # one a family gets unless it says otherwise (`montage:`), and the families
+    # that need another (`model_montage: {biot: bipolar}`): each model gets the
+    # derivation it was pretrained on. Without `montages`, every family gets
+    # channels_used, as before.
+    montage: Optional[str] = None
+    montages: Dict[str, List[str]] = field(default_factory=dict)
+    model_montage: Dict[str, str] = field(default_factory=dict)
+
+    def montage_for(self, model_family: str) -> Optional[str]:
+        """The montage this family is given, or None when the map names none."""
+        if not self.montages:
+            return None
+        return self.model_montage.get(model_family, self.montage)
+
+    def channels_for(self, model_family: str) -> List[str]:
+        """The channel labels this family receives, in order."""
+        montage = self.montage_for(model_family)
+        if montage is None:
+            return list(self.channels_used)
+        return list(self.montages[montage])
 
     def is_skip(self, model_family: str) -> bool:
         entry = self.per_model.get(model_family)
@@ -154,6 +176,31 @@ def load_channel_map(
     per_model_raw = data.get("per_model") or {}
     notes = dict(data.get("notes") or {})
 
+    montages = {str(k): [str(c) for c in (v or [])] for k, v in (data.get("montages") or {}).items()}
+    default_montage = data.get("montage")
+    model_montage = {str(k): str(v) for k, v in (data.get("model_montage") or {}).items()}
+    if montages:
+        if default_montage not in montages:
+            raise ValueError(
+                f"channel map {path}: 'montage' must name one of montages "
+                f"{sorted(montages)!r}, got {default_montage!r}")
+        bad = {m: v for m, v in model_montage.items() if v not in montages}
+        if bad:
+            raise ValueError(f"channel map {path}: model_montage names unknown montages {bad!r}; "
+                             f"declared: {sorted(montages)!r}")
+        undocumented = [m for m in model_montage if m not in notes]
+        if undocumented:
+            raise ValueError(f"channel map {path}: model_montage for {undocumented!r} has no "
+                             f"notes[<model>] saying why")
+        channels_used = list(montages[default_montage])
+    elif model_montage or default_montage:
+        raise ValueError(f"channel map {path}: 'montage'/'model_montage' need 'montages'")
+
+    def _labels_for(model: str) -> List[str]:
+        if not montages:
+            return channels_used
+        return montages[model_montage.get(model, default_montage)]
+
     if not isinstance(per_model_raw, Mapping):
         raise ValueError(f"channel map {path}: 'per_model' must be a mapping")
     per_model: Dict[str, Union[Dict[str, str], str]] = {}
@@ -196,21 +243,22 @@ def load_channel_map(
                     f"channel map {path}: per_model[{model!r}] mixes mode with "
                     f"entries {sorted(unknown)!r}; use one or the other."
                 )
-            entry = {label: label for label in channels_used}
+            entry = {label: label for label in _labels_for(model)}
 
-        # Validate completeness.
-        missing = [label for label in channels_used if label not in entry]
+        # Validate completeness, against the montage this family is given.
+        labels = _labels_for(model)
+        missing = [label for label in labels if label not in entry]
         if missing:
             raise ValueError(
                 f"channel map {path}: per_model[{model!r}] is missing "
-                f"entries for {missing!r} (must cover every label in "
-                f"channels_used)."
+                f"entries for {missing!r} (must cover every label of its "
+                f"montage)."
             )
-        extras = [label for label in entry if label not in channels_used]
+        extras = [label for label in entry if label not in labels]
         if extras:
             raise ValueError(
                 f"channel map {path}: per_model[{model!r}] has entries "
-                f"{extras!r} not in channels_used."
+                f"{extras!r} not in its montage's channels."
             )
 
         # Validate targets against the model's vocabulary + force notes[<model>]
@@ -248,6 +296,9 @@ def load_channel_map(
         per_model=per_model,
         notes=notes,
         pass_through=frozenset(pass_through_models),
+        montage=str(default_montage) if montages else None,
+        montages=montages,
+        model_montage=model_montage,
     )
 
 

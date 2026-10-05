@@ -317,7 +317,13 @@ class BenchmarkRunner:
         """The dataset config one checkpoint sees: its channels, and recording
         statistics for the models that normalise by them."""
         if cmap is not None:
-            dataset_config = {**dataset_config, "channel_specs": list(cmap.channels_used)}
+            family = checkpoint_spec.model_family.lower()
+            dataset_config = {**dataset_config, "channel_specs": cmap.channels_for(family)}
+            montage = cmap.montage_for(family)
+            if montage is not None:
+                # The montage this model was pretrained on (the map's
+                # model_montage), not one montage for every model.
+                dataset_config["montage"] = montage
         if checkpoint_spec.model_family.lower() in {"reve", "biot", "sleepfm", "steegformer", "neurogpt"}:
             dataset_config = {**dataset_config, "compute_recording_stats": True}
         return dataset_config

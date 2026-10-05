@@ -203,8 +203,8 @@ options:
   -v, --verbose         Also list each benchmark's datasets.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -222,8 +222,8 @@ options:
   -v, --verbose         Also show where each dataset comes from (URL or DOI).
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
   --all                 Include registered datasets the paper does not evaluate.
 ```
 
@@ -247,8 +247,8 @@ options:
   -v, --verbose         Also show where each checkpoint's weights come from.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
   --all                 Include planned checkpoints.
   --benchmark NAME      Only the checkpoints this benchmark evaluates: the selector
                         (default: every ready one) without the model families the
@@ -269,8 +269,8 @@ options:
   -v, --verbose         Also list each alias's checkpoints.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -287,8 +287,8 @@ options:
   -v, --verbose         Print each description in full.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -353,8 +353,8 @@ options:
   -v, --verbose         Show every path, and the setting that moves it, as columns.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -444,8 +444,8 @@ options:
   -v, --verbose         Show where each is expected.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -495,8 +495,8 @@ options:
                         only if one failed or none could be checked.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -566,8 +566,8 @@ options:
                         would silently cover only the subjects that arrived.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -620,8 +620,8 @@ options:
   -v, --verbose         List every skipped pair.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 
 resources (per job):
   --gpus GPUS
@@ -669,8 +669,8 @@ options:
   --no-scheduler        Do not ask condor_q / squeue; decide from the files only.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
@@ -706,8 +706,8 @@ options:
   -v, --verbose         Show why failed folds failed: the message each one recorded.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
 ```
 
 
