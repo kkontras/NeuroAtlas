@@ -422,6 +422,7 @@ _HF_FILENAME_MAP = {
     # weight under a subfolder (e.g. neurolm's "checkpoints/VQ.pt").
     "Weibang/NeuroLM": "checkpoints/VQ.pt",
     "wenhuic/Neuro-GPT": "pretrained_model/pytorch_model.bin",
+    "ntinosbarmpas/NeuroRVQ": "pretrained_models/foundation_models/NeuroRVQ_EEG_foundation_model_v1.pt",
 }
 
 
