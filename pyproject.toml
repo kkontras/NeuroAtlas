@@ -42,10 +42,17 @@ dependencies = [
 neuroatlas = "neuroatlas.cli:main"
 
 [project.optional-dependencies]
-# The model stack. Install torch yourself first, to match your CUDA version;
-# requirements-fm.txt has the exact pins the paper used.
+# The model stack: everything a run imports. One command gives the paper's
+# exact versions, with requirements-fm.txt as the constraints file:
+#     pip install -e ".[fm]" -c requirements-fm.txt
+# torch is unpinned: pip takes the default build (CUDA 13); for another CUDA
+# build install torch from pytorch.org first and pip keeps it.
 fm = [
     "torch",
+    "tqdm>=4.66,<5",              # probe progress bars
+    "easydict>=1.13,<2",          # CoRe-Sleep, SleepTransformer and the SHHS reader
+    "physioex>=1.0.9,<1.1",       # the Sleep-EDF reader's PhysioEx preprocessing
+    "loguru>=0.7,<0.8",           # imported by that reader
     "transformers>=4.57.1,<5",
     "safetensors>=0.7,<1",
     "einops>=0.8.1,<0.9",

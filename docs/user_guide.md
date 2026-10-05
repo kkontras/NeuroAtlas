@@ -53,11 +53,7 @@ in a clone of the repository:
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip
-pip install torch torchvision torchaudio     # CUDA 13 build: GPU compute capability >= 7.5
-pip install -r requirements-fm.txt           # the paper's exact versions
-pip install -e ".[fm]"
-pip check                                    # No broken requirements found.
+pip install -e ".[fm]" -c requirements-fm.txt     # the paper's exact versions; torch's default build is CUDA 13
 ```
 
 The distribution is named `neuroatlas-bench` and is not on PyPI yet; the
@@ -69,10 +65,11 @@ What each model family and dataset needs beyond `[fm]`:
 | for | install | note |
 |---|---|---|
 | EEG foundation models, supervised baselines, sleep and epilepsy datasets | `[fm]` | includes `xlrd` (Sleep-EDF ages) and `openpyxl` (ISRUC ages) |
-| Chronos | `pip install -e ".[ts]"` | |
+| Chronos | `pip install -e ".[fm,ts]" -c requirements-fm.txt` | |
 | MOMENT | `pip install --no-deps "momentfm==0.1.4"` | `pip check` then lists momentfm's three declared pins; expected |
 | Moirai | a separate environment: `requirements-tsfm.txt` | Python 3.10, torch 2.4.1 |
-| the 14 MOABB BCI datasets | `pip install -e ".[fm,bci]"`, then `pip install --no-deps "moabb==1.2.0"` | stays on numpy 1.26.4; `pip check` lists moabb's declared caps, which are harmless; Dreyer2023 and Kim2025BetaRange, newer than moabb 1.2.0, ship inside the package |
+| the 14 MOABB BCI datasets | `pip install -e ".[fm,bci]" -c requirements-fm.txt`, then `pip install --no-deps "moabb==1.2.0"` | stays on numpy 1.26.4; `pip check` lists moabb's declared caps, which are harmless; Dreyer2023 and Kim2025BetaRange, newer than moabb 1.2.0, ship inside the package |
+| all of the above but Moirai | `pip install -e ".[fm,bci,ts]" -c requirements-fm.txt`, then `pip install --no-deps "moabb==1.2.0" "momentfm==0.1.4"` | |
 
 `neuroatlas models status` reports a model whose package is missing as
 `package missing`, with the install line.
