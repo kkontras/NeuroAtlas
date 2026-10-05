@@ -61,6 +61,7 @@ from ._preproc import (
     _ESAT_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     read_sampling_rate,
     replace_nonfinite_with_zero,
     resample_poly_with_fallback,
@@ -450,10 +451,11 @@ class NeuroLMBackbone(BenchmarkBackbone):
 
         # 3. Drop non-EEG by label prefix (per §1).
         dataset = first_meta.get("dataset") if first_meta else None
+        bci = is_bci_batch(meta)
         use_neuroatlas_channel_handling = first_meta.get(
             "neurolm_neuroatlas_channels", False,
         ) if first_meta else False
-        if dataset == "bci" and not use_neuroatlas_channel_handling:
+        if bci and not use_neuroatlas_channel_handling:
             keep_idx = list(range(x.shape[1]))
             kept_labels = list(raw_labels)
             dropped_entries = []
@@ -518,7 +520,7 @@ class NeuroLMBackbone(BenchmarkBackbone):
         n_chans = x.shape[1]
         n_tokens = n_chans * n_time_patches
         if n_tokens > self.block_size:
-            if dataset == "bci":
+            if bci:
                 logger.warning(
                     "NeuroLM: BCI token budget exceeded (%d > %d); truncating channels.",
                     n_tokens, self.block_size,
@@ -548,7 +550,7 @@ class NeuroLMBackbone(BenchmarkBackbone):
         assert_finite(x, where="neurolm:after_norm")
 
         # Resolve channel labels to vocab indices.
-        if dataset == "bci":
+        if bci:
             ch_indices_with_pos: List[Tuple[int, int, str]] = []
             dropped_ch: List[str] = []
             for i, c in enumerate(kept_labels):
@@ -653,9 +655,8 @@ class NeuroLMBackbone(BenchmarkBackbone):
     def forward_features(self, batch) -> torch.Tensor:
         """Grad-enabled pooled features, ``(B, embed_dim)``. See base class."""
         tokens, input_chans, input_times, input_mask, attn_mask = self._prepare_tokens(batch)
-        meta = batch.get("meta") or [{}]
-        dataset = meta[0].get("dataset") if meta else None
-        if dataset == "bci":
+        if is_bci_batch(batch.get("meta")):
+            # BCI parity: the model's own pooling, fc_norm(mean over tokens).
             return self.model.forward_features(
                 tokens,
                 input_chans=input_chans,

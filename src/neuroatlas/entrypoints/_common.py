@@ -90,11 +90,12 @@ class MissingDatasetPath(SystemExit):
 
 
 def repo_root() -> str:
-    """Where this checkout lives.
+    """What ``${REPO_ROOT}`` expands to: ``$NEUROATLAS_HOME``.
 
-    ``${REPO_ROOT}`` appears in nine cache-path defaults. Unlike
-    ``${EEG_DATA_ROOT}`` it is not the user's to supply -- we are standing in
-    it -- so it is filled in rather than demanded.
+    No shipped manifest uses it any more (their defaults are written against
+    ``${EEG_DATA_ROOT}`` and ``${EEG_CACHE_ROOT}``); a few adapter fallbacks
+    still do. It used to be the source checkout, which put downloads inside
+    the source tree.
     """
     return str(workspace_root())
 
@@ -109,6 +110,13 @@ def expand_dataset_paths(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     environ = dict(os.environ)
     environ.setdefault("REPO_ROOT", repo_root())
+    # Prepared-cache defaults are written against the cache root
+    # (${EEG_CACHE_ROOT}/prepared/<slug>), which has a default even when no
+    # variable is exported.
+    if "EEG_CACHE_ROOT" not in environ:
+        from neuroatlas import config as _config
+
+        environ["EEG_CACHE_ROOT"] = str(_config.get("cache_root"))
 
     out: Dict[str, Any] = {}
     for key, value in config.items():

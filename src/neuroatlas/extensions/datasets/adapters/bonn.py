@@ -27,6 +27,7 @@ from neuroatlas.extensions.datasets.dataio.bonn import (
 )
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def _stratified_clip_splits(
 # ---------------------------------------------------------------------------
 
 
-class BonnBenchmarkDataModule(BenchmarkDataModule):
+class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the Bonn EEG epilepsy dataset.
 
     Args:
@@ -212,9 +213,14 @@ class BonnBenchmarkDataModule(BenchmarkDataModule):
                 f"No clips remain after applying label_mode={label_mode!r}"
             )
 
+        self._allowed_clips = list(allowed)
         self._train_clips, self._val_clips, self._test_clips = _stratified_clip_splits(
             self._class_codes, allowed, fold, n_folds, seed=seed,
         )
+        # The names the global-cache mixin reads: a Bonn "recording" is a clip.
+        self._train_recs, self._val_recs, self._test_recs = (
+            self._train_clips, self._val_clips, self._test_clips)
+        self._collate_fn = _collate_bonn
         logger.info(
             "Bonn splits (fold %d/%d, label_mode=%s): train=%d val=%d test=%d clips",
             fold, n_folds, label_mode,
@@ -236,17 +242,40 @@ class BonnBenchmarkDataModule(BenchmarkDataModule):
             }[split]
             # Non-training splits use non-overlapping windows only
             stride_s = self._stride_s if split == "train" else self._window_s
-
-            self._datasets[split] = BonnSegmentDataset(
-                h5_path=None if self._raw_dir else self._h5_path,
-                raw_dir=self._raw_dir,
-                window_s=self._window_s,
-                stride_s=stride_s,
-                label_mode=self._label_mode,
-                clip_indices=clip_indices,
-                normalize=self._normalize,
-            )
+            self._datasets[split] = self._window_dataset(clip_indices, stride_s)
         return self._datasets[split]
+
+    def _window_dataset(self, clip_indices, stride_s, signal_cache_size: int = 0):
+        # signal_cache_size: unused, Bonn holds the whole 8 MB corpus in memory.
+        return BonnSegmentDataset(
+            h5_path=None if self._raw_dir else self._h5_path,
+            raw_dir=self._raw_dir,
+            window_s=self._window_s,
+            stride_s=stride_s,
+            label_mode=self._label_mode,
+            clip_indices=clip_indices,
+            normalize=self._normalize,
+        )
+
+    # ------------------------------------------------------------------
+    # Global embedding cache (epilepsy/_global_cache.py): every window of
+    # every clip once, folds assigned when probing. The per-split caches it
+    # replaces held one fold's (resampled) train split, so fold 1 found
+    # nothing to read.
+    # ------------------------------------------------------------------
+
+    _recording_key = "clip_idx"
+
+    def _n_recordings(self) -> int:
+        return len(self._class_codes)
+
+    def _all_recording_indices(self) -> List[int]:
+        # Only the clips the label mode keeps (binary_ae drops O/N/F).
+        return list(self._allowed_clips)
+
+    def _subject_of(self, clip_index: int) -> str:
+        # The public corpus names no subjects; the clip is the unit.
+        return str(int(clip_index))
 
     # ------------------------------------------------------------------
     # Loader construction

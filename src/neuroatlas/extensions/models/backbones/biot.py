@@ -166,6 +166,27 @@ def _strip_encoder_prefix(state):
     return state
 
 
+def _drop_constant_index(state, encoder):
+    """Reconcile the PREST checkpoint's ``index`` buffer with the installed braindecode.
+
+    The checkpoint stores ``index`` = arange(n_chans), the channel-token
+    lookup table. braindecode < 1.5 registers it as a persistent buffer, so
+    it must be loaded; later releases rebuild it in ``__init__`` as a
+    non-persistent buffer, so strict loading rejects it as unexpected
+    (``Error(s) in loading state_dict for _BIOTEncoder``, F-079). It carries
+    no learned value: drop it only when the model has no such key and the
+    stored value is exactly the arange the model builds itself.
+    """
+    if "index" not in state or "index" in encoder.state_dict():
+        return state
+    stored = state["index"]
+    built = getattr(encoder, "index", None)
+    expected = built if built is not None else torch.arange(len(stored))
+    if not torch.equal(stored.to(torch.long).cpu(), expected.to(torch.long).cpu()):
+        return state                       # not the constant: let load_strict report it
+    return {k: v for k, v in state.items() if k != "index"}
+
+
 #: A DC offset above this fraction of the 95th-percentile amplitude is large
 #: enough to distort BIOT's q95 normaliser, so the wrapper warns about it.
 _DC_OFFSET_WARN_RATIO = 0.05
@@ -195,8 +216,11 @@ class BIOTBackbone(BenchmarkBackbone):
         )
         state = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
         raw_keys = list(state.keys()) if isinstance(state, dict) else []
-        state = _strip_encoder_prefix(state)
-        self.model.encoder.load_state_dict(state, strict=True)
+        state = _drop_constant_index(_strip_encoder_prefix(state), self.model.encoder)
+        from ._state_dict import load_strict
+
+        load_strict(self.model.encoder, state, f"BIOT checkpoint {checkpoint_path}",
+                    packages=("braindecode", "torch"))
         self.model.eval()
         self.model.to(self.device)
 

@@ -1,4 +1,4 @@
-"""Build a dataset's cache — the optional step between `fetch` and `embed`.
+"""Build a dataset's cache — the optional step between `data download` and `run`.
 
 Most cohorts do not need this.  Every sleep and brain-age dataset reads its
 raw corpus directly, and so do the epilepsy ones: `chbmit` and `siena` read
@@ -14,11 +14,18 @@ records the builder module and which of its flags take the raw corpus and the
 destination -- those flag names differ per builder (``--raw-dir`` vs
 ``--raw-root`` vs ``--data-root``), so they are declared rather than guessed.
 
+Prepared files go under ``<cache root>/prepared`` (the manifests write
+``${EEG_CACHE_ROOT}/prepared/<slug>``; the BCI pickles go to
+``<cache root>/prepared/<Name>/``), never into the source tree.
+
+``neuroatlas data prepare <dataset>`` is the front door: it refuses until
+the raw data is there. This module is the old ``prepare`` verb it calls.
+
 Usage
 -----
-    python -m neuroatlas.entrypoints.prepare --list
-    python -m neuroatlas.entrypoints.prepare --dataset bonn --dry-run
-    python -m neuroatlas.entrypoints.prepare --dataset tusz --shard 0/8
+    neuroatlas data prepare --list
+    neuroatlas data prepare bonn --dry-run
+    neuroatlas data prepare tusz --shard 0/8
 """
 from __future__ import annotations
 
@@ -58,9 +65,10 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     block = builder_for(slug)
     if block is None:
         raise SystemExit(
-            f"error: {slug} declares no pipeline.preprocessor — it reads its raw "
-            f"corpus directly, so there is nothing to prepare.\n"
-            f"Run `embed --dataset {slug}` once `fetch` has the data."
+            f"error: {slug} has no build step: it reads its raw corpus directly, so "
+            f"there is nothing to prepare. Run it as it is (`neuroatlas run <benchmark> "
+            f"--dataset {slug}`); `neuroatlas data status {slug}` says whether its "
+            f"data is there."
         )
     args = block.get("args") or {}
     spec = _spec(slug)
@@ -90,6 +98,14 @@ def build_argv(slug: str, overrides: Dict[str, Any],
             )
         argv += [args["raw"], str(raw)]
     out = dest or next((defaults[k] for k in _OUT_KEYS if defaults.get(k)), None)
+    if out is None and "out" in args and "raw" in args:
+        # A raw-corpus builder whose manifest names no cache folder (sz1):
+        # under the cache root, never wherever the builder's own default is.
+        # (MOABB builders take no raw path and write their PREPROCESSED_SEARCH_PATHS
+        # entry, which is already under the cache root.)
+        from neuroatlas import _paths
+
+        out = str(_paths.prepared_dir(slug))
     if "out" in args and out:
         # Some builders write a single file (bonn's HDF5), others a directory.
         # `cache_filename` in the manifest is what distinguishes them.
@@ -122,8 +138,9 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="neuroatlas prepare",
-        description="Build a dataset's cache. Optional for every cohort that "
-                    "reads raw; required for BCI.",
+        description="Build a dataset's optional cache: a fast path for a few "
+                    "epilepsy cohorts, or dataio/bci.py's pickle for five MOABB "
+                    "motor-imagery ones, which `embed` does not read.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
     )
@@ -157,6 +174,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.list:
         from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
+        from neuroatlas.catalog import prepare_required
 
         rows = []
         for spec in sorted(dataset_specs(), key=lambda s: s.slug):
@@ -164,21 +182,21 @@ def main(argv: Optional[List[str]] = None) -> None:
             if not manifest.get("paper_dataset"):
                 continue
             block = builder_for(spec.slug)
-            rows.append((spec.slug, manifest.get("domain"), block))
-        needed = [r for r in rows if r[1] == "bci" and r[2]]
-        optional = [r for r in rows if r[1] != "bci" and r[2]]
-        print(f"{len(needed)} datasets REQUIRE a build step (BCI: MOABB epochs "
-              f"the corpus first).")
-        print(f"{len(optional)} have an OPTIONAL fast-path cache; they read raw "
-              f"without it.")
+            rows.append((spec.slug, manifest.get("domain"), block, prepare_required(spec.slug)))
+        needed = [r for r in rows if r[2] and r[3]]
+        optional = [r for r in rows if r[2] and not r[3]]
+        print(f"{len(needed)} datasets REQUIRE a build step.")
+        print(f"{len(optional)} have an OPTIONAL build step: the epilepsy fast-path "
+              f"caches, and the BCI pickles of dataio/bci.py, which `embed` does not "
+              f"read. They run from their raw data without it.")
         print(f"{len(rows) - len(needed) - len(optional)} need nothing.\n")
         print(f"{'dataset':28s} {'domain':10s} {'build step':11s} builder")
         print("-" * 84)
-        for slug, domain, block in rows:
+        for slug, domain, block, required in rows:
             if block is None:
                 kind, module = "none", "-"
             else:
-                kind = "required" if domain == "bci" else "optional"
+                kind = "required" if required else "optional"
                 module = str(block.get("module", "?")).rsplit(".", 1)[-1]
             print(f"{slug:28s} {str(domain):10s} {kind:11s} {module}")
         return

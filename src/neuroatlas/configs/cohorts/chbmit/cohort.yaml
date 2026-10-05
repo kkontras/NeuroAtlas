@@ -36,15 +36,15 @@ cohort:
 
 acquisition:
   kind: zenodo
-  ref: "10259996"                           # the download script (no longer shipped)
-  file: BIDS_CHB-MIT.zip                    # the download script (no longer shipped)
+  ref: "10259996"
+  file: BIDS_CHB-MIT.zip                    # the record's only file
   upstream: https://physionet.org/content/chbmit/1.0.0/   # the paper's dataset table:34
   note: >
     Zenodo record 10259996 is the SzCORE BIDS conversion, not the raw PhysioNet
     release. The BIDS conversion is what every loader in this repo expects.
-  size_gb: 22                               # the download script (no longer shipped)
-  checksum: TBD                             # gap: no dataset in this repo is
-                                            # checksummed (audit Phase 3 §3.6)
+  size_gb: 21.7                             # Zenodo API: 21.687 GB (2026-10-02)
+  checksum: md5:df22b26fb8bf3db837c1bdbf205e99b7   # Zenodo API, the zip
+  expect: {glob: "*_eeg.edf", count: 686}   # 686 EDFs in the zip's central directory
 
 signal:
   montage: bipolar                          # embed_dataset.py:_DEFAULT_MONTAGE["chbmit"]
@@ -101,12 +101,15 @@ pipeline:
 
 runtime_defaults:                           # -> DatasetSpec.config_defaults, unchanged
   backend: bids
-  bids_root: ${REPO_ROOT}/chbmit_cache/raw/BIDS_CHB-MIT
-  cache_root: ${REPO_ROOT}/chbmit_cache/hdf5
+  bids_root: ${EEG_DATA_ROOT}/chbmit/BIDS_CHB-MIT
+  cache_root: ${EEG_CACHE_ROOT}/prepared/chbmit
   fold: 0
   n_folds: 5
   batch_size: 64
-  num_workers: 4
+  # num_workers: not pinned. The default is the CPUs the job may use minus
+  # one (at most 16): the global-cache loader reads each recording in one
+  # worker only, so more workers scale. It was 4, which kept CHB-MIT
+  # extraction loader-bound.
   window_s: 10.0
   montage: bipolar
   label_mode: binary

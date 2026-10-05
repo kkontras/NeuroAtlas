@@ -199,10 +199,9 @@ def describe_channel_mapping(channels):
 def _load_checkpoint(path: Path, device: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(
-            f"SeizureTransformer checkpoint not found at {path}. "
-            "Pull from docker image yujjio/seizure_transformer and place the "
-            "extracted model.pth at the path above (see "
-            "artifacts/models/supervised/seizure_transformer/README.md)."
+            f"SeizureTransformer checkpoint not found at {path}. Fetch it with "
+            "`neuroatlas models download seizure_transformer_pretrained` (it is "
+            "pulled out of the authors' Docker image yujjio/seizure_transformer)."
         )
     return torch.load(str(path), map_location=device, weights_only=False)
 

@@ -92,7 +92,10 @@ def load_embedding_payload(cache_dir: Path, mmap_mode: Optional[str] = None) -> 
     if n_feat != n_label or n_feat != len(items):
         raise CacheCorruptError(
             f"cache row-count mismatch at {cache_dir}: "
-            f"features={n_feat} labels={n_label} items={len(items)}"
+            f"features={n_feat} labels={n_label} items={len(items)}; its rows do not "
+            f"line up (a sequence checkpoint extracted before its windows were "
+            f"unrolled to one row per epoch writes this) -- delete the directory "
+            f"and re-extract."
         )
     if (cache_dir / "progress.json").exists():
         raise CacheCorruptError(
@@ -183,6 +186,21 @@ def merge_embedding_chunks(cache_dir: Path) -> bool:
         lock_path.unlink(missing_ok=True)
 
 
+def read_progress(cache_dir: Path) -> Optional[Dict[str, object]]:
+    """The progress record of an interrupted extraction, or None."""
+    try:
+        return json.loads((Path(cache_dir) / "progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def discard_partial(cache_dir: Path) -> None:
+    """Remove an interrupted extraction's partial files (not a finished cache)."""
+    cache_dir = Path(cache_dir)
+    for name in ("features.npy.tmp", "labels.npy.tmp", "items.jsonl.tmp", "progress.json"):
+        (cache_dir / name).unlink(missing_ok=True)
+
+
 def _npy_header(dtype: np.dtype, shape: Tuple[int, ...]) -> bytes:
     """Build a NumPy v1.0 .npy header for the given dtype and shape."""
     header_dict = "{'descr': '%s', 'fortran_order': False, 'shape': %s, }" % (
@@ -233,6 +251,11 @@ class IncrementalEmbeddingWriter:
         self._feat_trailing: Optional[Tuple[int, ...]] = None
         self._label_dtype: Optional[np.dtype] = None
         self._header_len = 0
+        # The order the loader delivers rows in, when that order depends on
+        # how it was configured (e.g. "sharded:16"). Saved with the progress
+        # so a resume replays the same order even if the worker count changed.
+        self.order_tag: Optional[str] = None
+        self.restored_order_tag: Optional[str] = None
 
         force_lock = force_lock or os.environ.get("EEGBENCHMARKS_FORCE_LOCK") == "1"
         self._acquire_lock(force=force_lock)
@@ -365,6 +388,7 @@ class IncrementalEmbeddingWriter:
             label_dtype = np.dtype(info["label_dtype"])
             header_len = int(info["header_len"])
             saved_workers = int(info.get("num_workers", 0))
+            saved_order = info.get("order")
         except (json.JSONDecodeError, KeyError, ValueError):
             return  # corrupt progress file → start fresh
         if n_rows == 0:
@@ -416,6 +440,8 @@ class IncrementalEmbeddingWriter:
         # The extraction loop will fall back to its legacy rebuild path.
 
         self._n_rows = n_rows
+        self.restored_order_tag = saved_order
+        self.order_tag = saved_order
         self._feat_dtype = feat_dtype
         self._feat_trailing = feat_trailing
         self._label_dtype = label_dtype
@@ -467,6 +493,7 @@ class IncrementalEmbeddingWriter:
                 "label_dtype": str(self._label_dtype),
                 "header_len": self._header_len,
                 "num_workers": self._num_workers,
+                "order": self.order_tag,
             }, f)
         os.replace(tmp, self._progress_path)
 

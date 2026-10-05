@@ -303,17 +303,22 @@ def fit_lr_c_grid(
     class_weight: str = "balanced",
     max_iter: int = 500,
     seed: int = 0,
+    selection_metric: str = "auprc",
 ) -> Tuple[LogisticRegression, StandardScaler, float, float]:
-    """Fit balanced LogisticRegression with C-grid search on val AUPRC (binary)
-    or val macro-F1 (multiclass).
+    """Fit balanced LogisticRegression with C-grid search on val AUPRC (binary;
+    ``selection_metric="auroc"`` ranks by val AUROC instead) or val macro-F1
+    (multiclass).
 
     Returns (best_clf, fitted_scaler, best_C, best_val_score).
     """
+    if selection_metric not in ("auprc", "auroc"):
+        raise ValueError(f"selection_metric must be 'auprc' or 'auroc', got {selection_metric!r}")
     scaler = StandardScaler().fit(Xtr)
     Xtr_s = scaler.transform(Xtr)
     Xval_s = scaler.transform(Xval)
 
     is_binary = len(np.unique(np.concatenate([ytr, yval]))) <= 2
+    rank = average_precision_score if selection_metric == "auprc" else roc_auc_score
 
     best_clf, best_C, best_score = None, None, -np.inf
     for C in c_values:
@@ -332,7 +337,7 @@ def fit_lr_c_grid(
         if is_binary and hasattr(clf, "predict_proba"):
             proba = clf.predict_proba(Xval_s)[:, 1]
             try:
-                score = float(average_precision_score(yval, proba))
+                score = float(rank(yval, proba))
             except Exception:
                 score = 0.0
         else:
@@ -413,6 +418,9 @@ def full_binary_probe(
     test_rec_ids: Optional[Sequence[str]] = None,
     window_s: float = 30.0,
     c_values: Sequence[float] = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0),
+    class_weight: str = "balanced",
+    selection_metric: str = "auprc",
+    max_iter: int = 500,
     threshold_objective: str = "f1",
     seed: int = 0,
     # When set, dumps test_y/test_proba/test_rec_ids/threshold to this path so
@@ -425,15 +433,25 @@ def full_binary_probe(
 ) -> Dict[str, Any]:
     """End-to-end binary seizure-detection linear probe.
 
+    C is chosen from ``c_values`` by validation ``selection_metric`` (AUPRC,
+    the paper's, or AUROC), with ``class_weight`` and ``max_iter`` passed to
+    the solver; the decision threshold is then tuned on validation F1.
+
     Returns a flat dict with all standard metrics. Use ``test_rec_ids`` to
     enable per-recording event grouping; if ``None``, the event metrics
     fall back to merging the whole test array as one sequence (legacy
     behavior, not recommended).
     """
-    model, scaler, best_c, val_auprc = fit_lr_c_grid(
+    model, scaler, best_c, val_score = fit_lr_c_grid(
         train_x, train_y, val_x, val_y,
-        c_values=c_values, class_weight="balanced", seed=seed,
+        c_values=c_values, class_weight=class_weight, max_iter=max_iter, seed=seed,
+        selection_metric=selection_metric,
     )
+    val_proba = model.predict_proba(scaler.transform(val_x))[:, 1]
+    try:
+        val_auprc = float(average_precision_score(val_y, val_proba))
+    except Exception:
+        val_auprc = 0.0
     thr, val_f1 = tune_threshold(model, scaler, val_x, val_y, objective=threshold_objective)
 
     test_proba = model.predict_proba(scaler.transform(test_x))[:, 1]
@@ -485,6 +503,8 @@ def full_binary_probe(
         "best_weight_decay": float(best_c),
         "tuned_threshold": float(thr),
         "val_auprc": float(val_auprc),
+        "selection_metric": selection_metric,
+        "val_selection_score": float(val_score),
         "val_f1_at_threshold": float(val_f1),
         "n_train": int(len(train_y)),
         "n_val": int(len(val_y)),

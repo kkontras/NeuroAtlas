@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -25,7 +24,6 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
-from sklearn.preprocessing import StandardScaler
 
 from neuroatlas.benchmarking_helpers import (
     BenchmarkFailure,
@@ -175,52 +173,235 @@ def _event_overlap_metrics(
 
 
 # ---------------------------------------------------------------------------
-# C-grid search on dev AUPRC
+# Probe settings: the probe command's flags, honoured or refused
+# ---------------------------------------------------------------------------
+
+#: The C grid, class weighting and selection metric of the paper's epilepsy
+#: probe (App. C.1; run/default_runs.sh section 4 passes exactly these as
+#: --tune-c / --class-weight / --selection-metric). Used when a flag is absent.
+PAPER_C_VALUES = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0)
+PAPER_CLASS_WEIGHT = "balanced"
+PAPER_SELECTION_METRIC = "auprc"
+
+#: Selection metrics the C search can rank by, with their spellings. Both are
+#: threshold-free, which is why C is chosen on one of them and the decision
+#: threshold is tuned afterwards on validation F1.
+_SELECTION_ALIASES = {
+    "auprc": "auprc", "average_precision": "auprc", "ap": "auprc",
+    "auroc": "auroc", "roc_auc": "auroc",
+}
+#: `probe --selection-metric` defaults to this for every task; it is not a
+#: choice the user made, and seizure detection does not rank C by it.
+_CLI_DEFAULT_SELECTION = "macro_f1"
+_LINEAR_TYPES = ("linear", "sklearn_linear")
+
+
+class ProbeSettingsError(ValueError):
+    """A probe flag this task cannot honour."""
+
+
+def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The logistic-regression settings this probe runs with.
+
+    Every probe flag that reaches the task is either honoured or refused
+    with the reason -- none is dropped:
+
+    * ``--tune-c``: the C grid (default: the paper's 0.001 ... 100).
+    * ``--class-weight balanced``: balanced class weights. Absent means the
+      task's own protocol, which is also balanced: the flag can only say
+      ``balanced``, so there is nothing else for it to mean.
+    * ``--selection-metric``: the validation metric C is ranked by --
+      ``auprc`` (the paper) or ``auroc``. The probe command's default,
+      ``macro_f1``, means "not given" here (it is threshold-dependent; the
+      threshold is tuned after C) and is replaced by ``auprc`` with a note.
+      Anything else is refused.
+    * ``--max-iter``: the solver's iteration cap (default the paper's 500,
+      see :data:`PAPER_MAX_ITER`). The probe command's default, 10000, means
+      "not given" here, with a note; any other value is used.
+    * ``--probe-type``: ``linear`` (or ``sklearn_linear``); the clinical
+      metrics here need a probability from a logistic regression, so
+      ``nonlinear`` is refused.
+    """
+    cfg = dict(probe_config or {})
+    notes = []
+
+    kind = str(cfg.get("type") or "linear")
+    if kind not in _LINEAR_TYPES:
+        raise ProbeSettingsError(
+            f"seizure_detection fits a balanced logistic regression; --probe-type {kind} "
+            f"is not supported here (use linear)")
+
+    c_values = cfg.get("c_values")
+    if c_values is None:
+        c_values = list(PAPER_C_VALUES)
+    else:
+        try:
+            c_values = [float(c) for c in c_values]
+        except (TypeError, ValueError):
+            raise ProbeSettingsError(f"--tune-c wants numbers, got {c_values!r}") from None
+        if not c_values or any(not (c > 0) for c in c_values):
+            raise ProbeSettingsError(f"--tune-c wants one or more C values > 0, got {c_values}")
+
+    class_weight = cfg.get("class_weight")
+    if class_weight is None:
+        class_weight = PAPER_CLASS_WEIGHT
+    elif class_weight != "balanced":
+        raise ProbeSettingsError(
+            f"seizure_detection weights classes 'balanced'; class_weight={class_weight!r} "
+            f"is not supported")
+
+    metric = cfg.get("selection_metric")
+    if metric is None:
+        metric = PAPER_SELECTION_METRIC
+    elif str(metric) == _CLI_DEFAULT_SELECTION:
+        notes.append(f"selection metric {metric!r} is the probe command's default; seizure "
+                     f"detection ranks C by validation {PAPER_SELECTION_METRIC!r} "
+                     f"(--selection-metric auprc or auroc)")
+        metric = PAPER_SELECTION_METRIC
+    else:
+        key = str(metric).strip().lower()
+        if key not in _SELECTION_ALIASES:
+            raise ProbeSettingsError(
+                f"seizure_detection ranks C by validation auprc or auroc; "
+                f"--selection-metric {metric} is not supported")
+        metric = _SELECTION_ALIASES[key]
+
+    max_iter = cfg.get("max_iter")
+    if max_iter is None:
+        max_iter = PAPER_MAX_ITER
+    elif int(max_iter) == _CLI_DEFAULT_MAX_ITER:
+        notes.append(f"max_iter {max_iter} is the probe command's default; seizure detection "
+                     f"keeps its protocol's {PAPER_MAX_ITER} (pass --max-iter N to change it)")
+        max_iter = PAPER_MAX_ITER
+    else:
+        max_iter = int(max_iter)
+    if max_iter < 1:
+        raise ProbeSettingsError(f"--max-iter must be 1 or more, got {max_iter}")
+
+    for note in notes:
+        logger.warning(note)
+    return {"c_values": c_values, "class_weight": class_weight,
+            "selection_metric": metric, "max_iter": max_iter, "notes": notes}
+
+
+#: The solver's iteration cap in the epilepsy probe the paper ran
+#: (fit_lr_c_grid's 500). It is not raised by default because doing so
+#: changes numbers: on Helsinki fold 0 (CBraMod) C=100 is selected and its fit
+#: has not converged at 500 -- test AUROC 0.8014 at 500, 0.8094 at 2000,
+#: 0.8118 at 10000 (converged) -- while on Siena fold 0 (C=0.001) all three
+#: give AUROC 0.869547499. Whether to report converged fits is the authors'
+#: call; `--max-iter N` asks for N.
+PAPER_MAX_ITER = 500
+#: `probe --max-iter` defaults to this for every task, so it is no choice.
+_CLI_DEFAULT_MAX_ITER = 10_000
+
+
+# ---------------------------------------------------------------------------
+# Embeddings: one global cache, or one per fold and split
 # ---------------------------------------------------------------------------
 
 
-def _fit_best_lr(
-    train_x: np.ndarray,
-    train_y: np.ndarray,
-    val_x: np.ndarray,
-    val_y: np.ndarray,
-) -> LogisticRegression:
-    """Fit LogisticRegression with balanced weights and C selected by val AUPRC."""
-    scaler = StandardScaler()
-    train_x_s = scaler.fit_transform(train_x)
-    val_x_s = scaler.transform(val_x)
+def _uses_global_cache(datamodule) -> bool:
+    """Whether this cohort embeds once and splits per fold at probe time.
 
-    best_c = 1.0
-    best_auprc = -1.0
-    best_model = None
+    Opt-in (``global_cache_for_seizure_detection``, set by
+    ``epilepsy/_global_cache.RecordingWindowGlobalCache`` and by TUSZ's
+    k-fold HDF5 module): every epilepsy adapter that can cut its folds out
+    of one set of windows does. The others -- TUSZ's EDF and official-split
+    readers, TUAB's H5 fast path, CHB-MIT's HDF5 backend, any cohort run with
+    ``stride_s`` != ``window_s`` -- keep per-split caches, and ``neuroatlas
+    run`` then extracts every fold the probe reads.
+    """
+    if not getattr(datamodule, "global_cache_for_seizure_detection", False):
+        return False
+    if getattr(datamodule, "limit_windows_per_split", None) is not None:
+        return False
+    try:
+        return bool(datamodule.supports_global_embedding_cache())
+    except Exception:
+        return False
 
-    for c_val in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-        clf = LogisticRegression(
-            C=c_val,
-            class_weight="balanced",
-            max_iter=2000,
-            solver="lbfgs",
-            random_state=42,
-        )
-        clf.fit(train_x_s, train_y)
-        if hasattr(clf, "predict_proba"):
-            val_proba = clf.predict_proba(val_x_s)[:, 1]
-            try:
-                auprc = average_precision_score(val_y, val_proba)
-            except Exception:
-                auprc = 0.0
-        else:
-            auprc = 0.0
-        if auprc > best_auprc:
-            best_auprc = auprc
-            best_c = c_val
-            best_model = clf
 
-    logger.info("Best C=%.4f (val AUPRC=%.4f)", best_c, best_auprc)
+def _global_payload(cache_root, dataset_name, checkpoint_spec, backbone, datamodule, embed_chunk,
+                    *, load: bool = True):
+    """The global (all-windows) payload, or ``(None, paths)`` after a chunk.
 
-    # Return the best model and the fitted scaler (store scaler as attribute)
-    best_model._fitted_scaler = scaler
-    return best_model
+    ``load=False`` (an extract-only pass): a cache that already exists is
+    reported, not read -- its items.json can be hundreds of MB, and the
+    pass only needs to know it is there.
+    """
+    from neuroatlas.benchmarking_helpers.runtime.cache import (
+        cache_exists,
+        load_embedding_payload,
+        merge_embedding_chunks,
+    )
+    from neuroatlas.extensions.tasks.linear_probe import _embedding_cache_dir
+
+    global_dir = _embedding_cache_dir(
+        cache_root, dataset_name, checkpoint_spec, "all", datamodule, purpose="global_embeddings",
+    )
+    if cache_exists(global_dir):
+        return (load_embedding_payload(global_dir, mmap_mode="r") if load else None,
+                {"cache_dir": str(global_dir), "cache_hit": True})
+    if embed_chunk is not None:
+        chunk_idx, n_chunks = embed_chunk
+        chunk_dir = global_dir / "_chunks" / f"{chunk_idx}_of_{n_chunks}"
+        if not cache_exists(chunk_dir):
+            _extract_or_load_embeddings(
+                cache_root, dataset_name, "all", checkpoint_spec, backbone,
+                datamodule.full_embedding_dataloader(), datamodule,
+                cache_purpose="global_embeddings", cache_dir_override=chunk_dir,
+            )
+        merge_embedding_chunks(global_dir)
+        return None, {"chunk_dir": str(chunk_dir)}
+    if merge_embedding_chunks(global_dir):
+        return (load_embedding_payload(global_dir, mmap_mode="r") if load else None,
+                {"cache_dir": str(global_dir), "cache_hit": True, "merged_from_chunks": True})
+    return _extract_or_load_embeddings(
+        cache_root, dataset_name, "all", checkpoint_spec, backbone,
+        datamodule.full_embedding_dataloader(), datamodule,
+        cache_purpose="global_embeddings",
+    )
+
+
+def _split_payload(cache_root, dataset_name, split, checkpoint_spec, backbone, datamodule,
+                   *, load: bool = True):
+    """One fold's per-split payload; ``load=False`` skips reading (and even
+    building the loader for) a split whose cache already exists."""
+    from neuroatlas.benchmarking_helpers.runtime.cache import cache_exists
+    from neuroatlas.extensions.tasks.linear_probe import _embedding_cache_dir
+
+    if not load:
+        cache_dir = _embedding_cache_dir(cache_root, dataset_name, checkpoint_spec, split, datamodule)
+        if cache_exists(cache_dir):
+            return None, {"cache_dir": str(cache_dir), "cache_hit": True}
+    loader = getattr(datamodule, f"{split}_dataloader")()
+    return _extract_or_load_embeddings(
+        cache_root, dataset_name, split, checkpoint_spec, backbone, loader, datamodule,
+    )
+
+
+def _extract_only(dataset_name, checkpoint_spec, datamodule, backbone, cache_paths) -> BenchmarkResult:
+    return BenchmarkResult(
+        checkpoint_id=checkpoint_spec.identifier,
+        dataset_name=dataset_name,
+        evaluation_mode="seizure_detection_eval",
+        metrics=None,
+        cache_paths=cache_paths,
+        metadata={
+            **backbone.metadata(),
+            **dict(getattr(datamodule, "metadata", {})),
+            "task_name": "seizure_detection",
+            "extract_only_status": "extracted",
+            # "all": one cache for every fold -- an extraction pass over
+            # several folds (embed --folds) is done after this one.
+            "embedding_cache_layout": _layout(cache_paths),
+        },
+    )
+
+
+def _layout(cache_paths: Dict[str, Any]) -> str:
+    return "all" if any(k.startswith("global_") for k in cache_paths) else "per_split"
 
 
 # ---------------------------------------------------------------------------
@@ -239,34 +420,59 @@ def evaluate_seizure_detection(
     probe_dir: Path,
     cache_root: Path,
     task_config: Optional[Dict[str, Any]] = None,
+    extract_only: bool = False,
+    embed_chunk: Optional[tuple] = None,
     **_,
 ) -> BenchmarkResult:
     """Evaluate seizure detection performance.
 
     1. Extract embeddings for train / val / test
     2. Filter label=-1 rows
-    3. Fit LogisticRegression(class_weight="balanced") with C-grid search on dev AUPRC
+    3. Fit LogisticRegression(class_weight="balanced") with C-grid search on
+       dev AUPRC -- the paper's settings, which --tune-c / --class-weight /
+       --selection-metric / --max-iter override (see :func:`probe_settings`)
     4. Report AUROC, AUPRC, F1, precision, recall, balanced accuracy, MCC,
        sensitivity at FPR/h (1, 0.1, 0.01), event-overlap metrics
     """
     cache_paths: Dict[str, Any] = {}
+    # Refuse a flag this task cannot honour before any embedding is read.
+    settings = None if extract_only else probe_settings(probe_config)
 
-    # Extract embeddings
-    train_payload, train_paths = _extract_or_load_embeddings(
-        cache_root, dataset_name, "train", checkpoint_spec, backbone,
-        datamodule.train_dataloader(), datamodule,
-    )
-    val_payload, val_paths = _extract_or_load_embeddings(
-        cache_root, dataset_name, "val", checkpoint_spec, backbone,
-        datamodule.val_dataloader(), datamodule,
-    )
-    test_payload, test_paths = _extract_or_load_embeddings(
-        cache_root, dataset_name, "test", checkpoint_spec, backbone,
-        datamodule.test_dataloader(), datamodule,
-    )
-    cache_paths.update({f"train_{k}": v for k, v in train_paths.items()})
-    cache_paths.update({f"val_{k}": v for k, v in val_paths.items()})
-    cache_paths.update({f"test_{k}": v for k, v in test_paths.items()})
+    if _uses_global_cache(datamodule):
+        # One cache of every window, extracted once per (dataset, model);
+        # this fold's train/val/test are picked from it here.
+        # See extensions/datasets/epilepsy/_global_cache.py.
+        full_payload, full_paths = _global_payload(
+            cache_root, dataset_name, checkpoint_spec, backbone, datamodule, embed_chunk,
+            load=not extract_only,
+        )
+        cache_paths.update({f"global_{k}": v for k, v in full_paths.items()})
+        if extract_only or full_payload is None:
+            return _extract_only(dataset_name, checkpoint_spec, datamodule, backbone, cache_paths)
+        splits = datamodule.split_global_embedding_payload(full_payload)
+        train_payload, val_payload, test_payload = splits["train"], splits["val"], splits["test"]
+    else:
+        if embed_chunk is not None:
+            print(f"[embed-chunk] {dataset_name!r} has no global embedding cache; "
+                  f"--embed-chunk ignored")
+        payloads = {}
+        for split in ("train", "val", "test"):
+            payloads[split], paths = _split_payload(
+                cache_root, dataset_name, split, checkpoint_spec, backbone, datamodule,
+                load=not extract_only,
+            )
+            cache_paths.update({f"{split}_{k}": v for k, v in paths.items()})
+        if extract_only:
+            return _extract_only(dataset_name, checkpoint_spec, datamodule, backbone, cache_paths)
+        train_payload, val_payload, test_payload = (
+            payloads["train"], payloads["val"], payloads["test"])
+
+    # Per-patch tokens (embed/probe --pooling per_patch) are concatenated
+    # into one vector per window, as for every other probe.
+    from neuroatlas.extensions.tasks.linear_probe import probe_features
+
+    for payload in (train_payload, val_payload, test_payload):
+        payload.features = probe_features(payload.features)
 
     # Filter unlabeled
     train_x, train_y, train_meta = _filter_unlabeled(
@@ -317,6 +523,10 @@ def evaluate_seizure_detection(
         test_x=test_x, test_y=test_y,
         test_rec_ids=_rec_ids(test_meta),
         window_s=window_s,
+        c_values=settings["c_values"],
+        class_weight=settings["class_weight"],
+        selection_metric=settings["selection_metric"],
+        max_iter=settings["max_iter"],
         seed=(seeds[0] if seeds else 0),
     )
 
@@ -338,6 +548,9 @@ def evaluate_seizure_detection(
         "n_true_events": probe_result["test_n_true_events"],
         "n_pred_events": probe_result["test_n_pred_events"],
         "best_weight_decay": probe_result["best_weight_decay"],
+        "best_c": probe_result["best_weight_decay"],
+        # the validation score C was chosen by (settings["selection_metric"])
+        "val_selection_score": probe_result["val_selection_score"],
         "tuned_threshold": probe_result["tuned_threshold"],
         "val_auprc": probe_result["val_auprc"],
         "val_f1_at_threshold": probe_result["val_f1_at_threshold"],
@@ -356,6 +569,16 @@ def evaluate_seizure_detection(
             **backbone.metadata(),
             **dict(getattr(datamodule, "metadata", {})),
             "task_name": "seizure_detection",
+            # "all": one cache of every window, folds assigned here;
+            # "per_split": this fold's train/val/test caches.
+            "embedding_cache_layout": _layout(cache_paths),
+            # What the probe ran with (see probe_settings).
+            "probe_c_values": list(settings["c_values"]),
+            "probe_class_weight": settings["class_weight"],
+            "probe_selection_metric": settings["selection_metric"],
+            "probe_max_iter": settings["max_iter"],
+            "probe_settings_notes": list(settings["notes"]),
+            "probe_feature_dim": int(np.asarray(train_x).shape[1]),
             "embedding_split_sizes": {
                 "train": len(train_y),
                 "val": len(val_y),

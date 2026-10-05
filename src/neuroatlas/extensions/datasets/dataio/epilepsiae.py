@@ -26,15 +26,17 @@ from torch.utils.data import Dataset
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
     compute_recording_stats_streaming,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 
 # Per-recording stats cache root — one .npz per recording, shared across all
 # models. Compute once, read by every subsequent run.
-_STATS_DISK_CACHE_ROOT = Path(
-    "artifacts/recording_stats/epilepsiae"
-)
+# Per-recording stats live in <cache root>/recording_stats/epilepsiae/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/epilepsiae under the current directory.
+_STATS_READER = "epilepsiae"
 from neuroatlas.extensions.datasets.epilepsy.epilepsiae_preprocessor import (
     BIPOLAR_NAMES,
     CANONICAL_19,
@@ -440,13 +442,13 @@ class EpilepsiAEContinuousDataset(Dataset):
         # 171-pair dict and overwrite ``recording_q95`` so BIOT's anontier
         # indexes the emitted channels correctly.
         if rec_i not in self._rec_stats_cache:
-            disk_path = _STATS_DISK_CACHE_ROOT / f"{rec.rec_id}.npz"
+            stats_file = f"{rec.rec_id}.npz"
             fingerprint = {
                 "target_fs": int(self._target_fs),
                 "total_samples": int(rec.total_samples),
                 "variant": str(rec.variant),
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 def _blocks_iter():
                     for b in rec.blocks:

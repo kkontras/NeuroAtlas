@@ -25,9 +25,12 @@ acquisition:
   kind: moabb
   ref: dreyer2023
   note: >
-    Downloaded by MOABB itself on first use, into its own cache
-    (~/mne_data by default). `fetch` does not need to do anything.
+    `neuroatlas data download dreyer2023` has MOABB fetch it into
+    $MNE_DATA (`neuroatlas config show` prints the folder).
   checksum: TBD              # MOABB verifies its own downloads
+  nemar: nm000250                         # moabb 1.7: dreyer2023 downloads NEMAR/nm000250
+  size_gb: 7.52                         # NEMAR manifest, sourcedata/ (what MOABB fetches; 2026-10-02)
+  moabb_folder: MNE-dreyer2023-data   # where moabb 1.2.0 keeps it under $MNE_DATA (1.6+: NEMAR/<id>)
 
 signal:
   montage: as-published      # MOABB returns the dataset's own channel set
@@ -69,9 +72,11 @@ runtime_options:
     effect: >
       holds the passband to the 4-40 Hz motor range and starts each trial
       1 s after the cue, so the evoked response and the eye movement towards
-      the cue are outside the window. Off uses the cohort's own passband and
-      the whole trial. The two are cached separately, and the gap between
-      them is how much of a score came from the cue rather than the imagery.
+      the cue are outside the window: 1-4 s after the cue. Off uses the
+      paradigm's own passband and the paper's 4 s trial, 0-4 s after the cue
+      (moabb_loader.trial_window). The two are cached separately, and the gap
+      between them is how much of a score came from the cue rather than the
+      imagery.
     implemented_by: extensions/datasets/dataio/moabb_loader.py:resolve_confound_control
 
 provenance:
@@ -79,5 +84,12 @@ provenance:
   migrated_from:
     - src/neuroatlas/extensions/datasets/moabb_*.py   # description, paradigm
   known_issues:
+    - "BCI preprocessing differs from the paper's. The paper's BCI embeddings
+       were extracted from per-model pickles (trackA: each model's own
+       passband and rate, e.g. 0.1-75 Hz / 200 Hz / 50 Hz notch for the
+       LaBraM-format pickle; trackD: 4-40 Hz and 1-4 s). `run` epochs MOABB
+       at 128 Hz with the paradigm's 4-40 Hz band and no notch, so off and
+       on confound control differ here only in the start of the window,
+       not in the band. The 4 s trial window is the paper's."
     - "cohort.powerline_hz is a placeholder: MOABB does not expose the
        recording site and nothing reads this field yet."

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -58,6 +60,19 @@ def _precomputed_cache_available(datamodule, checkpoint_spec) -> bool:
     except Exception:
         return False
     return path is not None and cache_exists(Path(path))
+
+
+def _serves_every_fold(result: BenchmarkResult) -> bool:
+    """Whether an extraction wrote (or found) embeddings no fold changes: the
+    global ``all/<key>`` cache, where every fold's split is cut at probe time.
+    Per-split caches hold one fold's train/val/test and serve only that fold."""
+    if result.failure is not None:
+        return False
+    layout = (result.metadata or {}).get("embedding_cache_layout")
+    if layout is not None:
+        return layout == "all"
+    return any(str(k).startswith("global_") or k == "chunk_dir"
+               for k in (result.cache_paths or {}))
 
 
 def _is_regression_result(result: BenchmarkResult) -> bool:
@@ -307,6 +322,36 @@ class BenchmarkRunner:
             dataset_config = {**dataset_config, "compute_recording_stats": True}
         return dataset_config
 
+    @staticmethod
+    def _fit_checkpoint_to_window(datamodule, checkpoint_spec, *, verbose: bool = False):
+        """The checkpoint as it must see this datamodule's windows.
+
+        Where the dataset fixes the window (``FIXED_WINDOW``: a BCI trial of
+        3-5 s), the backbone is told that length instead of its pretraining
+        window, or every wrapper's duration check refuses the batch ("epoch_seconds=30 s
+        imply 3840 samples, but got T=512"). Elsewhere the spec is unchanged:
+        sleep and epilepsy windows already follow the model, or the benchmark
+        passes ``--expected-epoch-seconds``.
+        """
+        if not getattr(datamodule, "FIXED_WINDOW", False):
+            return checkpoint_spec
+        window = (getattr(datamodule, "metadata", None) or {}).get("epoch_seconds")
+        if window is None:
+            return checkpoint_spec
+        window = float(window)
+        if abs(window - float(checkpoint_spec.expected_epoch_seconds)) < 1e-9:
+            return checkpoint_spec
+        if verbose:
+            print(
+                f"[runner] {getattr(datamodule, 'name', '?')}/{checkpoint_spec.identifier}: "
+                f"windows are the dataset's {window:g} s trials; the backbone is told "
+                f"{window:g} s instead of its {float(checkpoint_spec.expected_epoch_seconds):g} s.",
+                flush=True,
+            )
+        import dataclasses
+
+        return dataclasses.replace(checkpoint_spec, expected_epoch_seconds=window)
+
     def _prepare_pair(self, dataset_name: str, dataset_config: Dict[str, Any],
                       checkpoint_spec, cmap: Optional[ChannelMap], *, load_weights: bool = True):
         """The datamodule and backbone for one (dataset, checkpoint), exactly as
@@ -320,6 +365,7 @@ class BenchmarkRunner:
         dataset_spec = load_dataset_spec(dataset_name)
         (self.cache_root / dataset_name).mkdir(parents=True, exist_ok=True)
         datamodule = dataset_spec.create_datamodule(dataset_config, checkpoint=checkpoint_spec)
+        checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec, verbose=True)
         if self.embed_chunk is not None:
             datamodule.embed_chunk = self.embed_chunk
         if cmap is not None:
@@ -412,6 +458,8 @@ class BenchmarkRunner:
         try:
             datamodule, backbone = self._prepare_pair(
                 dataset_name, dataset_config, checkpoint_spec, cmap)
+            # The spec the backbone was built from (results record it).
+            checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec)
             effective_extract_only = self.extract_only or self.embed_chunk is not None
             from neuroatlas.extensions.tasks.linear_probe import (
                 require_cached_embeddings,
@@ -441,12 +489,14 @@ class BenchmarkRunner:
                 result.metadata.setdefault("channel_map_applied", True)
             return result
         except Exception as exc:
-            import traceback
             print(
                 f"\n[WARN] {dataset_name}/{checkpoint_spec.identifier} "
                 f"(fold {dataset_config.get('fold', '?')}): {exc}"
             )
-            traceback.print_exc()
+            # The message above and in results.json says what failed; the
+            # traceback is for a bug report: the --log file, or -v on screen.
+            logging.getLogger("neuroatlas.traceback").debug(
+                "%s/%s failed", dataset_name, checkpoint_spec.identifier, exc_info=True)
             return BenchmarkResult(
                 checkpoint_id=checkpoint_spec.identifier,
                 dataset_name=dataset_name,
@@ -471,9 +521,20 @@ class BenchmarkRunner:
         results: List[BenchmarkResult] = []
         selected_models = self._selected_models()
         specs = [self._apply_spec_overrides(spec) for spec in load_checkpoint_registry(selected_models)]
+        # An extraction pass over several folds (`embed --folds`, which `run`
+        # passes so per-split cohorts get every fold the probe reads) is done
+        # for a (dataset, model) once one fold reports a fold-independent
+        # cache: the other folds would only rebuild the datamodule to find it.
+        extracted_for_every_fold: set = set()
         for dataset_name, dataset_config in self._dataset_runs():
             for spec in specs:
-                results.append(self._run_one(dataset_name, dataset_config, spec))
+                pair = (dataset_name, spec.identifier)
+                if self.extract_only and pair in extracted_for_every_fold:
+                    continue
+                result = self._run_one(dataset_name, dataset_config, spec)
+                results.append(result)
+                if self.extract_only and _serves_every_fold(result):
+                    extracted_for_every_fold.add(pair)
         if not (self.extract_only or self.embed_chunk is not None):
             self._write_outputs(results)
         return results
@@ -490,6 +551,18 @@ class BenchmarkRunner:
             result.metadata.get("fold", ""),
             aggregation,
             mode,
+        )
+
+    @staticmethod
+    def _attempt_key(result: BenchmarkResult) -> tuple:
+        """(dataset, checkpoint, task, fold): what one attempt at a fold is,
+        whatever evaluation mode or aggregation its record ended up with."""
+        fold = result.metadata.get("fold")
+        return (
+            result.dataset_name,
+            result.checkpoint_id,
+            str(result.metadata.get("task_name", result.evaluation_mode)),
+            "" if fold is None else str(fold),
         )
 
     @staticmethod
@@ -524,7 +597,23 @@ class BenchmarkRunner:
                     if old_vals or new_vals:
                         r.metadata[field] = sorted(set(old_vals) | set(new_vals))
         new_keys = {self._result_key(r) for r in new_results}
-        merged = [r for r in existing if self._result_key(r) not in new_keys] + new_results
+        # An earlier attempt's failure is superseded by any new result for the
+        # same checkpoint, task and fold, even when it was recorded under a
+        # different evaluation mode or aggregation (a failure is written before
+        # the task knows them), and a failure recorded before any fold by any
+        # new result for that checkpoint and task. Otherwise the failed rows
+        # stay next to the new ones and `results` counts both.
+        retried = {self._attempt_key(r) for r in new_results}
+        retried_any_fold = {k[:3] for k in retried}
+
+        def _superseded(r: BenchmarkResult) -> bool:
+            if r.ok:
+                return False
+            key = self._attempt_key(r)
+            return key in retried or (key[3] == "" and key[:3] in retried_any_fold)
+
+        merged = [r for r in existing
+                  if self._result_key(r) not in new_keys and not _superseded(r)] + new_results
         merged.sort(
             key=lambda r: (
                 r.dataset_name,
@@ -555,7 +644,13 @@ class BenchmarkRunner:
             lock_path.unlink(missing_ok=True)
 
     def _write_outputs_unlocked(self, results: Iterable[BenchmarkResult]) -> None:
-        results = self._merge_with_existing(list(results))
+        results = list(results)
+        # When each row was written: tells a re-run's row from an identical
+        # one an earlier run left (`neuroatlas run` counts only its own).
+        written_at = datetime.now(timezone.utc).isoformat()
+        for r in results:
+            r.metadata["written_at"] = written_at
+        results = self._merge_with_existing(results)
         with open(self.output_root / "results.json", "w", encoding="utf-8") as handle:
             json.dump([result.to_dict() for result in results], handle, indent=2)
 

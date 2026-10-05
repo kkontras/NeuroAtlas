@@ -22,10 +22,12 @@ MODEL_SPECS = [
                 identifier="seizure_transformer_pretrained",
                 model_family="seizure_transformer",
                 variant="wu2025",
-                source_type="local_artifact",
-                source_reference=(
-                    "artifacts/models/supervised/seizure_transformer/model.pth"
-                ),
+                # The authors publish the weights only inside their Docker image
+                # (keruiwu/SeizureTransformer README: `docker pull
+                # yujjio/seizure_transformer`); the download pulls model.pth
+                # out of it over the registry API and checks its SHA-256.
+                source_type="docker_image",
+                source_reference="docker://yujjio/seizure_transformer:latest",
                 checkpoint_path=(
                     "artifacts/models/supervised/seizure_transformer/model.pth"
                 ),
@@ -51,7 +53,8 @@ MODEL_SPECS = [
                 wrapper_name="seizure_transformer",
                 status="ready",
                 notes=(
-                    "Weights extracted from Docker image yujjio/seizure_transformer. "
+                    "Weights: model.pth from the authors' Docker image yujjio/seizure_transformer "
+                    "(the only official distribution), sha256 79b14e47... "
                     "Native head emits per-sample seizure probability at 256 Hz; "
                     "wrapper reduces to per-window binary prob for the benchmarking "
                     "contract. Embedding = global-avg-pool of transformer trunk (512-d)."

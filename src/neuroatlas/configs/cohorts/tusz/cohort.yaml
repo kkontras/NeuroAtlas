@@ -32,6 +32,7 @@ cohort:
 acquisition:
   kind: tuh
   ref: tuh_eeg_seizure/v2.0.3
+  upstream: https://isip.piconepress.com/projects/nedc/html/tuh_eeg/
 
 signal:
   montage: bipolar
@@ -66,17 +67,22 @@ labels:
     - missing_channels
     - sex
 splits:
+  manifest_note: >
+    The paper's protocol is 5-fold patient-level cross-validation over the
+    whole corpus (train/, dev/ and eval/ pooled: 675 patients), not the
+    official partition: its epilepsy probe drew these folds stratified on
+    "has any seizure window" (3c6721c configs/folds/tusz.json, re-derived and
+    identical from the paper-era embeddings). split_mode=kfold (the default)
+    reads this file on both backends; split_mode=official takes the corpus's
+    own train/dev/eval partition instead, the same for every fold.
+  manifest: folds.json
+  derived_by: src/neuroatlas/extensions/datasets/adapters/tusz.py / adapters/tusz_edf.py
   derivation: >
-    official train/dev/eval split by default (split_mode=official);
-    split_mode=kfold splits patient-level in the dataio
-  derived_by: src/neuroatlas/extensions/datasets/adapters/tusz.py / dataio/tusz.py
-  # No fold manifest, and none needed for the default: split_mode=official
-  # takes TUSZ's own published train/dev/eval partition, which is a property
-  # of the corpus. Only split_mode=kfold derives anything.
-  manifest: null
+    folds_manifest=none only: StratifiedKFold(shuffle=True, random_state=42)
+    over sorted patient ids, stratified on any seizure
   grouping: patient
   n_folds: 5
-  mode: official
+  mode: kfold
 
 # Two loaders over the same corpus. `backend` selects one; the keys under
 # `defaults` replace the runtime_defaults below when that backend is chosen,
@@ -95,7 +101,9 @@ backends:
     reads: raw EDF + .csv_bi annotations, streamed, no cache written or read
     note: >
       Nothing to build, but it re-reads the EDFs every epoch, so it is far
-      slower. Official train/dev/eval split only — it cannot do k-fold.
+      slower. k-fold (the paper's folds, from folds.json: the three official
+      trees pooled, embedded once into one cache every fold is cut from) or
+      the official train/dev/eval split.
     defaults:
       raw_root: "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_seizure/v2.0.3/edf"
       stride_s: 10.0
@@ -107,8 +115,6 @@ backends:
     unsupported:                            # keys the HDF5 backend takes and this one does not
       - cache_root
       - corpus_version
-      - fold
-      - n_folds
       - overlap_threshold
 
 pipeline:
@@ -135,7 +141,7 @@ runtime_defaults:
                                             # cache has been built.
   balance: weighted_sampler
   batch_size: 64
-  cache_root: data/tusz
+  cache_root: ${EEG_CACHE_ROOT}/prepared/tusz
   corpus_version: v2.0.3
   fold: 0
   label_mode: binary
@@ -144,7 +150,9 @@ runtime_defaults:
   normalize: none
   num_workers: 4
   overlap_threshold: 0.0
-  split_mode: official
+  split_mode: kfold                         # the paper's 5 patient-level folds
+                                            # (splits.manifest); `official` is
+                                            # TUSZ's own train/dev/eval
   stride_s: null
   window_s: 10.0
 

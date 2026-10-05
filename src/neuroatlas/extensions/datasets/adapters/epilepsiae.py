@@ -27,6 +27,7 @@ from neuroatlas.extensions.datasets.dataio.epilepsiae import (
 )
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ def _patient_splits_from_recordings(
 # ---------------------------------------------------------------------------
 
 
-class EpilepsiAEBenchmarkDataModule(BenchmarkDataModule):
+class EpilepsiAEBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the EPILEPSIAE multi-center seizure dataset.
 
     Reads raw .data/.head files on the fly — no preprocessing or HDF5
@@ -190,6 +191,8 @@ class EpilepsiAEBenchmarkDataModule(BenchmarkDataModule):
         overlap_threshold: float = 0.0,
         signal_kind: str = "raw",
         variants: Sequence[str] = ("surf30", "surfPA", "surfCO"),
+        folds_manifest: Optional[str] = "epilepsiae",
+        strict_folds: bool = True,
         **kwargs,
     ) -> None:
         metadata = {
@@ -199,6 +202,7 @@ class EpilepsiAEBenchmarkDataModule(BenchmarkDataModule):
             "signal_kind": signal_kind,
             "fold": fold,
             "n_folds": n_folds,
+            "folds_manifest": folds_manifest,
         }
         super().__init__(name="epilepsiae", metadata=metadata)
 
@@ -240,13 +244,33 @@ class EpilepsiAEBenchmarkDataModule(BenchmarkDataModule):
             variants=variants,
         )
 
-        # Compute splits from the recording list
-        self._train_recs, self._val_recs, self._test_recs = (
-            _patient_splits_from_recordings(
-                self._full_dataset._recordings, fold, n_folds,
+        # The paper's folds, from configs/cohorts/epilepsiae/folds.json. They
+        # were drawn by the paper's epilepsy probe, stratified on "has any
+        # seizure window" (144 of 148 patients do); this reader's own
+        # splitter stratifies on variant x seizure-sample bins instead and
+        # draws other folds. folds_manifest=None restores it, for a fold
+        # count the manifest does not have.
+        if folds_manifest is None:
+            self._train_recs, self._val_recs, self._test_recs = (
+                _patient_splits_from_recordings(
+                    self._full_dataset._recordings, fold, n_folds,
+                )
             )
-        )
+        else:
+            from neuroatlas.benchmarking_helpers.registry.fold_manifest import (
+                fold_source_label,
+                recording_splits_from_manifest,
+            )
 
+            train, val, test, split = recording_splits_from_manifest(
+                folds_manifest, fold, n_folds,
+                [rec.subject_id for rec in self._full_dataset._recordings],
+                strict=strict_folds,
+            )
+            self._train_recs, self._val_recs, self._test_recs = train, val, test
+            self.metadata["fold_source"] = fold_source_label(split)
+
+        self._collate_fn = _epilepsiae_collate
         self._datasets: Dict[str, EpilepsiAEContinuousDataset] = {}
 
     def _get_dataset(self, split: str) -> EpilepsiAEContinuousDataset:
@@ -258,22 +282,43 @@ class EpilepsiAEBenchmarkDataModule(BenchmarkDataModule):
             }[split]
 
             stride = self._stride_s if split == "train" else self._window_s
-
-            self._datasets[split] = EpilepsiAEContinuousDataset(
-                data_root=self._data_root,
-                patients=self._patients,
-                annotations=self._annotations,
-                origin_map=self._origin_map,
-                window_s=self._window_s,
-                stride_s=stride,
-                overlap_threshold=self._overlap_threshold,
-                montage=self._montage,
-                label_mode=self._label_mode,
-                normalize=self._normalize,
-                recording_indices=rec_indices,
-                variants=self._variants,
-            )
+            self._datasets[split] = self._window_dataset(rec_indices, stride)
         return self._datasets[split]
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: int = 0):
+        # signal_cache_size: unused, the reader keeps an LRU of blocks instead.
+        full = self._full_dataset
+        if (sorted(rec_indices) == list(range(len(full._recordings)))
+                and float(stride_s if stride_s is not None else self._window_s)
+                == float(full._stride_s)):
+            # Every recording at the full dataset's stride is the full
+            # dataset: reuse it rather than rebuild every recording's labels.
+            return full
+        return EpilepsiAEContinuousDataset(
+            data_root=self._data_root,
+            patients=self._patients,
+            annotations=self._annotations,
+            origin_map=self._origin_map,
+            window_s=self._window_s,
+            stride_s=stride_s,
+            overlap_threshold=self._overlap_threshold,
+            montage=self._montage,
+            label_mode=self._label_mode,
+            normalize=self._normalize,
+            recording_indices=rec_indices,
+            variants=self._variants,
+        )
+
+    # -- global embedding cache (epilepsy/_global_cache.py) ----------------
+    # Every window of every recording once, folds assigned when probing;
+    # the per-split caches held one fold's resampled train split, so fold 1
+    # found nothing to read.
+
+    def _n_recordings(self) -> int:
+        return len(self._full_dataset._recordings)
+
+    def _subject_of(self, rec_index: int) -> str:
+        return self._full_dataset._recordings[rec_index].subject_id
 
     def _make_loader(self, split: str) -> _LoaderAdapter:
         ds = self._get_dataset(split)

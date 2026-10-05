@@ -10,9 +10,13 @@ task: seizure_detection
 embed: --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
 probe: --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
 datasets: [bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab, tusz]
-single: bonn
+# The quick suite must be a cohort anyone can download. Siena is the smallest
+# open seizure corpus here (Zenodo, 4.5 GB, `neuroatlas data download siena`);
+# CHB-MIT is open too but 22 GB, Helsinki's download is broken, and Bonn,
+# NMT, TUH, SeizeIT and EPILEPSIAE are manual, credentialed or internal.
+single: siena
 planned:
-  - {name: aub_med, reason: "has a manifest and a reader, but run/default_runs.sh never probes it"}
+  - {name: aub_med, reason: "readable here, but the paper reports no result for it"}
 metrics:
   headline: auroc
   higher_is_better: true

@@ -24,6 +24,7 @@ tensors.
 """
 from __future__ import annotations
 
+import logging
 import pickle
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
@@ -38,7 +39,10 @@ from neuroatlas.benchmarking_helpers import BenchmarkBatch, CheckpointSpec
 
 from .base import BenchmarkModelWrapper
 
+logger = logging.getLogger(__name__)
+
 _TARGET_CHANNELS: tuple[str, ...] = ("C3", "CZ", "C4")
+_partial_warned: set = set()
 _TARGET_SFREQ = 128.0
 _BANDPASS = (0.5, 40.0)
 
@@ -163,6 +167,24 @@ def _map_to_motor_channels(
             continue
         mapped[:, out_idx] = x[:, src_idx]
         matched.append(target)
+    if not matched:
+        # Every window would reach the network as zeros and embed identically
+        # (round 1 measured every Siena window zero): refuse, by name.
+        shown = [str(name) for name in source_channels if str(name)][:12]
+        raise ValueError(
+            "EEGNetv4: none of the channels its checkpoints were trained on "
+            f"(C3, Cz, C4) is among this batch's channels {shown}"
+            f"{' ...' if len(source_channels) > len(shown) else ''}, so it would "
+            "see an all-zero input. EEGNetv4 is a motor-imagery model: the "
+            "dataset's channel map should skip eegnetv4, or map C3/Cz/C4 onto "
+            "these channels."
+        )
+    if missing:
+        key = (tuple(missing), tuple(normalized))
+        if key not in _partial_warned:
+            _partial_warned.add(key)
+            logger.warning("EEGNetv4: %s missing from the batch's channels, zero-filled "
+                           "(matched: %s)", ", ".join(missing), ", ".join(matched))
     report: Dict[str, object] = {
         "source_channels": [str(name) for name in source_channels],
         "matched_channels": matched,
@@ -208,9 +230,8 @@ class EEGNetv4Backbone(BenchmarkModelWrapper):
         path = Path(self.spec.checkpoint_path or "")
         if not path.is_dir():
             raise FileNotFoundError(
-                f"EEGNetv4 checkpoint directory not found: {path!r}. "
-                "Download PierreGtch/EEGNetv4 snapshot under "
-                "artifacts/models/foundation/eegnetv4/ first."
+                f"EEGNetv4 checkpoint folder not found: {path}. Fetch it with "
+                f"`neuroatlas models download {self.spec.identifier}`."
             )
         return path
 

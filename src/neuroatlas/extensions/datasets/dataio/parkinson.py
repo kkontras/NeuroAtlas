@@ -164,6 +164,10 @@ class ParkinsonDataset(Dataset):
             MULTI_CHANNELS).  The returned ``eeg`` tensor has shape
             ``(len(channels), n_samples)``.
         target_sfreq: Resample to this frequency; None keeps the native rate.
+        compute_recording_stats: Attach the night's per-channel amplitude
+            statistics (``_recording_stats.compute_recording_stats``, on the
+            resampled night before per-epoch centring) to every epoch, for
+            the models that normalise per recording.
     """
 
     def __init__(
@@ -173,8 +177,11 @@ class ParkinsonDataset(Dataset):
         pd_labels: Dict[str, int],
         channels: List[str] = SINGLE_CHANNEL,
         target_sfreq: Optional[float] = 256.0,
+        compute_recording_stats: bool = False,
     ) -> None:
         self.data_root = Path(data_root)
+        self.compute_recording_stats = bool(compute_recording_stats)
+        self._stats_cache: Dict[str, Dict[str, object]] = {}
         self.channels = list(channels)
         self._display_names = [BIPOLAR_TO_STANDARD.get(c, c) for c in self.channels]
         self.target_sfreq = target_sfreq
@@ -265,10 +272,18 @@ class ParkinsonDataset(Dataset):
 
         self._edf_cache.clear()
         self._edf_cache[subject_id] = (signals, sfreq)
+        self._stats_cache.clear()
+        if self.compute_recording_stats and signals.size > 0:
+            from neuroatlas.extensions.datasets._recording_stats import (
+                compute_recording_stats,
+            )
+
+            self._stats_cache[subject_id] = compute_recording_stats(signals)
         return signals, sfreq
 
     def evict_subject(self, subject_id: str):
         self._edf_cache.pop(subject_id, None)
+        self._stats_cache.pop(subject_id, None)
 
     @staticmethod
     def eviction_key(meta):
@@ -296,7 +311,7 @@ class ParkinsonDataset(Dataset):
 
         eeg_tensor = torch.tensor(epoch, dtype=torch.float32)  # (N_ch, n_samples)
 
-        return {
+        item: Dict[str, object] = {
             "eeg": eeg_tensor,
             "channels": self._display_names,
             "sleep_stage": sleep_stage,
@@ -304,6 +319,8 @@ class ParkinsonDataset(Dataset):
             "subject_id": subject_id,
             "epoch_idx": ep_within_subj,
         }
+        item.update(self._stats_cache.get(subject_id) or {})
+        return item
 
     @property
     def subjects(self) -> List[str]:

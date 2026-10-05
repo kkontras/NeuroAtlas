@@ -197,3 +197,10 @@ class UnivariateTimeSeriesBackbone(BenchmarkBackbone):
         mean = x.mean(dim=-1, keepdim=True)
         std = x.std(dim=-1, keepdim=True) + eps
         return (x - mean) / std, mean, std
+
+
+def _install_hint(family: str) -> str:
+    """The install command that keeps the rest of the stack intact (neuroatlas.models.PACKAGES)."""
+    from neuroatlas.models import PACKAGES
+
+    return PACKAGES[family][2]

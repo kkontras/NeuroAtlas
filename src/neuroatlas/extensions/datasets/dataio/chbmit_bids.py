@@ -39,12 +39,16 @@ from neuroatlas.extensions.datasets.dataio._edf_units import (
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 from pathlib import Path as _Path
 
-_CHBMIT_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/chbmit_bids")
+# Per-recording stats live in <cache root>/recording_stats/chbmit_bids/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/chbmit_bids under the current directory.
+_STATS_READER = "chbmit_bids"
 
 # Older 10-20 form (T3/T4/T5/T6) — same physical electrodes as the 1991-
 # modified T7/T8/P7/P8 names; aligns with BIOT canonical 16-pair vocabulary
@@ -255,12 +259,12 @@ class CHBMITBIDSDataset(Dataset):
 
         # Lazy per-recording stats — disk-backed; compute once across all models.
         if rec_index not in self._rec_stats_cache:
-            disk_path = _CHBMIT_STATS_CACHE_ROOT / f"{rec.recording_id}.npz"
+            stats_file = f"{rec.recording_id}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(all_signals.shape[1]),
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 stats = compute_recording_stats(all_signals)
                 try:

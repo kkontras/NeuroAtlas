@@ -88,6 +88,9 @@ _BIOT_VOCABULARY: FrozenSet[str] = frozenset({
     "CP5", "CP3", "CP1", "CPZ", "CP2", "CP4", "CP6",
     # DOD-specific bipolar labels (passed through, ignored by wrapper)
     "F3-F4", "F3-O1", "F4-O2", "FP1-O1", "FP2-O2",
+    # The central chain of the 20-pair TCP montage (Siena, TUSZ, ...). No
+    # BIOT slot is built from it; _biot_slot_plan carries it and uses none.
+    "T3-C3", "C3-CZ", "CZ-C4", "C4-T4",
 })
 
 

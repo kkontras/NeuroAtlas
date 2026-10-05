@@ -42,6 +42,7 @@ from ._preproc import (
     _ESAT_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     read_sampling_rate,
     resample_poly_with_fallback,
     snap_to_epoch_length,
@@ -201,6 +202,7 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         self._last_unit_declared: str | None = None
         self._last_resample_method: str = "uninitialized"
         self._last_dropped_channels: list[dict] = []
+        self._last_norm_source: str = "uninitialized"
 
     def _log_banner(self) -> None:
         if self._banner_logged:
@@ -274,21 +276,29 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         self._last_resample_method = resample_method
         if dataset in _ESAT_DATASETS:
             x = snap_to_epoch_length(x, float(self.sfreq), meta)
-        if x.shape[-1] != _target_len:
-            if dataset == "bci":
-                actual_len = x.shape[-1]
-                usable = (actual_len // self.patch_size) * self.patch_size
-                if usable > 0:
-                    x = x[..., :usable]
-                else:
-                    pad_needed = self.patch_size - actual_len
-                    x = torch.nn.functional.pad(x, (0, pad_needed))
+        bci = is_bci_batch(meta)
+        if bci:
+            # BCI parity: whole patches. A trial is cut back to its last full
+            # patch, or, shorter than one patch (every BCI trial: 1-5 s
+            # against a 5 s patch), zero-padded up to one. The BCI reference
+            # pipeline did this whenever the trial was not a patch multiple.
+            # It is tested against the patch, not against _target_len: that is
+            # the trial's own length now that the runner tells the backbone
+            # the trial length, so a 4 s trial (512 samples, under one
+            # 640-sample patch) matched it and went to the tokenizer unpadded.
+            actual_len = x.shape[-1]
+            usable = (actual_len // self.patch_size) * self.patch_size
+            if usable > 0:
+                x = x[..., :usable]
             else:
-                raise ValueError(
-                    f"SleepFM: window length mismatch — expected {_target_len} samples "
-                    f"({epoch_sec:g} s × {self.sfreq} Hz), got {x.shape[-1]}. "
-                    f"Input was {T} samples at fs {src_sfreq_f:.3f} Hz."
-                )
+                pad_needed = self.patch_size - actual_len
+                x = torch.nn.functional.pad(x, (0, pad_needed))
+        elif x.shape[-1] != _target_len:
+            raise ValueError(
+                f"SleepFM: window length mismatch — expected {_target_len} samples "
+                f"({epoch_sec:g} s × {self.sfreq} Hz), got {x.shape[-1]}. "
+                f"Input was {T} samples at fs {src_sfreq_f:.3f} Hz."
+            )
 
         # §2 — paper-faithful recording-level z-score per channel. SleepFM's
         # upstream `preprocessing.py::safe_standardize` computes `(x - μ) / σ`
@@ -303,17 +313,21 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         B_in = x.shape[0]
         per_row_means = []
         per_row_stds = []
-        dataset = meta[0].get("dataset") if meta else None
+        n_per_trial = 0
         for i in range(B_in):
             m_i = meta[i] if (meta and i < len(meta)) else {}
             rm = m_i.get("recording_mean")
             rs = m_i.get("recording_std")
             if rm is None or rs is None:
-                if dataset == "bci":
+                # BCI parity: trials come without recording statistics (the
+                # BCI readers never compute them), so each trial is z-scored
+                # on its own, per channel.
+                if bci:
                     row = x[i]
                     row_mean = row.mean(dim=-1, keepdim=True)
                     row_std = row.std(dim=-1, keepdim=True).clamp(min=1e-6)
                     x[i] = (row - row_mean) / row_std
+                    n_per_trial += 1
                     continue
                 raise ValueError(
                     "SleepFM requires recording-level z-score stats per window "
@@ -343,6 +357,11 @@ class SleepFMBackbone(BenchmarkModelWrapper):
             mu = unit_to_uv(mu, unit)
             sigma = unit_to_uv(sigma, unit)
             x = (x - mu) / sigma.clamp(min=1e-6)
+        self._last_norm_source = (
+            "recording_stats" if not n_per_trial
+            else "per_trial_zscore" if n_per_trial == B_in
+            else "mixed_recording_stats_and_per_trial"
+        )
 
         B, C_in, T_out = x.shape
 
@@ -401,7 +420,7 @@ class SleepFMBackbone(BenchmarkModelWrapper):
             "modality": "BAS (EEG-branch of SleepFM)",
             "embedding_reduction": "attention_temporal_pooling",
             "alignment_category": "A",
-            "norm_source": "recording_stats",
+            "norm_source": self._last_norm_source,
             "unit_declared": self._last_unit_declared,
             "reference_applied": False,
             "resample_method": self._last_resample_method,

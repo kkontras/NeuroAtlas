@@ -34,11 +34,15 @@ from pathlib import Path as _Path
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 
-_NMT_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/nmt")
+# Per-recording stats live in <cache root>/recording_stats/nmt/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/nmt under the current directory.
+_STATS_READER = "nmt"
 from neuroatlas.extensions.datasets.epilepsy.tusz.readers import (
     BIPOLAR_MONTAGE,
     TARGET_FS,
@@ -273,9 +277,15 @@ class NMTEdfDataset(Dataset):
         self._rec_stats_cache: Dict[int, Dict[str, Any]] = {}
 
         recs = list(recordings)
+        positions = list(range(len(recs)))
         if recording_indices is not None:
             keep = set(int(i) for i in recording_indices)
-            recs = [r for i, r in enumerate(recs) if i in keep]
+            positions = [i for i in positions if i in keep]
+            recs = [recs[i] for i in positions]
+        # Each kept recording's position in ``recordings`` -- the index the
+        # adapter's folds are written in -- published as meta["recording_idx"]
+        # so a global embedding cache can be split into folds.
+        self._source_positions: List[int] = positions
 
         if not recs:
             raise RuntimeError(
@@ -371,14 +381,14 @@ class NMTEdfDataset(Dataset):
         # Disk cache by montage so unipolar and bipolar variants both persist.
         if rec_idx not in self._rec_stats_cache:
             rec_id = self._recordings[rec_idx]["recording_id"]
-            disk_path = _NMT_STATS_CACHE_ROOT / f"{rec_id}_{self._montage}.npz"
+            stats_file = f"{rec_id}_{self._montage}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(signals.shape[0]),
                 "montage": self._montage,
                 "amplitude_rescale": float(_NMT_AMPLITUDE_RESCALE),
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 src = signals  # (T, 19)
                 if self._montage == "bipolar":
@@ -421,6 +431,7 @@ class NMTEdfDataset(Dataset):
         meta: Dict[str, Any] = {
             "dataset": "nmt",
             "recording_id": rec["recording_id"],
+            "recording_idx": self._source_positions[rec_idx],
             "subject_id": rec["subject_id"],
             "split": rec["split"],
             "is_abnormal": int(rec["is_abnormal"]),

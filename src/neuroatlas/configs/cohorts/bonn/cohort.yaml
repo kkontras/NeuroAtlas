@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: bonn
-name: Bonn
+name: Bonn University EEG (Andrzejak et al. 2001)
 domain: epilepsy
 paper_dataset: true
 
@@ -27,7 +27,20 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  kind: manual
+  kind: url
+  upstream: https://www.ukbonn.de/epileptologie/arbeitsgruppen/ag-lehnertz-neurophysik/downloads/
+  # The five sets of Andrzejak et al. (2001), one zip each, each unpacking to
+  # <set>/<set>NNN.txt. md5 and size measured on 2026-10-02.
+  files:
+    - {url: "https://www.ukbonn.de/site/assets/files/21874/z.zip", md5: e1bbffd3cd9e18d87c042ef55d067946}
+    - {url: "https://www.ukbonn.de/site/assets/files/21872/o.zip", md5: 36302ada340c4326d8e23bf81fa03255}
+    - {url: "https://www.ukbonn.de/site/assets/files/21871/n.zip", md5: b1b47a094b1286137f180663d76403b2}
+    - {url: "https://www.ukbonn.de/site/assets/files/21870/f.zip", md5: c854d6f749ad5f21150a0c5e718da4d7}
+    - {url: "https://www.ukbonn.de/site/assets/files/21875/s.zip", md5: 410ce8d1d08161880f591a9c48757f34}
+  size_gb: 0.003                            # 3.2 MB of zips
+  expect: {glob: "*.[tT][xX][tT]", count: 500}   # 5 sets x 100 clips; N.zip ships N001.TXT
+  note: >
+    Cite Andrzejak et al., Phys. Rev. E 64, 061907 (2001), as the page asks.
 
 signal:
   montage: unipolar
@@ -94,7 +107,7 @@ runtime_defaults:
   balance: weighted_sampler
   batch_size: 64
   cache_filename: bonn_173hz_segments.h5
-  cache_root: "${REPO_ROOT}/bonn_cache/hdf5"
+  cache_root: "${EEG_CACHE_ROOT}/prepared/bonn"
   fold: 0
   label_mode: binary_s_vs_rest
   n_folds: 5
@@ -136,3 +149,9 @@ provenance:
     - "Folds are not subject-independent: the corpus ships no subject
        identifiers, so the split is over clips. Numbers are not comparable
        with the subject-disjoint cohorts — see splits.derivation."
+    - "Needs an author decision -- the paper split Bonn finer than this. App.
+       D.1.3 and its epilepsy probe both used stratified 5-fold CV over the
+       1,000 10-s segments (two per 23.6-s clip), so a clip's two segments
+       could fall in train and test; these folds keep a clip's segments
+       together. The paper's exact segment assignment is not recoverable
+       here (its 3c6721c manifest records no ids)."

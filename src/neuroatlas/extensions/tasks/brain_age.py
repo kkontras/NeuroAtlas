@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import sys
 import time
+import traceback
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -270,7 +271,7 @@ def _run_epoch_regression(
         probe_type=str(probe_config.get("type", "linear")),
         max_iter=int(probe_config.get("max_iter", 1000)),
         hidden_dims=probe_config.get("hidden_dims"),
-        selection_metric=str(probe_config.get("selection_metric", "mae")),
+        selection_metric=_regression_selection_metric(probe_config),
         mode="regression",
         ridge_alpha=float(probe_config.get("ridge_alpha", 1.0)),
     )
@@ -604,8 +605,174 @@ def _run_ridge_alpha_sweep(
 
 
 # ---------------------------------------------------------------------------
+# Labels: ages must be present
+# ---------------------------------------------------------------------------
+
+class AgesMissingError(ValueError):
+    """Every row of the embedding payload has a null / non-finite age.
+
+    Raised instead of letting Ridge fail with "Input y contains NaN": the usual
+    cause is a cache written while the dataset's age source could not be read
+    (Sleep-EDF's SC-subjects.xls without ``xlrd``), and the cache keeps those
+    null ages after the dependency is installed (F-069).
+    """
+
+
+def _cache_dirs(cache_paths: Dict[str, Any]) -> List[str]:
+    return sorted({str(v) for k, v in cache_paths.items() if k.endswith("cache_dir") and v})
+
+
+def _ages_missing(dataset_name: str, checkpoint_id: str, cache_paths: Dict[str, Any],
+                  n_rows: int) -> AgesMissingError:
+    dirs = _cache_dirs(cache_paths)
+    where = "\n".join(f"    {d}" for d in dirs) or "    (no cache directory recorded)"
+    return AgesMissingError(
+        f"ages are missing in the embedding cache for {dataset_name}/{checkpoint_id}: "
+        f"all {n_rows:,d} rows have age = null, so there is nothing to regress on.\n"
+        f"  cache:\n{where}\n"
+        f"  The cache was written when the dataset's age source could not be read "
+        f"(Sleep-EDF: SC-subjects.xls needs `pip install xlrd`; ISRUC: the "
+        f"Details_subgroup_*.xlsx tables need `pip install openpyxl`; WSC: the "
+        f"csv_path demographics CSV). Installing the dependency does not repair "
+        f"an existing cache: fix the age source, delete the directory above and "
+        f"re-run (`neuroatlas run brain_age ...` re-extracts it; so does "
+        f"`neuroatlas embed --dataset {dataset_name} --models {checkpoint_id}`)."
+    )
+
+
+def _cohort_protocol(task_config: Dict[str, Any], dataset_name: str) -> Optional[Dict[str, Any]]:
+    """The published split protocol for this cohort, if the task config has one.
+
+    ``task.cohort_protocols.<dataset>`` (set by configs/tasks/brain_age.json)
+    replaces the cohort's own sleep-staging folds with the brain-age split the
+    paper used: cohort filter, age-stratified seeded subject folds, the unit the
+    ridge sees. A cohort without an entry keeps its datamodule's split.
+    """
+    protocols = task_config.get("cohort_protocols") or {}
+    protocol = protocols.get(dataset_name)
+    return dict(protocol) if protocol is not None else None
+
+
+def _split_by_protocol(full_payload, *, protocol, dataset_name, checkpoint_id,
+                       datamodule, cache_paths):
+    """Apply the cohort's brain-age protocol to its full ``all`` payload."""
+    from neuroatlas.extensions.datasets.adapters.precomputed_embeddings import (
+        split_age_cohort,
+    )
+
+    meta = dict(getattr(datamodule, "metadata", {}) or {})
+    fold = meta.get("fold")
+    if fold is None:
+        raise ValueError(f"brain_age: the {dataset_name} datamodule reports no fold")
+    n_folds = int(protocol.get("n_folds", 5))
+    dm_folds = meta.get("n_folds", meta.get("num_folds"))
+    if dm_folds is not None and int(dm_folds) != n_folds:
+        raise ValueError(
+            f"brain_age: the published protocol for {dataset_name} is {n_folds}-fold, "
+            f"but this run asked for {dm_folds} folds (--set n_folds). Its folds are "
+            f"drawn by the protocol, not the cohort's fold list; drop --set n_folds."
+        )
+    label_field = str(protocol.get("label_field", "age"))
+    n_labelled = 0
+    for row in full_payload.metadata:
+        value = row.get(label_field)
+        if value is not None and np.isfinite(float(value)):
+            n_labelled += 1
+            break
+    if n_labelled == 0:
+        raise _ages_missing(dataset_name, checkpoint_id, cache_paths, len(full_payload.metadata))
+    shown = {k: v for k, v in protocol.items() if not str(k).startswith("_")}
+    _log(f"Split: the published brain-age protocol for {dataset_name}, not the cohort's "
+         f"sleep-staging folds: {shown}")
+    splits, split_meta = split_age_cohort(
+        full_payload, dataset_name=dataset_name, fold=int(fold), protocol=protocol,
+    )
+    return splits, split_meta
+
+
+def _require_ages(
+    payloads: Dict[str, Any],
+    *,
+    dataset_name: str,
+    checkpoint_id: str,
+    cache_paths: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return the payloads with unlabelled rows removed; refuse if none has an age.
+
+    A subject without an age (ISRUC's I_086, say) is genuinely unknown and is
+    dropped, and the count is logged. No age at all is never a property of a
+    cohort: it means the age source was not read when the embeddings were
+    cached, and the message names the cache and how to rebuild it.
+    """
+    from neuroatlas.benchmarking_helpers import EmbeddingPayload
+
+    finite = {
+        split: np.isfinite(np.asarray(p.labels, dtype=np.float64))
+        for split, p in payloads.items()
+    }
+    n_rows = sum(int(m.size) for m in finite.values())
+    n_finite = sum(int(m.sum()) for m in finite.values())
+    if n_finite == 0:
+        raise _ages_missing(dataset_name, checkpoint_id, cache_paths, n_rows)
+    out: Dict[str, Any] = {}
+    for split, payload in payloads.items():
+        mask = finite[split]
+        if mask.all():
+            out[split] = payload
+            continue
+        dropped = sorted({
+            str(payload.metadata[i].get("subject_id"))
+            for i in np.flatnonzero(~mask)
+        })
+        _log(f"{split}: dropping {int((~mask).sum()):,d} rows of {len(dropped)} subject(s) "
+             f"with no age: {', '.join(dropped[:10])}{' ...' if len(dropped) > 10 else ''}")
+        idx = np.flatnonzero(mask)
+        out[split] = EmbeddingPayload(
+            features=np.asarray(payload.features)[idx],
+            labels=np.asarray(payload.labels, dtype=np.float64)[idx],
+            metadata=[payload.metadata[i] for i in idx],
+        )
+    return out
+
+
+def _regression_selection_metric(probe_config: Dict[str, Any]) -> str:
+    """The metric the epoch-level ridge picks its seed on.
+
+    ``probe --selection-metric`` defaults to the classification ``macro_f1``,
+    which a regression probe does not compute; brain age then selects on MAE
+    (lower is better), the metric the benchmark reports. An explicit regression
+    metric is honoured.
+    """
+    from neuroatlas.benchmarking_helpers.probes.probe import REGRESSION_SELECTION_METRICS
+
+    configured = probe_config.get("selection_metric")
+    if configured in REGRESSION_SELECTION_METRICS:
+        return str(configured)
+    if configured:
+        _log(f"selection metric {configured!r} is a classification metric; "
+             f"brain age selects on 'mae' (lower is better)")
+    return "mae"
+
+
+# ---------------------------------------------------------------------------
 # Main evaluator
 # ---------------------------------------------------------------------------
+
+def _run_isolated(name: str, fn, failures: Dict[str, str]):
+    """Run one secondary strategy; a failure is logged and recorded, not raised.
+
+    A strategy that is not the headline must not take the fold down with it:
+    F-072's epoch-level KeyError used to discard the subject-level ridge that
+    had just succeeded.
+    """
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 -- recorded in metrics["strategy_failures"]
+        failures[name] = f"{type(exc).__name__}: {exc}"
+        _log(f"  {name} FAILED, continuing without it: {type(exc).__name__}: {exc}")
+        _log("  " + traceback.format_exc().rstrip().replace("\n", "\n[brain_age]   "))
+        return None
+
 
 def evaluate_brain_age(
     *,
@@ -624,7 +791,9 @@ def evaluate_brain_age(
     run_epoch_regression = bool(task_config.get("epoch_regression", True))
     run_mlp = bool(task_config.get("mlp", False))
     # Nested-CV alpha selection — the protocol behind the published brain-age
-    # numbers. Defaults preserve every existing run's behaviour.
+    # numbers, switched on by the brain_age task preset
+    # (src/neuroatlas/configs/tasks/brain_age.json). When it runs it is the
+    # headline: metrics.best_test is its test block.
     run_nested_cv = bool(task_config.get("nested_cv", False))
     n_inner_folds = int(task_config.get("n_inner_folds", 4))
     nested_cv_seed = int(task_config.get("nested_cv_seed", 43))
@@ -638,6 +807,7 @@ def evaluate_brain_age(
             "n_epochs": int(mlp_raw.get("n_epochs", 100)),
             "batch_size": int(mlp_raw.get("batch_size", 256)),
         }
+    headline = "ridge_subject_nested_cv" if run_nested_cv else "ridge_subject"
 
     fold = getattr(datamodule, "metadata", {}).get("fold", "?")
     _log("=" * 60)
@@ -648,16 +818,17 @@ def evaluate_brain_age(
         mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         device_str = f"cuda ({gpu}, {mem:.1f} GB)"
     _log(f"Device: {device_str}")
-    strategies = ["Ridge(subject)"]
+    # Only what will run, in the order it runs.
+    strategies = ["Ridge(subject, val-selected alpha)"]
     if run_mlp:
         strategies.append("MLP(subject)")
     if run_epoch_regression:
-        strategies.append("Ridge(epoch\u2192agg)")
+        strategies.append("Ridge(epoch→agg)")
         if run_mlp:
             strategies.append("MLP(epoch)")
-    if not run_mlp:
-        strategies.append("MLP(disabled)")
-    _log(f"Strategies: {', '.join(strategies)}")
+    if run_nested_cv:
+        strategies.append("Ridge(subject, nested-CV alpha)")
+    _log(f"Strategies: {', '.join(strategies)}  |  headline: {headline}")
     _log(f"Seeds: {list(seeds)}  |  aggregation={aggregation}")
     fold_t0 = time.time()
 
@@ -669,19 +840,35 @@ def evaluate_brain_age(
     # datamodule configured with holdout_eval_groups returns it; otherwise it
     # stays None and nothing below changes.
     holdout_payload = None
+    # The paper's per-cohort brain-age split (cohort filter, age-stratified
+    # seeded folds), applied to the cohort's own cached embeddings.
+    protocol = _cohort_protocol(task_config, dataset_name)
+    split_protocol_meta: Optional[Dict[str, Any]] = None
     use_global = datamodule.supports_global_embedding_cache()
+    if protocol is not None and not use_global:
+        raise ValueError(
+            f"brain_age: {dataset_name} has a published split protocol, which re-splits "
+            f"the cohort's full embedding cache, but its datamodule does not serve one."
+        )
     if use_global:
         full_payload, full_paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "all", checkpoint_spec, backbone,
             datamodule.full_embedding_dataloader(), datamodule,
             cache_purpose="global_embeddings",
         )
-        split_payloads = datamodule.split_global_embedding_payload(full_payload)
+        cache_paths.update({f"global_{k}": v for k, v in full_paths.items()})
+        if protocol is not None:
+            split_payloads, split_protocol_meta = _split_by_protocol(
+                full_payload, protocol=protocol, dataset_name=dataset_name,
+                checkpoint_id=checkpoint_spec.identifier, datamodule=datamodule,
+                cache_paths=cache_paths,
+            )
+        else:
+            split_payloads = datamodule.split_global_embedding_payload(full_payload)
         train_payload = split_payloads["train"]
         val_payload = split_payloads["val"]
         test_payload = split_payloads["test"]
         holdout_payload = split_payloads.get("holdout")
-        cache_paths.update({f"global_{k}": v for k, v in full_paths.items()})
     else:
         train_payload, train_paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "train", checkpoint_spec, backbone, datamodule.train_dataloader(), datamodule
@@ -715,7 +902,20 @@ def evaluate_brain_age(
                 f"[precomputed] log line above for the path it looked at."
             )
 
-    # --- Approach 1: aggregate embeddings, then regress (existing) ----------
+    # Ages: refuse a cache without any, drop the subjects that have none.
+    labelled = _require_ages(
+        {"train": train_payload, "val": val_payload, "test": test_payload},
+        dataset_name=dataset_name, checkpoint_id=checkpoint_spec.identifier,
+        cache_paths=cache_paths,
+    )
+    train_payload, val_payload, test_payload = labelled["train"], labelled["val"], labelled["test"]
+    if holdout_payload is not None and len(holdout_payload.labels) > 0:
+        holdout_payload = _require_ages(
+            {"holdout": holdout_payload}, dataset_name=dataset_name,
+            checkpoint_id=checkpoint_spec.identifier, cache_paths=cache_paths,
+        )["holdout"]
+
+    # --- Subject-level features: aggregate embeddings per subject -----------
     _log(f"Splits: train={len(train_payload.labels):,d}  val={len(val_payload.labels):,d}  test={len(test_payload.labels):,d} epochs")
     t0 = time.time()
     train_x, train_y, train_subjects = _aggregate_subjects_regression(train_payload, aggregation)
@@ -724,97 +924,125 @@ def evaluate_brain_age(
     _log(f"Subject aggregation ({aggregation}): {len(train_subjects)}+{len(val_subjects)}+{len(test_subjects)} subjects  "
          f"features={train_x.shape[1]}  ({time.time()-t0:.1f}s)")
 
-    _log("Strategy 1/N: Ridge on subject-level embeddings (val-based alpha selection)")
-    t0 = time.time()
-    # Determine alpha values: sweep if configured, else single fixed alpha
+    # Alpha grid: probe.ridge_alpha_sweep (the preset carries the paper's
+    # grid), else the single probe.ridge_alpha.
     alpha_sweep_values = probe_config.get("ridge_alpha_sweep")
     if alpha_sweep_values is None:
         alpha_sweep_values = [float(probe_config.get("ridge_alpha", 1.0))]
+    alpha_sweep_values = [float(a) for a in alpha_sweep_values]
 
-    sweep_result = _run_ridge_alpha_sweep(
-        train_x, train_y, val_x, val_y, test_x, test_y, alpha_sweep_values,
-    )
-    selected_alpha = sweep_result["best_alpha"]
-    ridge_test = sweep_result["best_test"]
-    ridge_val = sweep_result["best_val"]
-    ridge_estimator = sweep_result["best_estimator"]
+    # Every strategy but the headline runs isolated: a failure is logged and
+    # recorded under metrics["strategy_failures"], and the others still report.
+    failures: Dict[str, str] = {}
 
-    _log(f"  Ridge(subject): alpha={selected_alpha}  MAE={ridge_test.get('mae','?'):.4f}  "
-         f"R2={ridge_test.get('r2','?'):.4f}  r={ridge_test.get('pearson_r','?'):.4f}  ({time.time()-t0:.1f}s)")
+    def _strategy(name: str, fn):
+        if name == headline:
+            return fn()  # no headline, no result: let the fold fail
+        return _run_isolated(name, fn, failures)
 
-    # Per-subject predictions using the val-selected estimator
-    subject_predictions = {
-        "val": _get_subject_predictions(ridge_estimator, val_x, val_y, val_subjects),
-        "test": _get_subject_predictions(ridge_estimator, test_x, test_y, test_subjects),
-    }
+    step = iter(range(1, len(strategies) + 1))
+    n_steps = len(strategies)
+
+    # --- Ridge on subject-level embeddings, alpha chosen on the val split ---
+    def _ridge_subject():
+        _log(f"Strategy {next(step)}/{n_steps}: Ridge on subject-level embeddings "
+             f"(val-based alpha selection)")
+        t0 = time.time()
+        out = _run_ridge_alpha_sweep(
+            train_x, train_y, val_x, val_y, test_x, test_y, alpha_sweep_values,
+        )
+        rt = out["best_test"]
+        _log(f"  Ridge(subject): alpha={out['best_alpha']}  MAE={rt['mae']:.4f}  "
+             f"R2={rt['r2']:.4f}  r={rt['pearson_r']:.4f}  ({time.time()-t0:.1f}s)")
+        return out
+
+    sweep_result = _strategy("ridge_subject", _ridge_subject)
+    ridge_estimator = sweep_result["best_estimator"] if sweep_result else None
 
     # --- MLP on subject-level embeddings (aggregate-then-MLP) ---------------
     mlp_subject = None
     if mlp_cfg is not None:
-        _log("Strategy 2/N: MLP on subject-level embeddings")
-        t0 = time.time()
-        mlp_subject = _train_mlp_probe(train_x, train_y, val_x, val_y, test_x, test_y, **mlp_cfg)
-        _log(f"  ({time.time()-t0:.1f}s)")
+        def _mlp_subject():
+            _log(f"Strategy {next(step)}/{n_steps}: MLP on subject-level embeddings")
+            t0 = time.time()
+            out = _train_mlp_probe(train_x, train_y, val_x, val_y, test_x, test_y, **mlp_cfg)
+            _log(f"  ({time.time()-t0:.1f}s)")
+            return out
 
-    # --- Approach 2: regress per-epoch, then aggregate predictions ----------
+        mlp_subject = _strategy("mlp_subject", _mlp_subject)
+
+    # --- Regress per epoch, then aggregate predictions per subject ----------
     epoch_regression = None
     if run_epoch_regression:
-        _log("Strategy 3/N: Ridge on epoch-level (predict-then-aggregate)")
-        t0 = time.time()
-        epoch_regression = _run_epoch_regression(
-            train_payload, val_payload, test_payload,
-            seeds=list(seeds),
-            probe_config=dict(probe_config),
-            trim_proportion=trim_proportion,
-            mlp_config=mlp_cfg,
-        )
-        er_test = epoch_regression.get("subject_mean", {}).get("test", {})
-        _log(f"  Epoch\u2192Mean: MAE={er_test.get('mae','?'):.4f}  R2={er_test.get('r2','?'):.4f}")
-        if "mlp" in epoch_regression:
-            mlp_test = epoch_regression["mlp"].get("best_test", {})
-            _log(f"  Epoch MLP:  MAE={mlp_test.get('mae','?'):.4f}  R2={mlp_test.get('r2','?'):.4f}")
-        _log(f"  ({time.time()-t0:.1f}s)")
+        def _epoch():
+            _log(f"Strategy {next(step)}/{n_steps}: Ridge on epoch-level (predict-then-aggregate)")
+            t0 = time.time()
+            out = _run_epoch_regression(
+                train_payload, val_payload, test_payload,
+                seeds=list(seeds),
+                probe_config=dict(probe_config),
+                trim_proportion=trim_proportion,
+                mlp_config=mlp_cfg,
+            )
+            er_test = out.get("subject_mean", {}).get("test", {})
+            _log(f"  Epoch→Mean: MAE={er_test.get('mae', float('nan')):.4f}  "
+                 f"R2={er_test.get('r2', float('nan')):.4f}")
+            if "mlp" in out:
+                mlp_test = out["mlp"].get("best_test", {})
+                _log(f"  Epoch MLP:  MAE={mlp_test.get('mae', float('nan')):.4f}  "
+                     f"R2={mlp_test.get('r2', float('nan')):.4f}")
+            _log(f"  ({time.time()-t0:.1f}s)")
+            return out
+
+        epoch_regression = _strategy("epoch_regression", _epoch)
 
     # --- Nested CV on outer-train (train+val) for alpha selection ------------
-    # Opt-in via task.nested_cv. This is the block whose output the paper's
-    # figures/tables read (metrics["ridge_subject_nested_cv"].best_test.mae).
-    ridge_subject_nested_cv_metrics = None
-    nested_best_estimator = None
+    # The block whose output the paper's figures/tables read
+    # (metrics["ridge_subject_nested_cv"].best_test.mae).
+    nested_subject = None
     if run_nested_cv:
-        _log("Strategy 4/N: Nested CV on outer-train (train+val) for alpha selection")
-        t0 = time.time()
-        outer_train_x = np.concatenate([train_x, val_x], axis=0)
-        outer_train_y = np.concatenate([train_y, val_y], axis=0)
-        outer_train_subjects = list(train_subjects) + list(val_subjects)
-        nested_subject = _run_ridge_nested_cv_subject(
-            outer_train_x, outer_train_y, outer_train_subjects,
-            test_x, test_y, test_subjects,
-            list(alpha_sweep_values),
-            n_inner_folds=n_inner_folds,
-            seed=nested_cv_seed,
-            use_standard_scaler=use_standard_scaler,
-        )
-        ns_test = nested_subject["best_test"]
-        _log(f"  Ridge(subject, nested-CV): alpha*={nested_subject['selected_alpha']}  "
-             f"MAE={ns_test.get('mae','?'):.4f}  R2={ns_test.get('r2','?'):.4f}  "
-             f"r={ns_test.get('pearson_r','?'):.4f}  ({time.time()-t0:.1f}s)")
-        ridge_subject_nested_cv_metrics = {
-            k: v for k, v in nested_subject.items() if k != "best_estimator"
-        }
-        nested_best_estimator = nested_subject["best_estimator"]
+        def _nested():
+            _log(f"Strategy {next(step)}/{n_steps}: Nested CV on outer-train (train+val) "
+                 f"for alpha selection")
+            t0 = time.time()
+            outer_train_x = np.concatenate([train_x, val_x], axis=0)
+            outer_train_y = np.concatenate([train_y, val_y], axis=0)
+            outer_train_subjects = list(train_subjects) + list(val_subjects)
+            out = _run_ridge_nested_cv_subject(
+                outer_train_x, outer_train_y, outer_train_subjects,
+                test_x, test_y, test_subjects,
+                list(alpha_sweep_values),
+                n_inner_folds=n_inner_folds,
+                seed=nested_cv_seed,
+                use_standard_scaler=use_standard_scaler,
+            )
+            ns_test = out["best_test"]
+            _log(f"  Ridge(subject, nested-CV): alpha*={out['selected_alpha']}  "
+                 f"MAE={ns_test['mae']:.4f}  R2={ns_test['r2']:.4f}  "
+                 f"r={ns_test['pearson_r']:.4f}  ({time.time()-t0:.1f}s)")
+            return out
+
+        nested_subject = _strategy("ridge_subject_nested_cv", _nested)
+    ridge_subject_nested_cv_metrics = (
+        {k: v for k, v in nested_subject.items() if k != "best_estimator"}
+        if nested_subject is not None else None
+    )
 
     # --- Brain-age gap on the held-out cohort --------------------------------
     # Train on one group (the datamodule's cv_filter), then score this fold's
     # model on an age-matched cohort spanning two groups and compare their
     # brain-age gaps: BAG = predicted - true age per subject, and
     # delta_bag_mean = mean BAG(second group) - mean BAG(first group), groups in
-    # sorted label order (e.g. "ci_label=1" - "ci_label=0"). Uses the nested-CV
-    # refit when enabled, else the validation-selected ridge. Ported from the
-    # pre-merge EEGBenchmarks task; the Cole bias-corrected variant is not.
+    # sorted label order (e.g. "ci_label=1" - "ci_label=0"). Uses the headline
+    # estimator: the nested-CV refit when enabled, else the validation-selected
+    # ridge. Ported from the pre-merge EEGBenchmarks task; the Cole
+    # bias-corrected variant is not.
     holdout_metrics: Optional[Dict[str, Any]] = None
     holdout_predictions: Optional[List[Dict[str, Any]]] = None
     if holdout_payload is not None and len(holdout_payload.labels) > 0:
-        holdout_estimator = nested_best_estimator if run_nested_cv else ridge_estimator
+        holdout_estimator = (
+            nested_subject["best_estimator"] if run_nested_cv else ridge_estimator
+        )
         t0 = time.time()
         holdout_x, holdout_y, holdout_subjects = _aggregate_subjects_regression(
             holdout_payload, aggregation
@@ -864,7 +1092,7 @@ def evaluate_brain_age(
             "delta_bag_groups": f"{groups[1]} - {groups[0]}" if len(groups) == 2 else None,
             "delta_bag_mean": float(delta_bag),
             "selected_alpha": (
-                nested_subject["selected_alpha"] if run_nested_cv else selected_alpha
+                nested_subject["selected_alpha"] if run_nested_cv else sweep_result["best_alpha"]
             ),
             "estimator_source": "ridge_subject_nested_cv" if run_nested_cv else "best_test",
             "n_total": int(len(holdout_predictions)),
@@ -888,18 +1116,46 @@ def evaluate_brain_age(
     }
 
     # --- Assemble result ----------------------------------------------------
+    # best_test / best_val / selected_alpha are the headline strategy's, which
+    # is what `neuroatlas results` reads.
+    if run_nested_cv:
+        head_test = nested_subject["best_test"]
+        head_val = nested_subject["best_val"]
+        head_val_mae = nested_subject["best_val_mae"]
+        head_alpha = nested_subject["selected_alpha"]
+        subject_predictions = {"test": nested_subject["subject_predictions"]}
+    else:
+        head_test = sweep_result["best_test"]
+        head_val = sweep_result["best_val"]
+        head_val_mae = sweep_result["best_val_mae"]
+        head_alpha = sweep_result["best_alpha"]
+        subject_predictions = {
+            "val": _get_subject_predictions(ridge_estimator, val_x, val_y, val_subjects),
+            "test": _get_subject_predictions(ridge_estimator, test_x, test_y, test_subjects),
+        }
+    _log(f"Headline ({headline}): alpha={head_alpha}  MAE={head_test['mae']:.4f}  "
+         f"r={head_test['pearson_r']:.4f}  R2={head_test['r2']:.4f}")
+    if failures:
+        _log(f"Strategies that failed (recorded in metrics.strategy_failures): "
+             f"{', '.join(sorted(failures))}")
     _log(f"Fold {fold} complete in {time.time()-fold_t0:.1f}s")
     _log("=" * 60)
     metrics: Dict[str, Any] = {
-        "best_test": ridge_test,
-        "best_val": ridge_val,
-        "best_val_metric": sweep_result["best_val_mae"],
+        "best_test": head_test,
+        "best_val": head_val,
+        "best_val_metric": head_val_mae,
+        "selection_metric": "mae",
+        "headline_strategy": headline,
         "best_seed": 0,
         "probe_type": "linear",
-        "selected_alpha": selected_alpha,
-        "ridge_alpha_sweep": {k: v for k, v in sweep_result.items() if k != "best_estimator"},
+        "selected_alpha": head_alpha,
+        "alpha_grid": list(alpha_sweep_values),
         "subject_predictions": subject_predictions,
     }
+    if sweep_result is not None:
+        metrics["ridge_alpha_sweep"] = {
+            k: v for k, v in sweep_result.items() if k != "best_estimator"
+        }
     if ridge_subject_nested_cv_metrics is not None:
         # Key name is load-bearing: the paper's figures and LaTeX tables read
         # metrics.ridge_subject_nested_cv.best_test.mae — do not rename.
@@ -908,6 +1164,8 @@ def evaluate_brain_age(
         metrics["mlp_subject"] = mlp_subject
     if epoch_regression is not None:
         metrics["epoch_regression"] = epoch_regression
+    if failures:
+        metrics["strategy_failures"] = failures
     if holdout_metrics is not None:
         metrics["holdout_metrics"] = holdout_metrics
         metrics["holdout_predictions"] = holdout_predictions
@@ -930,6 +1188,16 @@ def evaluate_brain_age(
                 "val": len(val_subjects),
                 "test": len(test_subjects),
             },
+            **(
+                {
+                    # The folds came from the protocol, not from the cohort's
+                    # sleep-staging fold manifest.
+                    "folds_manifest": None,
+                    "split_protocol": split_protocol_meta,
+                    "unit": split_protocol_meta.get("aggregation_group"),
+                }
+                if split_protocol_meta is not None else {}
+            ),
         },
     )
 

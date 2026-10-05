@@ -43,6 +43,7 @@ from neuroatlas.extensions.datasets.epilepsy.tuab_preprocessor import (
 )
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ def _h5_cache_paths(
 # ---------------------------------------------------------------------------
 
 
-class TuabBenchmarkDataModule(BenchmarkDataModule):
+class TuabBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the TUH EEG Abnormal Corpus (TUAB).
 
     Args:
@@ -280,6 +281,10 @@ class TuabBenchmarkDataModule(BenchmarkDataModule):
          self._splits_per_rec) = self._scan_metadata()
 
         self._train_idx, self._val_idx, self._test_idx = self._compute_splits()
+        # The names the global-cache mixin reads.
+        self._train_recs, self._val_recs, self._test_recs = (
+            self._train_idx, self._val_idx, self._test_idx)
+        self._collate_fn = collate_tuab
         logger.info(
             "TUAB splits (mode=%s, fold=%d/%d): train=%d val=%d test=%d recordings",
             split_mode, fold, n_folds,
@@ -396,17 +401,37 @@ class TuabBenchmarkDataModule(BenchmarkDataModule):
         if self._use_h5:
             ds = self._build_h5_dataset(split, rec_indices, stride_s)
         else:
-            ds = TuabEdfDataset(
-                recordings=self._all_recordings,
-                window_s=self._window_s,
-                stride_s=stride_s,
-                normalize=self._normalize,
-                montage_filter=None,  # already applied in _scan_metadata
-                recording_indices=rec_indices,
-                cache_max_recordings=self._cache_max,
-            )
+            ds = self._window_dataset(rec_indices, stride_s)
         self._datasets[split] = ds
         return ds
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: Optional[int] = None):
+        """EDF backend only (the H5 caches are one file per official split)."""
+        return TuabEdfDataset(
+            recordings=self._all_recordings,
+            window_s=self._window_s,
+            stride_s=stride_s,
+            normalize=self._normalize,
+            montage_filter=None,  # already applied in _scan_metadata
+            recording_indices=rec_indices,
+            cache_max_recordings=self._cache_max if signal_cache_size is None else signal_cache_size,
+        )
+
+    # -- global embedding cache (epilepsy/_global_cache.py) ----------------
+    # EDF backend: every window of every recording once, folds assigned when
+    # probing; the per-split caches held one fold's resampled train split,
+    # so fold 1 found nothing to read. The H5 fast path keeps per-split
+    # caches (one file per official split); `neuroatlas run` then hands
+    # `embed` every fold the probe reads.
+
+    def supports_global_embedding_cache(self) -> bool:
+        return not self._use_h5 and super().supports_global_embedding_cache()
+
+    def _n_recordings(self) -> int:
+        return len(self._all_recordings)
+
+    def _subject_of(self, rec_index: int) -> str:
+        return self._subject_ids[rec_index]
 
     def _build_h5_dataset(
         self, split: str, rec_indices: Sequence[int], stride_s: float,

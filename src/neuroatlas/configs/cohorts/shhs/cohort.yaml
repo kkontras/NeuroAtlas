@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: shhs
-name: Shhs
+name: Sleep Heart Health Study (SHHS)
 domain: sleep
 paper_dataset: true
 
@@ -24,6 +24,11 @@ cohort:
 acquisition:
   kind: nsrr
   ref: shhs
+  unusable_download: >
+    The SHHS reader reads the CoRe-Sleep preprocessed version of SHHS, not the
+    raw EDFs NSRR serves, and no script in this repository builds it. The raw
+    download (about 50 GB) would sit unused; ask the authors for the
+    preprocessed copy and set shhs.data_root to it.
 
 signal:
   notch_freq: null
@@ -81,3 +86,11 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- which SHHS folds the paper's foundation-model
+       staging numbers used is not established. This reader runs one fixed
+       split (SleepTransformer's data_split_eval.mat, as before the
+       restructure); the pre-restructure combined probes
+       (artifacts/probes_combined_perC/shhs_combined) used five folds from
+       configs/folds/shhs_combined.json over 8,444 recordings, which this
+       reader does not read (it indexes the CoRe-Sleep patient .mat lists)."

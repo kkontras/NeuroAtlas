@@ -406,7 +406,7 @@ def discover_helsinki_recordings(raw_root: str | Path) -> List[Dict[str, Any]]:
     if not recs:
         raise FileNotFoundError(
             f"No eegN.edf files under {raw_root}. "
-            f"Run `python -m neuroatlas.entrypoints.fetch --dataset helsinki_neonatal --download` to stage it."
+            f"Run `neuroatlas data download helsinki_neonatal` to stage it."
         )
     return recs
 

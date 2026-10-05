@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: physionet2026
-name: Physionet2026
+name: PhysioNet Challenge 2026 (Human Sleep Project)
 domain: sleep
 paper_dataset: true
 
@@ -24,7 +24,15 @@ cohort:
   powerline_hz: 60
 
 acquisition:
-  kind: physionet
+  kind: manual
+  upstream: https://physionetchallenges.org/2026/
+  size_gb: 230                              # the small training set, 214 GiB (the Challenge page)
+  note: >
+    Not a PhysioNet files project: the Challenge data are Kaggle datasets and need a
+    Kaggle account. The small version is
+    https://www.kaggle.com/datasets/physionet/physionetchallenge2026data (214 GiB);
+    the large one is 1.2 TiB. Point physionet2026.data_root at its training-set
+    folder, which holds physiological_data/<site>/sub-<id>-ses<k>.edf.
 
 signal:
   notch_freq: 60.0

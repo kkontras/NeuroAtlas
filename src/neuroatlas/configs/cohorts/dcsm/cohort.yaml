@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: dcsm
-name: Dcsm
+name: DCSM Sleep Staging Dataset
 domain: sleep
 paper_dataset: true
 
@@ -23,6 +23,13 @@ cohort:
 
 acquisition:
   kind: manual
+  upstream: https://erda.ku.dk/public/archives/db553715ecbe1f3ac66c1dc569826eef/published-archive.html
+  size_gb: 392                              # dcsm_dataset.zip, Content-Length 392,015,383,349 (2026-10-02)
+  note: >
+    One 392 GB zip (dcsm_dataset.zip) on the archive page, no login. The reader
+    expects one folder per subject holding psg.h5 and hypnogram.ids:
+    <path>/<subject>/psg.h5.
+  expect: {glob: "psg.h5", count: 255}      # 255 PSGs, per the archive page
 
 signal:
   notch_freq: 50.0

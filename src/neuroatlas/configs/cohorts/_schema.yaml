@@ -81,23 +81,54 @@ fields:
     keys:
       kind:     {type: str, required: true,
                  enum: [zenodo, physionet, moabb, nsrr, tuh, figshare, mendeley,
-                        manual, internal],
-                 doc: "internal = not publicly licensed; manual = credentialed
-                       download with no API."}
+                        url, manual, internal],
+                 doc: "internal = not publicly licensed; manual = a person has to
+                       fetch it (a request, a licence, a login, or no API);
+                       url = plain files at fixed addresses (see `files`)."}
       ref:      {type: str, doc: "Record id / repo id / accession for `kind`."}
-      file:     {type: str, doc: "Archive name, when the record holds several."}
-      upstream: {type: str, doc: "Canonical landing page for a human."}
-      size_gb:  {type: float}
-      checksum: {type: str, doc: "sha256:… of the archive. 'TBD' is allowed but
-                                  reported by the completeness test."}
+      file:     {type: str, doc: "zenodo: the one archive to fetch and unpack. Without
+                                  `file` or `files`, every file of the record is
+                                  fetched into the raw folder (helsinki_neonatal)."}
+      files:    {type: list, doc: "zenodo: several archives of the record to fetch and
+                                  unpack. url: [{url, md5}] -- each is fetched and,
+                                  when a zip, unpacked into the raw folder."}
+      upstream: {type: str, doc: "Canonical landing page for a human. Only addresses
+                                  someone has opened belong here."}
+      size_gb:  {type: float, doc: "What a download transfers, in GB (1e9 bytes). Leave
+                                  it out when unknown rather than guess."}
+      checksum: {type: str, doc: "md5:… or sha256:… of the archive. 'TBD' is allowed but
+                                  reported by the completeness test. Zenodo
+                                  downloads are also verified against the md5s the
+                                  record's API publishes."}
       version:  {type: str, doc: "Release to fetch, for kinds whose URLs carry one
                                   (physionet: files/<ref>/<version>/)."}
       subdir:   {type: str, doc: "Where, inside what `data download` fetches, the
                                   reader's path points (hmc reads recordings/)."}
-      expect:   {type: map, doc: "What `data status` counts as the corpus being
-                                  there: {glob: '**/*.edf', min: N}. Without it, any
-                                  EEG file under the raw path counts."}
-      note:     {type: str, doc: "Anything a person fetching it must know."}
+      dest:     {type: str, doc: "Where `data download` puts the raw corpus when the
+                                  reader itself reads no raw path (eegmat reads a
+                                  prepared pickle)."}
+      expect:   {type: map, doc: "What `data status` counts as the corpus being there:
+                                  {glob: 'SN[0-9][0-9][0-9].edf', count: N}. The glob is
+                                  matched against file names anywhere under the raw
+                                  path; fewer than `count` files is `partial (n/N)`.
+                                  `min: N` (older form) is a lower bound with no
+                                  total. Without it, any EEG file counts."}
+      nemar:    {type: str, doc: "moabb: the NEMAR deposit MOABB downloads into
+                                  $MNE_DATA/NEMAR/<id>, which `data status` checks."}
+      moabb_folder:
+                {type: str, doc: "moabb: the folder under $MNE_DATA that moabb 1.2.0
+                                  (the numpy<2 stack) downloads this cohort into;
+                                  `data status` checks it when NEMAR/<id> (moabb 1.6+)
+                                  is absent."}
+      prepared_only:
+                {type: str, doc: "The reader reads only a prepared file nothing in
+                                  this repository builds; `data status` says so and
+                                  `data prepare` refuses with this text."}
+      unusable_download:
+                {type: str, doc: "What the upstream serves is not what the reader
+                                  reads; `data download` refuses with this text."}
+      note:     {type: str, doc: "Anything a person fetching it must know: access
+                                  terms, and the folder layout the reader expects."}
 
   # -- signal ----------------------------------------------------------------
   signal:
@@ -209,6 +240,13 @@ fields:
       preprocessor:
         type: str
         doc: "Name of the cache builder in datasets/preprocessors, or null."
+      required:
+        type: bool
+        doc: >
+          For a MOABB cohort with a preprocessor: false when nothing the
+          benchmark runs reads what it builds, so `data status`, `check` and
+          `show` treat the cohort by its raw data and `prepare` lists the
+          builder as optional. Default true.
       cache_layout:
         type: str
         doc: "Short description of what the preprocessor writes."

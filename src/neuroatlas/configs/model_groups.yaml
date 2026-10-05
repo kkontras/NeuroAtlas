@@ -51,8 +51,13 @@ groups:
 
 # What `--models` accepts besides a family or a checkpoint id. Each alias
 # selects *ready* checkpoints; a group alias takes every checkpoint of the
-# group's families except untrained baselines, which only `all_random` (and
-# `all`) select -- a random-init CBraMod is not an EEG foundation model.
+# group's families except untrained baselines, which only `all_random` (or its
+# synonym `baseline`, the group `list models` shows for them) and `all`
+# select -- a random-init CBraMod is not an EEG foundation model. A family
+# (`reve`) likewise means its trained checkpoints only in `run`, `check`,
+# `submit` and `list`; the original verbs (`embed`, `probe`) keep the
+# runner's meaning, every checkpoint of the family, which the launchers'
+# family lists rely on.
 aliases:
   all_fm:
     group: eeg_fm
@@ -66,5 +71,8 @@ aliases:
   all_random:
     source_type: random_init
     description: untrained baselines, the same architectures with random weights
+  baseline:
+    source_type: random_init
+    description: the same as all_random -- the group `list models` shows for them
   all:
     description: every ready checkpoint

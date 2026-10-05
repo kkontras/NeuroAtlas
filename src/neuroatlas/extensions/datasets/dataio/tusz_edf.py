@@ -28,6 +28,7 @@ from torch.utils.data import Dataset
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
@@ -35,7 +36,10 @@ from pathlib import Path as _Path
 
 # Per-recording stats disk cache — shared across all models, populated by
 # entrypoints/cache_recording_stats_tusz.py or first-use here.
-_TUSZ_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/tusz_edf_direct")
+# Per-recording stats live in <cache root>/recording_stats/tusz_edf_direct/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/tusz_edf_direct under the current directory.
+_STATS_READER = "tusz_edf_direct"
 from neuroatlas.extensions.datasets.epilepsy._common import (
     apply_standard_filters,
 )
@@ -310,12 +314,12 @@ class TUSZEDFDirectDataset(Dataset):
         # aligned q95 so BIOT's anontier q95 path indexes the emitted channels
         # (not the unipolar source). See siena_bids for the same fix.
         if rec_idx not in self._rec_stats_cache:
-            disk_path = _TUSZ_STATS_CACHE_ROOT / f"{rec['recording_id']}.npz"
+            stats_file = f"{rec['recording_id']}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(signals_uni.shape[0]),
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 stats = compute_recording_stats(
                     signals_uni.T.astype(np.float32, copy=False)

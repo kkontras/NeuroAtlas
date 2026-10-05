@@ -25,11 +25,17 @@ import importlib
 from typing import Any, Callable, List
 
 from neuroatlas.benchmarking_helpers import DatasetSpec, dataset_spec_from_manifest
+from neuroatlas.benchmarking_helpers.registry.contracts import construct_datamodule
 from neuroatlas.benchmarking_helpers.registry.manifest import available_manifests, load_manifest
 
 
-def _datamodule_factory(dotted: str) -> Callable[..., Any]:
-    """Return a callable that imports *dotted* on first use and constructs it."""
+def _datamodule_factory(slug: str, dotted: str) -> Callable[..., Any]:
+    """Return a callable that imports *dotted* on first use and constructs it.
+
+    Construction goes through ``construct_datamodule``, so a runtime key the
+    class neither takes nor declares in ``RUNTIME_KEYS_FIXED`` /
+    ``RUNTIME_KEYS_IGNORED`` fails with a message naming the key and cohort.
+    """
     def _create(**config: Any) -> Any:
         module_path, _, attr = dotted.rpartition(".")
         try:
@@ -46,7 +52,7 @@ def _datamodule_factory(dotted: str) -> Callable[..., Any]:
                 f"{module_path!r} has no {attr!r}, named by spec.datamodule "
                 f"in its cohort manifest."
             ) from exc
-        return cls(**config)
+        return construct_datamodule(cls, config, dataset=slug)
 
     _create.__name__ = f"create_{dotted.rsplit('.', 1)[-1]}"
     _create.__qualname__ = _create.__name__
@@ -59,7 +65,7 @@ def _build() -> List[DatasetSpec]:
         dotted = ((load_manifest(slug).get("spec") or {}).get("datamodule"))
         if not dotted:
             continue                      # has its own module, or is not a cohort
-        specs.append(dataset_spec_from_manifest(slug, _datamodule_factory(dotted)))
+        specs.append(dataset_spec_from_manifest(slug, _datamodule_factory(slug, dotted)))
     return specs
 
 

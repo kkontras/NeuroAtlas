@@ -22,6 +22,7 @@ from neuroatlas.extensions.datasets.dataio.mass import (
     scan_mass_subjects,
 )
 
+from ._runtime_keys import SLEEP_STAGE_ONLY
 from .base import BenchmarkDataModule
 
 
@@ -158,6 +159,8 @@ class MASSBenchmarkDataModule(BenchmarkDataModule):
     compute_recording_stats : bool
         If True, compute per-recording mean/std/q95 after filtering.
     """
+
+    RUNTIME_KEYS_FIXED = SLEEP_STAGE_ONLY
 
     def __init__(
         self,

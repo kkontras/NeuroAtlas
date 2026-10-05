@@ -93,14 +93,42 @@ class _STDemo:
     temazepam_night: int
 
 
-def _load_sc_demographics(xls_path: str) -> Dict[int, _SCDemo]:
+class DemographicsUnavailableError(RuntimeError):
+    """The subject spreadsheet exists in the download but cannot be read."""
+
+
+def _read_demographics_xls(xls_path: str):
+    """Read one of the bundled ``*-subjects.xls`` tables, or say why not.
+
+    These are the only source of age and sex. They used to be skipped on any
+    error, which wrote ``"age": null`` into every cached embedding row when
+    ``xlrd`` was missing; the cache stayed valid for sleep staging and
+    poisoned brain age for good (F-069). Both failures are now loud.
+    """
     if not os.path.exists(xls_path):
-        return {}
+        raise FileNotFoundError(
+            f"Sleep-EDF subject table not found: {xls_path}. It ships with the "
+            f"PhysioNet download (sleep-edf-database-expanded-1.0.0/"
+            f"{os.path.basename(xls_path)}) and is the only source of age and sex; "
+            f"check that data_root is the root of the full download."
+        )
+    import pandas as pd
     try:
-        import pandas as pd
-        df = pd.read_excel(xls_path)
-    except Exception:
-        return {}
+        return pd.read_excel(xls_path)
+    except ImportError as exc:
+        raise DemographicsUnavailableError(
+            f"cannot read {xls_path}: legacy .xls needs the 'xlrd' package "
+            f"(pip install xlrd). Without it every row would carry age = null. "
+            f"({exc})"
+        ) from exc
+    except Exception as exc:
+        raise DemographicsUnavailableError(
+            f"cannot read {xls_path}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _load_sc_demographics(xls_path: str) -> Dict[int, _SCDemo]:
+    df = _read_demographics_xls(xls_path)
     result: Dict[int, _SCDemo] = {}
     for _, row in df.iterrows():
         try:
@@ -116,13 +144,7 @@ def _load_sc_demographics(xls_path: str) -> Dict[int, _SCDemo]:
 
 
 def _load_st_demographics(xls_path: str) -> Dict[int, _STDemo]:
-    if not os.path.exists(xls_path):
-        return {}
-    try:
-        import pandas as pd
-        df = pd.read_excel(xls_path)
-    except Exception:
-        return {}
+    df = _read_demographics_xls(xls_path)
     result: Dict[int, _STDemo] = {}
     for _, row in df.iterrows():
         try:
@@ -157,8 +179,11 @@ def scan_sleep_edf_expanded_subjects(
     sc_xls = str(root / "SC-subjects.xls")
     st_xls = str(root / "ST-subjects.xls")
 
-    sc_demos = _load_sc_demographics(sc_xls)
-    st_demos = _load_st_demographics(st_xls)
+    # Each table is required only for the subset that is actually present.
+    sc_demos = (_load_sc_demographics(sc_xls)
+                if any(sc_dir.glob("SC*-PSG.edf")) else {})
+    st_demos = (_load_st_demographics(st_xls)
+                if any(st_dir.glob("ST*-PSG.edf")) else {})
 
     records: List[SubjectRecord] = []
 
@@ -231,6 +256,23 @@ def scan_sleep_edf_expanded_subjects(
                 condition=condition,
                 location=_ST_LOCATION,
             ))
+
+    # A table that was read but matched no subject (renamed columns, a
+    # different file) would be the same silent null as an unreadable one.
+    for subset, xls in (("cassette", sc_xls), ("telemetry", st_xls)):
+        rows = [r for r in records if r.subset == subset]
+        missing = sorted({r.subject_id for r in rows if r.age is None})
+        if rows and len(missing) == len({r.subject_id for r in rows}):
+            raise DemographicsUnavailableError(
+                f"{xls} was read but gave an age for none of the "
+                f"{len(missing)} {subset} subjects; expected one row per subject "
+                f"with 'subject'/'age'/'sex (F=1)' columns (cassette) or the "
+                f"telemetry layout."
+            )
+        if missing:
+            print(f"[sleep_edf_expanded] warning: no age/sex in {os.path.basename(xls)} "
+                  f"for {len(missing)} {subset} subject(s): {', '.join(missing)}",
+                  flush=True)
 
     records.sort(key=lambda r: r.recording_id)
     return records

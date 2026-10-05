@@ -22,11 +22,9 @@ cohort:
 
 acquisition:
   kind: internal
-  ref: null
-  note: >
-    Read from the preprocessed pickles this cohort was benchmarked on, which
-    is what the published embeddings and probes were built from. There is no
-    download path in this repository.
+  prepared_only: >
+    Not publicly released. The benchmark reads the authors' preprocessed pickle
+    (ArithmeticTask_preprocessed_*.pkl); set arithmetic_task.preprocessed_path to it.
 
 signal:
   notch_freq: 50.0
@@ -56,6 +54,7 @@ splits:
 
 runtime_defaults:
   batch_size: 64
+  preprocessed_path: null              # `config set arithmetic_task.preprocessed_path FILE`
   fold: 0
   n_folds: 5
   num_workers: 0

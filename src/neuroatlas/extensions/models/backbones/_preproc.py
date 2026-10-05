@@ -33,6 +33,34 @@ _ESAT_DATASETS = frozenset({
     "mros_raw_brain_age", "cfs_raw_2ch",
 })
 
+#: ``meta[i]["domain"]`` of a BCI trial. Every BCI reader stamps it (the MOABB
+#: reader, physionet_mi, cho2017, lee2019_mi, hinss2021 and the cognitive
+#: cohorts); :func:`is_bci_batch` reads it.
+BCI_DOMAIN = "bci"
+
+
+def is_bci_batch(meta: Optional[Sequence[Mapping[str, Any]]]) -> bool:
+    """Whether a batch holds BCI trials.
+
+    EEGPT, LaBraM, NeuroLM, NeuroGPT, REVE and SleepFM treat BCI trials the way
+    the pipeline behind the paper's BCI embeddings did (the BCI parity report,
+    ``git show 151f7f5:REPORT-BCI-Backbone-Changes.md``). That pipeline
+    (probe_bci_loso.py) stamped ``meta["dataset"] = "bci"`` on every batch,
+    and the wrappers keyed their BCI branches on it. The readers that replaced
+    it send the cohort's slug (``bnci2014_001``, ...) as ``dataset``, so none
+    of those branches ever ran -- SleepFM refused every BCI batch, EEGPT
+    applied CAR and the x1000 scale of the other domains, LaBraM returned its
+    200-d sleep embedding instead of the 400-d CLS + patch mean.
+
+    The signal is now explicit and separate from the slug: the readers set
+    ``meta["domain"] = "bci"``. ``dataset == "bci"`` still counts, so a batch
+    built the old way keeps its meaning.
+    """
+    if not meta:
+        return False
+    first = meta[0] or {}
+    return first.get("domain") == BCI_DOMAIN or first.get("dataset") == BCI_DOMAIN
+
 
 # ---------------------------------------------------------------------------
 # Sub-stage timing — gated by BACKBONE_TRACE env var. Each call to

@@ -19,12 +19,23 @@ Two steps, in order:
 Running it with no subcommand does both, over every dataset that has staging
 results.
 
-    python -m neuroatlas.entrypoints.hypnogram
-    python -m neuroatlas.entrypoints.hypnogram --datasets dod mass
-    python -m neuroatlas.entrypoints.hypnogram reconstruct \\
-        --results-dir artifacts/benchmarks/dod/sleep_stage/sklearn_linear \\
-        --group-by group --compute-metrics
-    python -m neuroatlas.entrypoints.hypnogram features --datasets isruc --no-summary
+Where it looks for a dataset's staging results (first match wins; pass
+--results-dir to name the directory yourself):
+
+  <output>/sleep_stage/<dataset>/          written by `neuroatlas run sleep_stage`
+  <output>/sleep_stage/<dataset>/<model>/  the same, one job per model (`submit`)
+  <output>/<dataset>/sleep_staging/        written by `neuroatlas probe --task sleep_staging`
+  <output>/<dataset>/.../sklearn_linear/   the layout of the paper's own runs
+
+<output> is the output root (the output_root setting, or $NEUROATLAS_OUTPUT_ROOT).
+Each results directory gets its hypnograms.json; the feature CSVs go to the
+output root unless --output-dir says otherwise.
+
+    neuroatlas hypnogram --datasets sleep_edf_expanded
+    neuroatlas hypnogram --datasets dod mass
+    neuroatlas hypnogram reconstruct \\
+        --results-dir <output>/sleep_stage/dod --group-by group --compute-metrics
+    neuroatlas hypnogram features --datasets isruc --no-summary
 
 Stage encoding is 0=W, 1=N1, 2=N2, 3=N3, 4=REM, at 30 s per epoch.
 """
@@ -256,6 +267,9 @@ def reconstruct_results_dir(
 #: are no longer in the registry, so nothing needs excluding by name.
 SK_EXCLUDE: Set[str] = set()
 
+#: The layout of the paper's own runs, relative to the output root. Still
+#: searched (last), and the list of datasets this verb knows; see
+#: ``candidate_results_dirs`` for where current runs put their results.
 DATASET_HYPNO_PATHS: Dict[str, str] = {
     "mass": "mass/sklearn_linear/hypnograms.json",
     "dcsm": "dcsm/sklearn_linear/hypnograms.json",
@@ -438,16 +452,23 @@ def compute_hypnogram_features(stages: np.ndarray, epoch_sec: int = EPOCH_SEC) -
 # Dataset processing
 # ---------------------------------------------------------------------------
 
-def process_dataset(dataset: str) -> List[Dict[str, Any]]:
-    rel = DATASET_HYPNO_PATHS.get(dataset)
-    if rel is None:
+def process_dataset(dataset: str, results_dirs: Optional[Sequence[Path]] = None) -> List[Dict[str, Any]]:
+    """Feature rows from the hypnograms.json in each of *results_dirs*
+    (default: where ``staging_results_dirs`` finds this dataset's results)."""
+    if dataset not in DATASET_HYPNO_PATHS:
         logger.warning("unknown dataset: %s", dataset)
         return []
-    path = output_dir() / rel
-    if not path.exists():
-        logger.warning("skipping %s: %s not found", dataset, path)
+    dirs = list(results_dirs) if results_dirs is not None else staging_results_dirs(dataset)
+    paths = [d / "hypnograms.json" for d in dirs if (d / "hypnograms.json").exists()]
+    if not paths:
+        looked = dirs or candidate_results_dirs(dataset)
+        logger.warning("skipping %s: no hypnograms.json in %s", dataset,
+                       ", ".join(str(d) for d in looked))
         return []
-    return rows_from_hypnograms(path, dataset)
+    rows: List[Dict[str, Any]] = []
+    for path in paths:
+        rows.extend(rows_from_hypnograms(path, dataset))
+    return rows
 
 
 def rows_from_hypnograms(path: Path, dataset: str) -> List[Dict[str, Any]]:
@@ -640,15 +661,57 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _results_dir_for(dataset: str) -> Path:
-    """Where this dataset's probe results live, from the known layout."""
-    rel = DATASET_HYPNO_PATHS[dataset]
-    return output_dir() / Path(rel).parent
+STAGING_BENCHMARK = "sleep_stage"
+STAGING_TASK = "sleep_staging"
+
+
+def candidate_results_dirs(dataset: str, root: Optional[Path] = None) -> List[Path]:
+    """Every place a dataset's staging results may be, in the order searched.
+
+    `run sleep_stage` writes <output>/sleep_stage/<dataset>/ (run.result_dir),
+    the probe verb <output>/<dataset>/sleep_staging/ (its default
+    output_dir(slug, task)), and the paper's runs the DATASET_HYPNO_PATHS
+    layout. *root* is the output root (default: the configured one).
+    """
+    root = Path(root) if root is not None else output_dir()
+    out = [root / STAGING_BENCHMARK / dataset, root / dataset / STAGING_TASK]
+    if dataset in DATASET_HYPNO_PATHS:
+        out.append(root / Path(DATASET_HYPNO_PATHS[dataset]).parent)
+    return out
+
+
+def staging_results_dirs(dataset: str, root: Optional[Path] = None) -> List[Path]:
+    """The directories holding this dataset's staging results.json: the first
+    layout of ``candidate_results_dirs`` that has any. The per-model folders
+    `submit` writes (<output>/sleep_stage/<dataset>/<model>/) count as one."""
+    for i, cand in enumerate(candidate_results_dirs(dataset, root)):
+        if (cand / "results.json").is_file():
+            return [cand]
+        if i == 0:
+            per_model = sorted(p.parent for p in cand.glob("*/results.json"))
+            if per_model:
+                return per_model
+    return []
 
 
 def run_reconstruct(args, datasets: Sequence[str]) -> int:
-    dirs: List[Path] = ([Path(args.results_dir)] if args.results_dir
-                        else [_results_dir_for(d) for d in datasets])
+    if args.results_dir:
+        dirs: List[Path] = [Path(args.results_dir)]
+    else:
+        dirs = []
+        for ds in datasets:
+            found = staging_results_dirs(ds)
+            if found:
+                dirs.extend(found)
+            elif args.dry_run:
+                dirs.append(candidate_results_dirs(ds)[0])
+            else:
+                logger.warning(
+                    "%s: no staging results.json in any of %s -- run `neuroatlas run "
+                    "sleep_stage --dataset %s` first, or pass --results-dir",
+                    ds, ", ".join(str(c) for c in candidate_results_dirs(ds)), ds)
+        if not dirs:
+            return 1
     failed = 0
     for d in dirs:
         out = Path(args.output) if args.output else d / "hypnograms.json"
@@ -670,14 +733,16 @@ def run_reconstruct(args, datasets: Sequence[str]) -> int:
 
 def run_features(args, datasets: Sequence[str]) -> int:
     out_dir = Path(args.output_dir) if args.output_dir else output_dir()
+    given = [Path(args.results_dir)] if getattr(args, "results_dir", None) else None
     if args.dry_run:
         for d in datasets:
-            print(f"features {_results_dir_for(d)}/hypnograms.json")
+            for r in given or staging_results_dirs(d) or candidate_results_dirs(d)[:1]:
+                print(f"features {r}/hypnograms.json")
         print(f"-> {out_dir}/hypnogram_features.csv")
         return 0
     rows: List[Dict[str, Any]] = []
     for ds in datasets:
-        rows.extend(process_dataset(ds))
+        rows.extend(process_dataset(ds, given))
     if not rows:
         logger.error("no hypnograms found — run the reconstruct step first")
         return 1

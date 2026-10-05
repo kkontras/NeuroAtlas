@@ -130,7 +130,19 @@ def _load_metadata(data_root: Path) -> Dict[int, Dict[str, Any]]:
     meta: Dict[int, Dict[str, Any]] = {}
     datasets_dir = data_root / "datasets"
 
-    for csv_path in sorted(datasets_dir.glob("mros-visit*-harmonized-*.csv")):
+    csvs = sorted(datasets_dir.glob("mros-visit*-harmonized-*.csv"))
+    # The harmonized CSVs are the only source of age; without them every
+    # recording is dropped as subject-less and the failure surfaced later as a
+    # cross-validation error about folds.
+    if not csvs:
+        raise FileNotFoundError(
+            f"MrOS demographics not found: no mros-visit*-harmonized-*.csv under "
+            f"{datasets_dir}. They ship with the NSRR download (datasets/) and are "
+            f"the only source of age and sex. "
+            f"Check that data_root={data_root} is the MrOS root "
+            f"(the polysomnography/ EDFs next to datasets/)."
+        )
+    for csv_path in csvs:
         visit_match = re.search(r"visit(\d+)", csv_path.name)
         visit = int(visit_match.group(1)) if visit_match else 0
         df = pd.read_csv(csv_path)

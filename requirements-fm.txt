@@ -9,8 +9,21 @@
 # 2. pip install -r requirements-fm.txt
 # 3. optionally add -r requirements-dev.txt
 #
-# MOABB is NOT here: the 14 MOABB BCI cohorts import it lazily, and the paper's
-# runs read preprocessed pickles instead. `pip install -e .[bci]` adds it.
+# MOABB is NOT here: the 14 MOABB BCI cohorts import it lazily. For them,
+# after this file:
+#     pip install -e ".[bci]"                 # moabb's runtime deps that fit these pins
+#     pip install --no-deps "moabb==1.2.0"    # the last moabb on numpy<2
+# Every later moabb needs numpy>=2. 1.2.0 declares scikit-learn<1.6,
+# urllib3<2 and seaborn<0.13, which this stack exceeds; with --no-deps they
+# are not enforced (it runs: BNCI2014_001/004 trials come out bit-identical to
+# moabb 1.7.2's), and `pip check` lists them. The two paper cohorts newer than
+# 1.2.0, Dreyer2023 and Kim2025BetaRange, are vendored in the package.
+#
+# The generic time-series FMs: `pip install -e ".[ts]"` (chronos-forecasting),
+# then `pip install --no-deps "momentfm==0.1.4"` -- momentfm declares
+# transformers==4.33.3 / numpy==1.25.2 / huggingface-hub==0.24.0 and would
+# downgrade this stack; it runs with it, but `pip check` lists those three
+# declared pins. Moirai needs requirements-tsfm.txt (a separate environment).
 
 numpy==1.26.4
 scipy==1.15.3
@@ -49,4 +62,10 @@ physioex==1.0.9
 huggingface-hub==0.36.0
 transformers==4.57.1
 timm==1.0.22
+
+# Sleep-EDF ships its subject table (ages) as legacy .xls; without xlrd every
+# window's age is null and brain age on Sleep-EDF fails.
+xlrd==2.0.2
+# ISRUC's subject table is .xlsx, read with engine="openpyxl".
+openpyxl==3.1.5
 

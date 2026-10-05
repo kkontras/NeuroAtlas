@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: sz1
-name: Sz1
+name: SeizeIT1
 domain: epilepsy
 paper_dataset: true
 
@@ -25,6 +25,9 @@ cohort:
 
 acquisition:
   kind: internal
+  note: >
+    The SeizeIT1 recordings this reader expects (<path>/<patient>/...) are the
+    authors' internal copy.
 
 signal:
   montage: unipolar
@@ -41,10 +44,15 @@ labels:
 
 splits:
   manifest_note: >
-    This cohort ships a frozen fold manifest, so the split is a file
-    rather than a computation. The other epilepsy cohorts derive theirs
-    at load time — see their splits.derivation.
+    The paper's folds, frozen: the paper's epilepsy probe drew them over 60
+    subjects stratified on "has any seizure window" (42 do). Both backends
+    read this file (adapters/sz1.py _resolve_splits); the EDF reader cannot
+    see seizure presence without reading every annotation, and its own
+    splitter, which saw one class, drew other folds. --set
+    folds_manifest=none derives folds with that splitter instead (needed
+    for a fold count other than 5; not the paper's folds).
   manifest: folds.json
+  derived_by: src/neuroatlas/extensions/datasets/adapters/sz1.py  # _resolve_splits
   grouping: patient
   n_folds: 5
 

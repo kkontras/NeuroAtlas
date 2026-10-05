@@ -182,6 +182,42 @@ def make_sequential_collate(
     return _collate
 
 
+def rows_per_labelled_epoch(values: torch.Tensor, batch) -> torch.Tensor:
+    """``values`` (one vector per epoch the model saw) as one row per *labelled* epoch.
+
+    The rows must line up with ``batch["label"]`` and ``batch["meta"]``, which
+    is what the embedding cache stores side by side. A batch from
+    :class:`SequentialDataModuleWrapper` holds ``B`` windows of ``W`` epochs
+    (raw ``eeg`` ``(B, W, C, T)``; STFT ``(B, W, mod, ch, f, t)``), and the
+    model hands back ``B * W`` epoch vectors, window-major. With
+    ``_seq_target_idx == "all"`` (CoRe-Sleep) every epoch of every window is
+    labelled, so all ``B * W`` rows are kept in that order; with an integer
+    target (SleepTransformer's centre epoch) only that epoch of each window is.
+    Anything else is one window per row.
+
+    Flattening the window axis into the feature axis instead -- one
+    ``W * dim`` row per window -- was the CoRe-Sleep row-count bug: 21,807
+    feature rows against 457,947 label/meta rows on Sleep-EDF.
+    """
+    signals = batch.get("signals") or {}
+    x, seq_ndim = signals.get("eeg"), 4
+    if x is None:
+        x, seq_ndim = signals.get("stft_eeg"), 6
+    if x is None or x.ndim != seq_ndim:
+        return values.reshape(values.shape[0], -1)
+    n_windows, window = int(x.shape[0]), int(x.shape[1])
+    if values.numel() % (n_windows * window):
+        raise ValueError(
+            f"{tuple(values.shape)} model outputs cannot be split into {n_windows} "
+            f"windows of {window} epochs."
+        )
+    values = values.reshape(n_windows, window, -1)
+    target = batch.get("_seq_target_idx", "all")
+    if target is None or target == "all":
+        return values.reshape(n_windows * window, -1)
+    return values[:, int(target) % window, :]
+
+
 # ---------------------------------------------------------------------------
 # Loader proxy
 # ---------------------------------------------------------------------------

@@ -318,3 +318,55 @@ def load_recording_stats(path, fingerprint: Dict[str, Any]) -> Dict[str, Any] | 
         return out
     finally:
         z.close()
+
+
+# ---------------------------------------------------------------------------
+# Where the readers keep them
+# ---------------------------------------------------------------------------
+
+def _legacy_stats_paths(reader: str, filename: str):
+    """Where earlier versions wrote a reader's stats: ``artifacts/
+    recording_stats/<reader>/`` relative to the directory a command ran in,
+    and the same under a source checkout."""
+    from neuroatlas._paths import checkout_root
+
+    rel = _Path("artifacts") / "recording_stats" / reader / filename
+    seen = []
+    for base in (_Path.cwd(), checkout_root()):
+        if base is None:
+            continue
+        path = (base / rel).resolve()
+        if path not in seen:
+            seen.append(path)
+    return seen
+
+
+def load_cached_recording_stats(reader: str, filename: str, fingerprint: Dict[str, Any]):
+    """``(stats or None, path)`` for one recording of *reader*.
+
+    *path* is ``<cache root>/recording_stats/<reader>/<filename>``
+    (``_paths.recording_stats_dir``), where a reader saves what it computes.
+    On a miss there, a file an earlier version left in ``artifacts/
+    recording_stats`` (current directory, or the checkout) with a matching
+    fingerprint is used and copied to *path*; otherwise the caller computes.
+    """
+    import shutil
+
+    from neuroatlas._paths import recording_stats_dir
+
+    path = recording_stats_dir(reader, filename)
+    stats = load_recording_stats(path, fingerprint)
+    if stats is not None:
+        return stats, path
+    for legacy in _legacy_stats_paths(reader, filename):
+        if legacy == path.resolve():
+            continue
+        stats = load_recording_stats(legacy, fingerprint)
+        if stats is not None:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy, path)
+            except OSError:
+                pass
+            return stats, path
+    return None, path

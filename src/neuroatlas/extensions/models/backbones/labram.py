@@ -47,6 +47,7 @@ from ._preproc import (
     StageTimer,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     read_sampling_rate,
     resample_poly_with_fallback,
     snap_to_epoch_length,
@@ -481,10 +482,12 @@ class LabramBackbone(BenchmarkBackbone):
             self._model = self._build_model(C)
             self._model_n_chans = C
 
-        dataset = meta[0].get("dataset") if meta else None
+        bci = is_bci_batch(meta)
         with StageTimer("labram", "forward"):
             with torch.inference_mode():
-                if dataset == "bci":
+                # BCI parity: the BCI reference embeddings are 400-d, the CLS
+                # token next to the mean of the patch tokens.
+                if bci:
                     tokens = self._model.forward_features(
                         x, input_chans=input_chans, return_all_tokens=True,
                     )
@@ -508,6 +511,7 @@ class LabramBackbone(BenchmarkBackbone):
             "dropped_channels": dropped,
             "apply_amplitude_scale": overrides["apply_amplitude_scale"],
             "apply_recording_normalization": overrides["apply_recording_normalization"],
+            "embedding_extractor": "cls_concat_patch_token_mean" if bci else "fc_norm_of_patch_token_mean",
         }
         self._log_banner_once(C, overrides["apply_amplitude_scale"])
         with StageTimer("labram", "d2h"):
@@ -579,9 +583,7 @@ class LabramBackbone(BenchmarkBackbone):
             )
             if tokens.ndim == 2:
                 return tokens.unsqueeze(1).detach().cpu().numpy()
-            meta = batch.get("meta", [{}])
-            is_bci = meta[0].get("dataset") == "bci" if meta else False
-            if is_bci:
+            if is_bci_batch(batch.get("meta")):
                 return tokens.reshape(tokens.shape[0], -1).detach().cpu().numpy()
             patch_tokens = tokens[:, 1:, :]  # exclude CLS
         return patch_tokens.detach().cpu().numpy()

@@ -13,7 +13,7 @@ import torch
 
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 
-from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE
+from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE, _install_hint
 
 
 class ChronosBackbone(UnivariateTimeSeriesBackbone):
@@ -23,8 +23,7 @@ class ChronosBackbone(UnivariateTimeSeriesBackbone):
             from chronos import ChronosPipeline
         except ImportError as exc:
             raise ImportError(
-                "chronos-forecasting is required for Chronos. "
-                "Install: pip install chronos-forecasting"
+                "chronos-forecasting is required for Chronos. Install: " + _install_hint("chronos")
             ) from exc
 
         hf_id = spec.checkpoint_path or "amazon/chronos-t5-base"

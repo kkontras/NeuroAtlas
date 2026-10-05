@@ -38,7 +38,7 @@ import pandas as pd
 from braindecode.datasets import BaseConcatDataset, WindowsDataset
 from braindecode.datasets.moabb import MOABBDataset
 from braindecode.preprocessing import Preprocessor, preprocess
-from neuroatlas._paths import data_dir
+from neuroatlas._paths import prepared_dir
 
 # ---------------------------------------------------------------------------
 # Per-dataset constants
@@ -1255,9 +1255,71 @@ for _slug, _name, _subj, _chs, _ev, _tgt, _sf, _notch, _tmin, _tmax, _tdur in _B
 
 from pathlib import Path as _Path
 
-_DATA_DIR = data_dir("preprocessed")
+# Built by `neuroatlas data prepare`: <cache root>/prepared/<Name>/... (it was
+# <checkout>/data/preprocessed, inside the source tree). The table below is
+# written against a placeholder for that folder, and every read resolves it
+# against the cache root as it is *then*: it used to be resolved at import,
+# so a process that changed the cache root afterwards (a test, an API user,
+# `config set` in the same session) still looked in the old one.
+_PREPARED_TOKEN = "@prepared@"
+_DATA_DIR = _Path(_PREPARED_TOKEN)
 
-PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = {
+
+def _resolve_prepared(path: str) -> str:
+    if path.startswith(_PREPARED_TOKEN):
+        return str(prepared_dir()) + path[len(_PREPARED_TOKEN):]
+    return path
+
+
+class _SearchPaths(dict):
+    """``{slug: [candidate path, ...]}``; reads resolve the prepared folder
+    against the current cache root (see ``_PREPARED_TOKEN``)."""
+
+    def __getitem__(self, key):
+        return [_resolve_prepared(p) for p in super().__getitem__(key)]
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+    def values(self):
+        return [self[k] for k in self]
+
+    def items(self):
+        return [(k, self[k]) for k in self]
+
+
+class _FirstPaths:
+    """``{slug: first candidate}`` over :data:`PREPROCESSED_SEARCH_PATHS`."""
+
+    def __init__(self, search):
+        self._search = search
+
+    def __getitem__(self, key):
+        return self._search[key][0]
+
+    def get(self, key, default=None):
+        return self[key] if key in self._search else default
+
+    def __contains__(self, key):
+        return key in self._search
+
+    def __iter__(self):
+        return iter(self._search)
+
+    def __len__(self):
+        return len(self._search)
+
+    def keys(self):
+        return self._search.keys()
+
+    def items(self):
+        return [(k, self[k]) for k in self._search]
+
+    def values(self):
+        return [self[k] for k in self._search]
+
+
+PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = _SearchPaths({
     # Cognitive/affective cohorts: <Dataset>_preprocessed_<variant>.pkl, the
     # naming their preprocess_*.py writes. steegformer first only because it is
     # the smallest; any variant carries the same signal.
@@ -1356,7 +1418,7 @@ PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = {
         str(_DATA_DIR / "Hinss2021" / "Hinss2021_preprocessed.pkl"),
         str(_DATA_DIR / "Hinss2021" / "Hinss2021_preprocessed_2s.pkl"),
     ],
-}
+})
 
 # Broad MI sweep: auto-register repo-local search paths for each (slug, variant).
 # cbramod/reve/eegpt fall back to labram-preprocessed files (same sfreq).
@@ -1444,10 +1506,9 @@ for _slug, _dir_name in _SSVEP_DIR_NAMES.items():
             _paths.append(str(_DATA_DIR / _dir_name / f"{_dir_name}_preprocessed_{_fb}.pkl"))
         PREPROCESSED_SEARCH_PATHS[_key] = _paths
 
-# Legacy alias — first path in the search list (for code that reads this directly).
-PREPROCESSED_PATHS: Dict[str, str] = {
-    slug: paths[0] for slug, paths in PREPROCESSED_SEARCH_PATHS.items()
-}
+# Legacy alias — first path in the search list (for code that reads this
+# directly), resolved on read like the search list itself.
+PREPROCESSED_PATHS: Dict[str, str] = _FirstPaths(PREPROCESSED_SEARCH_PATHS)
 
 
 def _load_preprocessed_mat(path: str) -> Dict[str, Any]:
@@ -1572,7 +1633,14 @@ def load_and_preprocess(
         A braindecode windowed dataset ready for iteration.
     """
     subjects = list(subject_ids) if subject_ids is not None else list(cfg.subjects)
-    dataset = MOABBDataset(dataset_name=cfg.moabb_name, subject_ids=subjects)
+    from neuroatlas.extensions.datasets.dataio.moabb_loader import (
+        moabb_dataset_arg,
+        no_download_when_offline,
+    )
+
+    with no_download_when_offline(cfg.moabb_name.lower()):
+        dataset = MOABBDataset(dataset_name=moabb_dataset_arg(cfg.moabb_name),
+                               subject_ids=subjects)
 
     # --- Preprocessing pipeline ---
     notch_freqs = np.arange(cfg.notch_freq, cfg.native_sfreq / 2, cfg.notch_freq)

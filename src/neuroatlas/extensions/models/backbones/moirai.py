@@ -22,7 +22,7 @@ import torch
 
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 
-from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE
+from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE, _install_hint
 
 # Default patch size per model size (from MOIRAI paper).
 _SIZE_PATCH = {"small": 32, "base": 32, "large": 64}
@@ -35,7 +35,7 @@ class MoiraiBackbone(UnivariateTimeSeriesBackbone):
             from uni2ts.model.moirai import MoiraiModule
         except ImportError as exc:
             raise ImportError(
-                "uni2ts is required for MOIRAI. Install: pip install uni2ts"
+                "uni2ts is required for MOIRAI. " + _install_hint("moirai")
             ) from exc
 
         hf_id = spec.checkpoint_path or "Salesforce/moirai-1.1-R-small"

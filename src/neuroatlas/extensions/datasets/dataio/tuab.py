@@ -32,12 +32,16 @@ from torch.utils.data import Dataset
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 from pathlib import Path as _Path
 
-_TUAB_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/tuab")
+# Per-recording stats live in <cache root>/recording_stats/tuab/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/tuab under the current directory.
+_STATS_READER = "tuab"
 from neuroatlas.extensions.datasets.epilepsy._common import (
     apply_standard_filters,
 )
@@ -215,9 +219,16 @@ class TuabEdfDataset(Dataset):
         if montage_filter is not None:
             allowed = set(montage_filter)
             recs = [r for r in recs if r.get("montage_type") in allowed]
+        positions = list(range(len(recs)))
         if recording_indices is not None:
             keep = set(int(i) for i in recording_indices)
-            recs = [r for i, r in enumerate(recs) if i in keep]
+            positions = [i for i in positions if i in keep]
+            recs = [recs[i] for i in positions]
+        # Each kept recording's position in the (montage-filtered)
+        # ``recordings`` -- the index the adapter's folds are written in --
+        # published as meta["recording_idx"] so a global embedding cache can
+        # be split into folds.
+        self._source_positions: List[int] = positions
 
         if not recs:
             raise RuntimeError(
@@ -311,16 +322,16 @@ class TuabEdfDataset(Dataset):
             # (no suffix) are still honoured for backward compat.
             rec_id = self._recordings[rec_idx]["recording_id"]
             if self._montage == "bipolar":
-                disk_path = _TUAB_STATS_CACHE_ROOT / f"{rec_id}_bipolar.npz"
+                stats_file = f"{rec_id}_bipolar.npz"
             else:
-                disk_path = _TUAB_STATS_CACHE_ROOT / f"{rec_id}.npz"
+                stats_file = f"{rec_id}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(signals.shape[0]),
                 "filters": _FILTER_TAG,
                 "montage": self._montage,
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 if self._montage == "bipolar":
                     # signals is (T, 19); compute stats on the emitted (20, T)
@@ -368,6 +379,7 @@ class TuabEdfDataset(Dataset):
         meta: Dict[str, Any] = {
             "dataset": "tuab",
             "recording_id": rec["recording_id"],
+            "recording_idx": self._source_positions[rec_idx],
             "subject_id": rec["subject_id"],
             "session_id": rec["session_id"],
             "split": rec["split"],

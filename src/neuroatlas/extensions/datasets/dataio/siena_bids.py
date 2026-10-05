@@ -21,12 +21,16 @@ from torch.utils.data import Dataset
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 from pathlib import Path as _Path
 
-_SIENA_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/siena_bids")
+# Per-recording stats live in <cache root>/recording_stats/siena_bids/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/siena_bids under the current directory.
+_STATS_READER = "siena_bids"
 from neuroatlas.extensions.datasets.dataio._bids_participants import (
     load_bids_participants,
 )
@@ -268,13 +272,13 @@ class SienaBIDSDataset(Dataset):
         # BIOT all see (C_emit,) stats matching meta["channels"]. Disk cache
         # keyed by montage so unipolar and bipolar variants both persist.
         if rec_index not in self._rec_stats_cache:
-            disk_path = _SIENA_STATS_CACHE_ROOT / f"{rec.recording_id}_{self._montage}.npz"
+            stats_file = f"{rec.recording_id}_{self._montage}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(all_signals.shape[1]),
                 "montage": self._montage,
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 if self._montage == "bipolar":
                     bipolar_full = bipolar_from_unipolar(all_signals)  # (20, T)

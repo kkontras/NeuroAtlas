@@ -25,9 +25,12 @@ acquisition:
   kind: moabb
   ref: bi2014a
   note: >
-    Downloaded by MOABB itself on first use, into its own cache
-    (~/mne_data by default). `fetch` does not need to do anything.
+    `neuroatlas data download bi2014a` has MOABB fetch it into
+    $MNE_DATA (`neuroatlas config show` prints the folder).
   checksum: TBD              # MOABB verifies its own downloads
+  nemar: nm000244                         # moabb 1.7: bi2014a downloads NEMAR/nm000244
+  size_gb: 2.18                         # NEMAR manifest, sourcedata/ (what MOABB fetches; 2026-10-02)
+  moabb_folder: MNE-braininvaders2014a-data   # where moabb 1.2.0 keeps it under $MNE_DATA (1.6+: NEMAR/<id>)
 
 signal:
   montage: as-published      # MOABB returns the dataset's own channel set

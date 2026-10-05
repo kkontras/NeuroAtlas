@@ -9,22 +9,68 @@ as the command does.
     api.run_benchmark("sleep_stage", "biot_pretrained", debug=True)
     api.results("sleep_stage")                                   # = results
     api.leaderboard(suite="single")["global"]                    # = leaderboard
+
+Every table has exactly the columns of the command's ``--format json``
+(``dataset``, ``model``, ``n_benchmarks``, ``not_applicable``, ``note``, ...),
+and a missing number is ``None`` (NaN once pandas makes a float column of it),
+never "n/a".
+
+The offline rule holds here as on the command line: no function downloads.
+``check`` and ``run_benchmark`` run with downloads switched off
+(``NEUROATLAS_OFFLINE=1`` for the duration of the call, unless you set it
+yourself), so a model whose weights are not here is refused at once, by name,
+instead of fetched. ``run_benchmark(..., online=True)`` is
+``neuroatlas --online run``: it fetches a missing checkpoint. Fetch data and
+weights with ``neuroatlas data download`` / ``neuroatlas models download``.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+import contextlib as _contextlib
+import os as _os
+from dataclasses import asdict as _asdict
+from pathlib import Path as _Path
+from typing import Any as _Any, Dict as _Dict, List as _List, Optional as _Optional, \
+    Sequence as _Sequence
 
 from neuroatlas import config as _config
 
+__all__ = ["benchmarks", "models", "data_status", "plan", "check", "run_benchmark",
+           "results", "leaderboard"]
+
 _config.apply_to_environ()
 
+#: The variables that switch neuroatlas's own downloads off: the weights
+#: pre-flight of `run` (config.is_offline) and the checkpoint downloader
+#: (backbones/_checkpoint_download.downloads_off) read them on every call.
+#: HF_HUB_OFFLINE is not toggled here: huggingface_hub reads it once, at its
+#: import, so a per-call value would stick to the whole Python session; the
+#: pre-flight refuses a model whose hub weights are not cached before any
+#: hub call is made.
+_OFFLINE_VARS = ("NEUROATLAS_OFFLINE", "EEGBENCH_OFFLINE")
 
-def _frame(rows: List[Dict[str, Any]]):
+
+@_contextlib.contextmanager
+def _downloads(online: bool = False):
+    """Downloads off for one call (the offline rule), unless *online*; the
+    environment is left as it was found. A variable you set yourself wins
+    either way, as on the command line."""
+    if online:
+        yield
+        return
+    added = [var for var in _OFFLINE_VARS if var not in _os.environ]
+    for var in added:
+        _os.environ[var] = "1"
+    try:
+        yield
+    finally:
+        for var in added:
+            _os.environ.pop(var, None)
+
+
+def _frame(rows: _List[_Dict[str, _Any]], columns: _Optional[_Sequence[str]] = None):
     import pandas as pd
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=list(columns) if columns and not rows else None)
 
 
 def benchmarks():
@@ -35,82 +81,145 @@ def benchmarks():
                     "task": b.task, "headline": b.metrics.headline,
                     "higher_is_better": b.metrics.higher_is_better,
                     "single": b.single, "datasets": [e.slug for e in b.datasets],
-                    "planned": [p["name"] for p in b.planned]}
+                    "planned_datasets": [p["name"] for p in b.planned]}
                    for b in catalog.catalog().values()])
 
 
-def models(selector: str = "all"):
-    """Checkpoints a selector names, with where their weights stand."""
-    from neuroatlas import models as ms, selectors
-    from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
+#: `models status -v --format json`'s fields, in its order.
+MODEL_COLUMNS = ("checkpoint", "source", "state", "path", "note")
 
-    by_id = {s.identifier: s for s in checkpoint_registry()}
+
+def models(selector: str = "all"):
+    """`models status -v`: where each checkpoint's weights stand, with the
+    notes the command prints under a row (how to get them, what is missing)."""
+    from neuroatlas import models as ms
+    from neuroatlas.cli.models import _specs
+
     rows = []
-    for i in selectors.resolve_models(selector):
-        st = ms.status(by_id[i])
-        rows.append({"checkpoint": i, "family": st.family, "source": st.source,
-                     "state": st.state, "path": st.path})
-    return _frame(rows)
+    for spec in _specs(selector):
+        st = ms.status(spec)
+        rows.append({"checkpoint": st.identifier, "source": st.source, "state": st.state,
+                     "path": st.path or None, "note": "; ".join(st.notes) or None})
+    return _frame(rows, MODEL_COLUMNS)
 
 
 def data_status(*targets: str):
-    """`data status`: is each dataset of these benchmarks / datasets here."""
+    """`data status --format json`: is each dataset of these benchmarks /
+    datasets / domains here (default: every dataset)."""
     from neuroatlas import data
-    from neuroatlas.cli.data import expand_targets
+    from neuroatlas.cli.data import _row, expand_targets
 
-    return _frame([{**asdict(data.status(s)), "found": data.status(s).found}
-                   for s in expand_targets(list(targets))])
+    return _frame([_row(data.status(slug), verbose=False, machine=True)
+                   for slug in expand_targets(list(targets))])
+
+
+def _plan_rows(plans, restricted: bool = False) -> _List[_Dict[str, _Any]]:
+    from neuroatlas.cli.run import _incomplete, plan_notes, plan_row
+
+    refused = _incomplete(plans)
+    return [{**plan_row(p, restricted), "note": "; ".join(plan_notes(p, p in refused)) or None}
+            for p in plans]
 
 
 def plan(benchmark: str, models: str, datasets: str = "single", variant: str = "default",
-         debug: bool = False):
+         debug: bool = False, output_root: _Optional[str] = None):
+    """`run --dry-run --format json`: one row per dataset."""
     from neuroatlas import run
 
-    return _frame([{"benchmark": p.benchmark, "dataset": p.dataset, "task": p.task,
-                    "models": p.models, "n_models": len(p.models), "folds": p.folds,
-                    "n_runs": p.n_runs, "data": p.data, "not_applicable": p.skipped,
-                    "output": str(p.output)}
-                   for p in run.plan(benchmark, models, datasets, variant, debug=debug)])
+    return _frame(_plan_rows(run.plan(benchmark, models, datasets, variant, debug=debug,
+                                      output_root=_Path(output_root) if output_root else None),
+                             restricted=debug))
 
 
 def check(benchmark: str, models: str, datasets: str = "single", variant: str = "default"):
+    """`check`: one row per (dataset, model), as `check --format json`.
+    Downloads nothing (nor does the command)."""
     from neuroatlas.check import check as _check
+    from neuroatlas.cli.check import _row
 
-    return _frame([asdict(p) for p in _check(benchmark, models, datasets, variant)])
+    with _downloads(online=False):
+        pairs = _check(benchmark, models, datasets, variant)
+    return _frame([{**_row(p), "note": "; ".join(p.notes) or None} for p in pairs])
 
 
 def run_benchmark(benchmark: str, models: str, datasets: str = "single",
                   variant: str = "default", *, debug: bool = False,
-                  limit_batches: Optional[int] = None, cache_root: Optional[str] = None):
-    """Run it here and return its results table (`results`)."""
+                  limit_batches: _Optional[int] = None, cache_root: _Optional[str] = None,
+                  output_root: _Optional[str] = None, online: bool = False):
+    """Run it here and return the results of *this* run's datasets, models and
+    variant (`results`, filtered), read from ``output_root`` (default: the
+    configured one).
+
+    ``online=False`` (default): downloads off, as `neuroatlas run`; a model
+    whose weights are not here is reported failed, by name, and the others
+    run. ``online=True``: as `neuroatlas --online run`, a missing checkpoint
+    is fetched."""
     from neuroatlas import run
 
-    plans = run.plan(benchmark, models, datasets, variant, debug=debug)
-    run.execute(plans, cache_root=Path(cache_root) if cache_root else None,
-                limit_batches=limit_batches)
-    return results(benchmark)
+    root = _Path(output_root) if output_root else None
+    plans = run.plan(benchmark, models, datasets, variant, debug=debug, output_root=root)
+    with _downloads(online):
+        run.execute(plans, cache_root=_Path(cache_root) if cache_root else None,
+                    limit_batches=limit_batches)
+    if limit_batches is not None:
+        # execute put this run's results under <root>/_limited (a truncated
+        # extraction never lands beside real results)
+        root_text = str(plans[0].output_base) if plans and plans[0].output_base else output_root
+    else:
+        root_text = output_root
+    table = results(benchmark, output_root=root_text, variant=variant)
+    pairs = {(p.dataset, m) for p in plans for m in [*p.models, *p.skipped]}
+    if table.empty:
+        return table
+    keep = [(d, m) in pairs for d, m in zip(table["dataset"], table["model"])]
+    return table[keep].reset_index(drop=True)
 
 
-def results(benchmark: str, paths: Optional[Sequence[str]] = None):
-    """One row per (dataset, model): headline mean/std over folds, normalised, secondary."""
-    from neuroatlas import results as res
+def results(benchmark: str, paths: _Optional[_Sequence[str]] = None,
+            output_root: _Optional[str] = None, variant: _Optional[str] = None):
+    """One row per (dataset, variant, model), as `results --format json`:
+    headline mean/std over the folds that succeeded, folds out of the
+    protocol's, normalised score, failures, and the secondary metrics.
+    ``variant``: that variant's rows only (default: every variant)."""
+    from neuroatlas import catalog, results as res
+    from neuroatlas.cli.results import _folds_text, _failure_lines
 
-    summaries, _ = res.benchmark_summary(benchmark, paths)
+    bench = catalog.load(benchmark)
+    summaries, _ = res.benchmark_summary(benchmark, paths,
+                                         _Path(output_root) if output_root else None,
+                                         variant=variant)
     rows = []
     for s in summaries:
-        row = {k: v for k, v in asdict(s).items() if k != "secondary"}
+        row = {"benchmark": bench.name, "metric": bench.metrics.headline,
+               "dataset": s.dataset, "variant": s.variant, "model": s.model, "status": s.status,
+               "mean": s.mean, "std": s.std, "folds": _folds_text(s), "n_folds": s.n_folds,
+               "n_expected": s.n_expected, "n_failed": s.n_failed, "normalized": s.normalized,
+               "failures": s.failures, "errors": s.errors,
+               "note": "; ".join(_failure_lines(s)) or None}
         row.update(s.secondary)
         rows.append(row)
-    return _frame(rows)
+    return _frame(rows, ["benchmark", "metric", "dataset", "variant", "model", "status",
+                         "mean", "std"])
 
 
-def leaderboard(benchmarks: Optional[Sequence[str]] = None, suite: str = "full",
-                paths: Optional[Sequence[str]] = None) -> Dict[str, Any]:
-    """{"global": ranking table, "per_benchmark": model x benchmark mean ranks}."""
+def leaderboard(benchmarks: _Optional[_Sequence[str]] = None, suite: str = "full",
+                paths: _Optional[_Sequence[str]] = None,
+                output_root: _Optional[str] = None,
+                variant: str = "default") -> _Dict[str, _Any]:
+    """{"global": ranking table (as `leaderboard --format json`),
+    "per_benchmark": model x benchmark mean ranks}. Ranks *variant*'s results
+    (default: the default variant, as the command)."""
     import pandas as pd
 
     from neuroatlas import results as res
 
-    rows, per_bench = res.leaderboard(benchmarks, suite, paths)
-    return {"global": _frame([asdict(r) for r in rows]),
+    rows, per_bench = res.leaderboard(benchmarks, suite, paths,
+                                      _Path(output_root) if output_root else None,
+                                      variant=variant)
+    table = []
+    for r in rows:
+        row = {**_asdict(r), "suite": suite, "variant": variant}
+        row["partial_folds"] = row.pop("partial")
+        table.append(row)
+    return {"global": _frame(table, ["model", "mean_rank", "normalized", "n_benchmarks"]),
             "per_benchmark": pd.DataFrame(per_bench)}

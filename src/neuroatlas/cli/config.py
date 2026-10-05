@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from neuroatlas import _paths
 from neuroatlas import config as cfg
+from neuroatlas.cli import Parser
 
 
 def _dataset_key(text: str) -> Tuple[str, str, str]:
@@ -28,10 +29,9 @@ def _dataset_key(text: str) -> Tuple[str, str, str]:
     return slug, key, value
 
 
-def _known_dataset(slug: str) -> bool:
-    # Cheap check against the shipped dossiers; MOABB-generated specs have
-    # none, so an unknown slug is a warning, not an error.
-    return _paths.configs_dir("cohorts", slug).is_dir()
+def _dataset_key_error(slug: str, key: str) -> Optional[str]:
+    """Why ``slug.key`` would be written and then never read, or None."""
+    return cfg.dataset_key_problem(slug, [key])
 
 
 def _abs(value: str) -> str:
@@ -39,7 +39,7 @@ def _abs(value: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = Parser(
         prog="neuroatlas config",
         description="Where NeuroAtlas finds your data and puts what it makes. "
                     "The settings file is $NEUROATLAS_HOME/config.yaml (default "
@@ -68,8 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("show", help="Print every setting, whether it exists, and where it came from.")
 
     set_ = sub.add_parser("set", help="Change one setting.",
-                          description="Change one setting: a root such as cache_root, "
-                                      "or a dataset path such as ucddb.data_root.")
+                          description="Change one setting: a root (data_root, cache_root, "
+                                      "output_root, models_root), or a dataset path "
+                                      "DATASET.KEY such as chbmit.bids_root. A dataset "
+                                      "or key that nothing reads is refused, with the "
+                                      "keys that dataset does read; `neuroatlas data "
+                                      "status <dataset>` names the one to set.")
     set_.add_argument("key")
     set_.add_argument("value")
 
@@ -88,11 +92,20 @@ def _init(args: argparse.Namespace) -> int:
         print(f"error: {path} already exists. Add --force to replace it, or change "
               f"one setting with `neuroatlas config set KEY VALUE`.", file=sys.stderr)
         return 2
+    for slug, key, _ in args.dataset_path:
+        problem = _dataset_key_error(slug, key)
+        if problem:
+            print(f"error: --dataset-path {slug}.{key}: {problem}", file=sys.stderr)
+            return 2
+    # All four roots are written out, defaults included, so the file says
+    # where everything goes and nothing depends on how the package was
+    # installed or which directory the command ran from.
     data: Dict[str, Any] = {"data_root": _abs(args.data_root)}
-    for key in cfg.SETTINGS:
+    for key, setting in cfg.SETTINGS.items():
         value = getattr(args, key, None)
-        if key != "data_root" and value:
-            data[key] = _abs(value)
+        if key == "data_root":
+            continue
+        data[key] = _abs(value) if value else str(setting.default())
     paths: Dict[str, Dict[str, str]] = {}
     for slug, key, value in args.dataset_path:
         paths.setdefault(slug, {})[key] = _abs(value)
@@ -100,40 +113,62 @@ def _init(args: argparse.Namespace) -> int:
         data["dataset_paths"] = paths
     cfg.save_file(data, path)
     print(f"wrote {path}")
+    for key in cfg.SETTINGS:
+        print(f"  {key.replace('_', ' '):<11}  {data[key]}")
     for warning in _warnings(data):
         print(f"  warning: {warning}")
-    print("next: `neuroatlas config show`, then `neuroatlas fetch --list`")
+    for line in _legacy_notes(data):
+        print(line)
+    print(NEXT_STEPS)
     return 0
+
+
+NEXT_STEPS = ("next: `neuroatlas config show`, then `neuroatlas list benchmarks` and "
+              "`neuroatlas data status <benchmark>`")
+
+DOWNLOADS_LINE = ("downloads: off, except in `data download`, `data prepare`, `models download` "
+                  "and `fetch --download`; `neuroatlas --online <command>` allows them for one run")
 
 
 def _warnings(data: Dict[str, Any]) -> List[str]:
     out = []
     if not Path(data["data_root"]).is_dir():
         out.append(f"data root {data['data_root']} does not exist yet")
-    for slug in (data.get("dataset_paths") or {}):
-        if not _known_dataset(slug):
-            out.append(f"{slug} is not a dataset NeuroAtlas ships a manifest for")
     return out
 
 
+def _unset_message(key: str, path: Path) -> str:
+    return f"{key} was not set in {path}; nothing to remove"
+
+
 def _set(args: argparse.Namespace, unset: bool = False) -> int:
-    data = cfg.load_file()
+    # Lenient: this is how a file with a misspelt setting gets fixed.
+    data = cfg.load_file(strict=False)
     key = args.key
-    if key in cfg.SETTINGS:
+    path = cfg.config_path()
+    if key in cfg.SETTINGS or (unset and key in cfg.unknown_settings(data)):
         if unset:
-            data.pop(key, None)
+            if key not in data:
+                print(_unset_message(key, path))
+                return 0
+            data.pop(key)
         else:
             data[key] = _abs(args.value)
     elif "." in key:
         slug, _, sub_key = key.partition(".")
         paths = data.setdefault("dataset_paths", {})
         if unset:
-            (paths.get(slug) or {}).pop(sub_key, None)
-            if not paths.get(slug):
-                paths.pop(slug, None)
+            if sub_key not in (paths.get(slug) or {}):
+                print(_unset_message(key, path))
+                return 0
+            paths[slug].pop(sub_key)
+            if not paths[slug]:
+                paths.pop(slug)
         else:
-            if not _known_dataset(slug):
-                print(f"  warning: {slug} is not a dataset NeuroAtlas ships a manifest for")
+            problem = _dataset_key_error(slug, sub_key)
+            if problem:
+                print(f"error: {problem}", file=sys.stderr)
+                return 2
             paths.setdefault(slug, {})[sub_key] = _abs(args.value)
     else:
         import difflib
@@ -141,7 +176,8 @@ def _set(args: argparse.Namespace, unset: bool = False) -> int:
         close = difflib.get_close_matches(key, cfg.SETTINGS, n=1)
         hint = f" Did you mean {close[0]}?" if close else ""
         print(f"error: unknown setting {key!r}.{hint} Settings: {', '.join(cfg.SETTINGS)}, "
-              f"or DATASET.KEY for a dataset path.", file=sys.stderr)
+              f"or DATASET.KEY for a dataset path (`neuroatlas data status <dataset> -v` "
+              f"shows the key each dataset reads).", file=sys.stderr)
         return 2
     path = cfg.save_file(data)
     print(f"{'removed' if unset else 'set'} {key} in {path}")
@@ -165,35 +201,71 @@ def _home_relative(path: Path) -> str:
         return str(path)
 
 
+def _legacy_notes(data: Dict[str, Any]) -> List[str]:
+    """What an earlier version left in the source checkout, where the setting
+    that replaces it now points elsewhere: say how to keep using it."""
+    out = []
+    for what, legacy, setting in _paths.legacy_locations():
+        current = cfg.resolve(setting, data).value
+        if legacy.name == "preprocessed":
+            target = _paths.prepared_dir()
+            out.append(f"note: {what} from an earlier version are in {legacy}; they are now "
+                       f"read from {target}: mkdir -p {target} && mv {legacy}/* {target}/")
+            continue
+        if current is not None and Path(current) == legacy:
+            continue
+        out.append(f"note: {what} from an earlier version are in {legacy}; to keep using "
+                   f"them: neuroatlas config set {setting} {legacy}")
+    return out
+
+
 def _show() -> int:
     path = cfg.config_path()
-    data = cfg.load_file()
+    data = cfg.load_file(strict=False)       # warns about, rather than stops at, a bad key
+    problems = cfg.unknown_settings(data)
     print(f"config file: {_home_relative(path)}  [{'found' if path.is_file() else 'not found'}]")
     if not path.is_file():
         print("  -> create it with `neuroatlas config init --data-root DIR`")
+    if problems:
+        print(f"  -> unknown settings {', '.join(problems)}: every other command refuses to "
+              f"run until you `neuroatlas config unset` them")
     checkout = _paths.checkout_root()
-    print(f"package: neuroatlas from {'checkout ' + str(checkout) if checkout else 'installed wheel'}")
+    print(f"package: neuroatlas from {'checkout ' + str(checkout) if checkout else 'installed wheel'}"
+          f" (defaults hang off $NEUROATLAS_HOME = {_home_relative(_paths.home())} either way)")
 
     print("roots  [state] [origin: env, file or default]")
     width = max(len(k) for k in cfg.SETTINGS)
+    resolved = {}
     for key, setting in cfg.SETTINGS.items():
-        r = cfg.resolve(key, data)
+        r = resolved[key] = cfg.resolve(key, data)
         if r.value is None:
             print(f"  {key.replace('_', ' '):<{width}}  -  [not set]")
             continue
         origin = f"${setting.env}" if r.origin == "env" else r.origin
         print(f"  {key.replace('_', ' '):<{width}}  {_home_relative(r.value)}  "
               f"[{_state(r.value)}] [{origin}]")
+    mne = cfg.mne_data(data)
+    mne_origin = {"env": "$MNE_DATA", "mne config": "MNE's config file",
+                  "data root": "data root/mne_data", "default": "MNE's default"}[mne.origin]
+    print(f"  {'MOABB data':<{width}}  {_home_relative(mne.value)}  [{_state(mne.value)}] "
+          f"[{mne_origin}]")
+    per_dataset = cfg.mne_per_dataset_keys()
+    if per_dataset:
+        print(f"  {'':<{width}}  (MNE's config file {_home_relative(cfg.mne_config_file())} names "
+              f"its own folder for {len(per_dataset)} dataset(s); NeuroAtlas uses the one above "
+              f"for all of them and never edits that file)")
 
     paths = data.get("dataset_paths") or {}
     if paths:
         print("dataset paths")
         for slug, block in sorted(paths.items()):
             for key, value in sorted(block.items()):
-                print(f"  {slug}.{key}  {value}  [{_state(Path(value))}]")
+                print(f"  {slug}.{key}  {value}  [{_state(Path(str(value)))}]")
 
-    print("downloads: off for every command except `fetch --download` and `prepare`; "
-          "`--online` allows them for one run")
+    for line in _legacy_notes(data):
+        print(line)
+
+    print(DOWNLOADS_LINE)
     from_user = cfg.offline_vars_from_user()
     if from_user:
         print("  your environment sets " + ", ".join(f"{v}={os.environ[v]}" for v in from_user)
@@ -201,7 +273,8 @@ def _show() -> int:
 
     print("credentials (where, never what)")
     for name, advice in (("hf", "Hugging Face, for gated model weights"),
-                         ("nsrr", "NSRR, for the NSRR sleep cohorts")):
+                         ("nsrr", "NSRR, for the NSRR sleep cohorts"),
+                         ("github", "GitHub, for private release assets")):
         where = cfg.locate_token(name)
         if where is None:
             print(f"  {name:<5} not found  ({advice}: put it in "
@@ -220,6 +293,9 @@ def _show() -> int:
     except catalog.CatalogError as exc:
         print(f"catalog: INVALID -- {exc}")
         return 1
+    if problems:
+        print(f"error: {path} has unknown settings: {', '.join(problems)}", file=sys.stderr)
+        return 2
     return 0
 
 

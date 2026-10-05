@@ -12,7 +12,7 @@ and arousal, split that way in the pickles, the embeddings and the probes.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence
+from typing import Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
@@ -22,14 +22,78 @@ from neuroatlas.extensions.datasets.dataio.bci import (
     load_preprocessed_dataset,
 )
 
+from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
+
+from ._runtime_keys import BCI_TRIALS, PREPARED_FILTERS, RAW_ONLY
 from .base import BenchmarkDataModule
-from .cho2017 import _PreprocessedDataset, _LoaderAdapter
+from .cho2017 import _PreprocessedDataset, _collate
+
+
+class _LoaderAdapter:
+    """Emit the standard batch for one cohort, with *its* rate and channels.
+
+    These cohorts used to borrow Cho2017's adapter, which stamped every batch
+    with ``dataset="cho2017"``, Cho2017's 100 Hz and its 64 channel names --
+    so a 128 Hz, 19-channel EEGMat trial would have reached the wrappers
+    mislabelled -- and read ``subject_ids`` from a batch that the default
+    collate had keyed ``subject_id``.
+    """
+
+    def __init__(self, loader, *, slug: str, sampling_rate: float,
+                 channels: List[str], channel_index: Optional[List[int]]) -> None:
+        self._loader = loader
+        self._slug = slug
+        self._sampling_rate = float(sampling_rate)
+        self._channels = list(channels)
+        self._channel_index = channel_index
+
+    def __len__(self) -> int:
+        return len(self._loader)
+
+    def __iter__(self) -> Iterator[Dict[str, object]]:
+        for batch in self._loader:
+            eeg = batch["eeg"]
+            if self._channel_index is not None:
+                eeg = eeg[:, self._channel_index, :]
+            meta = [
+                {
+                    "dataset": self._slug,
+                    "domain": BCI_DOMAIN,
+                    "subject_id": batch["subject_ids"][i],
+                    "trial_idx": batch["trial_idxs"][i],
+                    "sampling_rate": self._sampling_rate,
+                    "unit": "uV",
+                    "channels": list(self._channels),
+                }
+                for i in range(len(batch["subject_ids"]))
+            ]
+            yield {"signals": {"eeg": eeg}, "label": batch["label"],
+                   "meta": meta, "raw_batch": batch}
+
+
+def _channel_selection(slug: str, available: Sequence[str],
+                       channel_specs: Optional[Sequence[str]]) -> Optional[List[int]]:
+    """Indices of *channel_specs* in the file's channel order; None keeps them as stored."""
+    if channel_specs is None:
+        return None
+    wanted = list(channel_specs)
+    missing = [c for c in wanted if c not in available]
+    if missing:
+        raise ValueError(
+            f"{slug}: channel_specs names channels the preprocessed file does not "
+            f"have: {missing}. It has: {list(available)}"
+        )
+    index = [list(available).index(c) for c in wanted]
+    return None if index == list(range(len(available))) else index
 
 
 class _PickleCohortDataModule(BenchmarkDataModule):
     """Shared implementation. Subclasses set :attr:`SLUG`."""
 
     SLUG: str = ""
+    RUNTIME_KEYS_FIXED = RAW_ONLY
+    RUNTIME_KEYS_IGNORED = {**BCI_TRIALS, **PREPARED_FILTERS}
+    FIXED_WINDOW = True
 
     def __init__(
         self,
@@ -39,24 +103,30 @@ class _PickleCohortDataModule(BenchmarkDataModule):
         num_workers: int = 0,
         subject_ids: Optional[Sequence[int]] = None,
         preprocessed_path: Optional[str] = None,
+        channel_specs: Optional[Sequence[str]] = None,
     ) -> None:
         cfg = DATASET_CONFIGS[self.SLUG]
+        available = list(cfg.channels)
+        # The channel map's channels_used, in its order; the file's own when absent.
+        self._channel_index = _channel_selection(self.SLUG, available, channel_specs)
+        channels = list(channel_specs) if channel_specs is not None else available
         subjects = list(subject_ids) if subject_ids is not None else list(cfg.subjects)
         train_subj, val_subj, test_subj = get_subject_split(
             subjects, fold=fold, n_folds=n_folds
         )
         meta: Dict[str, object] = {
+            "domain": BCI_DOMAIN,
             "canonical_label_space": list(cfg.targets),
             "epoch_seconds": cfg.tmax - cfg.tmin,
             "channel_policy": ["eeg"],
             "signal_kind": "raw",
             "fold": fold,
             "n_folds": n_folds,
-            "n_channels": len(cfg.channels),
+            "n_channels": len(channels),
             "sfreq": cfg.resample_sfreq,
             "sampling_rate": float(cfg.resample_sfreq),
             "unit": "uV",
-            "channels": list(cfg.channels),
+            "channels": channels,
             "source": "preprocessed",
         }
         super().__init__(name=self.SLUG, metadata=meta)
@@ -78,6 +148,8 @@ class _PickleCohortDataModule(BenchmarkDataModule):
         self._test_ds = _PreprocessedDataset(mat, pick(test_subj))
         self._batch_size = batch_size
         self._num_workers = num_workers
+        self._channels = channels
+        self._sampling_rate = float(cfg.resample_sfreq)
 
     def _make_loader(self, dataset, shuffle: bool):
         from torch.utils.data import DataLoader
@@ -88,7 +160,12 @@ class _PickleCohortDataModule(BenchmarkDataModule):
                 batch_size=self._batch_size,
                 shuffle=shuffle,
                 num_workers=self._num_workers,
-            )
+                collate_fn=_collate,
+            ),
+            slug=self.SLUG,
+            sampling_rate=self._sampling_rate,
+            channels=self._channels,
+            channel_index=self._channel_index,
         )
 
     def train_dataloader(self):

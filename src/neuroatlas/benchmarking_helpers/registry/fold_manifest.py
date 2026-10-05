@@ -328,6 +328,65 @@ def recording_indices_for_split(
     return out
 
 
+def fold_source_label(split: FoldSplit) -> str:
+    """Where a split came from, relative to the shipped configs
+    (``cohorts/sz1/folds.json``), so that recording it in a datamodule's
+    metadata -- which per-split embedding caches hash -- does not tie a cache
+    key to the directory the package is installed in."""
+    try:
+        return str(Path(split.source_path).resolve().relative_to(configs_dir().resolve()))
+    except ValueError:
+        return Path(split.source_path).name
+
+
+def recording_splits_from_manifest(
+    dataset: str,
+    fold: int,
+    n_folds: int,
+    subject_ids_per_recording: Sequence[str],
+    *,
+    strict: bool = True,
+) -> "tuple[List[int], List[int], List[int], FoldSplit]":
+    """One fold of a cohort's frozen manifest, as recording indices.
+
+    The call a manifest-driven adapter makes in place of its own splitter: the
+    published folds come from the file, so a change to the reader's subject
+    discovery, its stratification labels or the shared splitter cannot move
+    them.
+
+    Raises when the requested fold count is not the manifest's: ``n_folds=7``
+    over a 5-fold manifest has no published answer, and quietly serving fold
+    ``k % 5`` would put the paper's name on a different experiment. The
+    adapters take ``folds_manifest=None`` (``--set folds_manifest=none``) to
+    derive ``n_folds`` folds with their own splitter instead.
+
+    Returns ``(train, val, test, split)``: recording indices in reader order,
+    and the :class:`FoldSplit`, for provenance (:func:`fold_source_label`).
+    """
+    split = load_fold_split(dataset, fold)
+    if int(n_folds) != split.n_folds:
+        raise ValueError(
+            f"{dataset}: n_folds={n_folds}, but its published folds are the "
+            f"{split.n_folds} in {split.source_path}. Ask for {split.n_folds} "
+            f"folds, or pass --set folds_manifest=none to `neuroatlas embed` and "
+            f"`neuroatlas probe` to derive {n_folds} folds with the reader's own "
+            f"splitter (these are not the paper's folds)."
+        )
+    try:
+        recs = recording_indices_for_split(
+            [str(s) for s in subject_ids_per_recording], split, strict=strict,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} --set strict_folds=false (on `neuroatlas embed` and `neuroatlas "
+            f"probe`; `neuroatlas show <benchmark>` prints their commands, `run` "
+            f"takes no --set) runs on the subjects the data and "
+            f"{split.source_path.name} share (each keeps its published role; the "
+            f"result is not comparable to the paper)."
+        ) from exc
+    return recs["train"], recs["val"], recs["test"], split
+
+
 # --------------------------------------------------------------------------
 # The whole-manifest view, merged here from patient_splits.py so that
 # both readers share one search order and one parser.

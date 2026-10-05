@@ -5,7 +5,7 @@ Usage::
 
     python -m neuroatlas.extensions.datasets.preprocessors.preprocess_tusz \\
         --raw-root ${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_seizure/v2.0.3/edf \\
-        --cache-root data/tusz \\
+        --cache-root ${EEG_CACHE_ROOT}/prepared/tusz \\
         --splits train dev eval \\
         --workers 4
 

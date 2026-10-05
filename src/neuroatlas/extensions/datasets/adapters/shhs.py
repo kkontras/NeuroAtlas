@@ -8,6 +8,7 @@ import torch
 
 from neuroatlas.extensions.datasets.dataio.shhs import SleepDataLoader
 
+from ._runtime_keys import SLEEP_STAGE_ONLY
 from .base import BenchmarkDataModule
 
 _ASSETS_DIR = Path(__file__).resolve().parents[2] / "datasets" / "SHHS" / "assets"
@@ -43,6 +44,7 @@ def _default_shhs_config(
     fold: Optional[int] = None,
     batch_size: int = 2,
     signal_kind: str = "stft",
+    num_workers: int = 0,
 ) -> easydict.EasyDict:
     if fold is not None:
         data_split = {
@@ -63,7 +65,7 @@ def _default_shhs_config(
         "training_params": {
             "batch_size": batch_size,
             "test_batch_size": batch_size,
-            "data_loader_workers": 0,
+            "data_loader_workers": int(num_workers),
             "pin_memory": False,
         },
         "dataset": {
@@ -157,6 +159,20 @@ class _LoaderAdapter:
 
 
 class SHHSBenchmarkDataModule(BenchmarkDataModule):
+    RUNTIME_KEYS_FIXED = SLEEP_STAGE_ONLY
+    RUNTIME_KEYS_IGNORED = {
+        "epoch_seconds": (
+            "the CoRe-Sleep SHHS files hold fixed 30-s epochs at 100 Hz "
+            "(3000 samples); a model's own window is met by its wrapper"
+        ),
+        "compute_recording_stats": (
+            "the CoRe-Sleep SHHS files are already normalised with dataset-wide "
+            "statistics (assets/metrics_eeg_eog_emg_stft*.pkl) and the loader "
+            "serves 21-epoch sequences, not a night to take statistics over; "
+            "models that normalise per recording take their no-statistics path"
+        ),
+    }
+
     def __init__(
         self,
         data_root: str,
@@ -165,6 +181,7 @@ class SHHSBenchmarkDataModule(BenchmarkDataModule):
         signal_kind: str = "stft",
         channel_specs=None,
         use_all_eeg_channels: bool = False,
+        num_workers: int = 0,
     ):
         channel_policies = {
             "stft": ["stft_eeg", "stft_eog"],
@@ -181,7 +198,8 @@ class SHHSBenchmarkDataModule(BenchmarkDataModule):
             meta["fold"] = fold
         super().__init__(name="shhs", metadata=meta)
         self.signal_kind = signal_kind
-        self.config = _default_shhs_config(data_root, fold=fold, batch_size=batch_size, signal_kind=signal_kind)
+        self.config = _default_shhs_config(data_root, fold=fold, batch_size=batch_size,
+                                           signal_kind=signal_kind, num_workers=num_workers)
         self.loader = SleepDataLoader(self.config)
 
     def train_dataloader(self):

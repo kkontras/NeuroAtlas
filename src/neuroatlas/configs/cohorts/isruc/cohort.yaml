@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: isruc
-name: Isruc
+name: ISRUC-Sleep
 domain: sleep
 paper_dataset: true
 
@@ -26,6 +26,13 @@ cohort:
 
 acquisition:
   kind: manual
+  upstream: https://sleeptight.isr.uc.pt/
+  note: >
+    Download the three subgroups from the site's "Download Dataset" page. The
+    reader expects subgroupI/<n>/<n>.rec with <n>_1.txt and <n>_2.txt (the two
+    scorers), subgroupIII/ the same, subgroupII/<n>/<rec>/<rec>.rec, and the
+    Details_subgroup_{I,II,III}_Submission.xlsx sheets.
+  expect: {glob: "*.rec", count: 126}       # 100 + 8x2 + 10 recordings (Khalighi et al. 2016)
 
 signal:
   notch_freq: 50.0

@@ -27,6 +27,8 @@ acquisition:
   ref: hmc-sleep-staging
   version: "1.1"
   subdir: recordings
+  size_gb: 15.7                        # the project page's total uncompressed size
+  expect: {glob: "SN[0-9][0-9][0-9].edf", count: 151}   # RECORDS: 151 recordings
 
 signal:
   notch_freq: 50.0
@@ -72,6 +74,7 @@ runtime_defaults:
   batch_size: 8
   num_workers: 0
   fold: 0
+  n_folds: 5                    # the manifest's five folds: `run` probes all five, as the paper did
   signal_kind: raw
   pipeline_name: legacy
 

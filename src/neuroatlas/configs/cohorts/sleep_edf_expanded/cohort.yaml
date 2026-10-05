@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: sleep_edf_expanded
-name: Sleep Edf Expanded
+name: Sleep-EDF Database Expanded
 domain: sleep
 paper_dataset: true
 
@@ -25,6 +25,8 @@ acquisition:
   kind: physionet
   ref: sleep-edfx
   version: 1.0.0
+  size_gb: 8.1                        # the project page's total uncompressed size
+  expect: {glob: "*-PSG.edf", count: 197}   # RECORDS: 153 SC + 44 ST
 
 signal:
   notch_freq: 50.0

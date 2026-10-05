@@ -19,8 +19,14 @@ MODEL_SPECS = [
                 identifier="eegpt_pretrained",
                 model_family="eegpt",
                 variant="large4e_pretrained",
-                source_type="figshare_private_share",
-                source_reference="https://figshare.com/s/e37df4f8a907a866df4b",
+                # Upstream publishes the checkpoint on a Figshare private share
+                # (https://figshare.com/s/e37df4f8a907a866df4b, file
+                # EEGPT/checkpoint/eegpt_mcae_58chs_4s_large4E.ckpt) that only a
+                # browser can open. This hub repository holds the same tensors
+                # (verified bit-identical; see _checkpoint_download), and the
+                # download writes them where the upstream file would go.
+                source_type="huggingface",
+                source_reference="eeg-telecom-paris/eegpt-large-official",
                 checkpoint_path="artifacts/models/foundation/eegpt_mcae_58chs_4s_large4E.ckpt",
                 input_kind="raw_timeseries",
                 expected_channels=("eeg",),
@@ -32,7 +38,7 @@ MODEL_SPECS = [
                 embedding_dim=2048,
                 wrapper_name="eegpt",
                 status="ready",
-                notes="Official EEGPT target-encoder probing path; checkpoint mirrored from upstream tree at artifacts/models/foundation/.",
+                notes="Official EEGPT target-encoder probing path. Weights: upstream's eegpt_mcae_58chs_4s_large4E.ckpt (Figshare share https://figshare.com/s/e37df4f8a907a866df4b, browser only), fetched from the bit-identical hub copy eeg-telecom-paris/eegpt-large-official.",
             )
         ],
     )

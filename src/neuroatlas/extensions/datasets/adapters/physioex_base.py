@@ -175,6 +175,28 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
     CHANNEL_MAP: Dict[str, str] = {}
     DATASET_KWARGS: Dict[str, Any] = {}
 
+    def _check_fold_count(self, n_folds: Optional[int]) -> None:
+        """Refuse a fold count the cohort's manifest does not have.
+
+        ``n_folds`` is what makes ``neuroatlas run`` probe every fold (the
+        manifest cohorts declare 5, the paper's count); a different count has
+        no published folds behind it, and fold ``k`` would otherwise still be
+        read from the 5-fold file.
+        """
+        if n_folds is None:
+            return
+        from neuroatlas.benchmarking_helpers.registry.fold_manifest import load_fold_split
+
+        try:
+            have = load_fold_split(self.DATASET_NAME, 0).n_folds
+        except FileNotFoundError:
+            return          # no manifest: the loader's own split, any count
+        if int(n_folds) != have:
+            raise ValueError(
+                f"{self.DATASET_NAME}: n_folds={n_folds}, but its fold manifest "
+                f"has {have} folds (the paper's); ask for {have}."
+            )
+
     def _resolve_splits(self, fold: int, discovered: List[str]):
         """Folds from the cohort's manifest when it has one, else the loader's.
 
@@ -236,6 +258,7 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         fold: Optional[int] = None,
         num_workers: int = 0,
         max_records: Optional[int] = None,
+        n_folds: Optional[int] = None,
         **kwargs,
     ):
         if pipeline_name not in PIPELINE_REGISTRY:
@@ -243,6 +266,7 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
 
         pipeline = PIPELINE_REGISTRY[pipeline_name]()
         fold = int(fold) if fold is not None else 0
+        self._check_fold_count(n_folds)
 
         _ensure_physioex()
         # Dynamic import of the physioex dataset class

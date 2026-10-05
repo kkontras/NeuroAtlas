@@ -106,14 +106,22 @@ def scan_wsc_subjects(
     # Load demographic metadata
     age_lookup: Dict[Tuple[str, int], float] = {}
     sex_lookup: Dict[Tuple[str, int], str] = {}
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path, usecols=["wsc_id", "wsc_vst", "age", "sex"], low_memory=False)
-        for _, row in df.iterrows():
-            key = (str(int(row["wsc_id"])), int(row["wsc_vst"]))
-            age_lookup[key] = float(row["age"])
-            raw_sex = row["sex"]
-            if pd.notna(raw_sex):
-                sex_lookup[key] = str(raw_sex).strip()
+    # The CSV is the only source of age and sex. A missing one used to leave
+    # every record with age = None, cached that way, and brain age then had
+    # nothing to regress on (F-069).
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            f"WSC demographics CSV not found: {csv_path} (dataset key csv_path). "
+            f"It ships with the NSRR download as datasets/wsc-dataset-0.8.0.csv and "
+            f"is the only source of age and sex; pass --set csv_path=<path>."
+        )
+    df = pd.read_csv(csv_path, usecols=["wsc_id", "wsc_vst", "age", "sex"], low_memory=False)
+    for _, row in df.iterrows():
+        key = (str(int(row["wsc_id"])), int(row["wsc_vst"]))
+        age_lookup[key] = float(row["age"])
+        raw_sex = row["sex"]
+        if pd.notna(raw_sex):
+            sex_lookup[key] = str(raw_sex).strip()
 
     records: List[SubjectRecord] = []
     pattern = re.compile(r"wsc-visit(\d+)-(\d+)-nsrr\.edf")

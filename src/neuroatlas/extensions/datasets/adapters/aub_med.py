@@ -146,6 +146,13 @@ class AUBMedBenchmarkDataModule(BenchmarkDataModule):
 
         self._datasets: Dict[str, Any] = {}
 
+    def cache_context(self, purpose: str = "default") -> Dict[str, Any]:
+        # a montage other than the manifest's is its own cache (same rule as
+        # the other epilepsy readers, epilepsy/_global_cache.montage_context)
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import montage_context
+
+        return montage_context(self, dict(self.metadata))
+
     # ------------------------------------------------------------------
     # Per-split dataset construction
     # ------------------------------------------------------------------

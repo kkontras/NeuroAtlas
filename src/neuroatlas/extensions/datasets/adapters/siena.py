@@ -15,6 +15,7 @@ from neuroatlas.benchmarking_helpers.registry.splits import make_subject_kfold
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 _BIDS_ROOT_DEFAULT = "${REPO_ROOT}/siena_cache/raw/BIDS_Siena"
 
@@ -95,7 +96,7 @@ def _patient_splits_generic(
 # ---------------------------------------------------------------------------
 
 
-class SienaBenchmarkDataModule(BenchmarkDataModule):
+class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the Siena Scalp EEG seizure detection dataset.
 
     Args:
@@ -175,7 +176,7 @@ class SienaBenchmarkDataModule(BenchmarkDataModule):
         if root is None:
             raise FileNotFoundError(
                 f"No BIDS root found at {bids_root}. Download with: "
-                "python -m neuroatlas.entrypoints.fetch --dataset siena --download"
+                "`neuroatlas data download siena`; if it is elsewhere, `neuroatlas config set siena.bids_root <path>`"
             )
         self._bids_root = str(root)
         self._bids_index = BIDSRecordingIndex.from_bids_root(root)
@@ -199,18 +200,29 @@ class SienaBenchmarkDataModule(BenchmarkDataModule):
             }[split]
 
             stride = self._stride_s if split == "train" else self._window_s
-
-            self._datasets[split] = self._DatasetCls(
-                bids_root=self._bids_root,
-                window_s=self._window_s,
-                stride_s=stride,
-                overlap_threshold=self._overlap_threshold,
-                montage=self._montage,
-                label_mode=self._label_mode,
-                normalize=self._normalize,
-                recording_indices=rec_indices,
-            )
+            self._datasets[split] = self._window_dataset(rec_indices, stride)
         return self._datasets[split]
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: int = 8):
+        return self._DatasetCls(
+            bids_root=self._bids_root,
+            window_s=self._window_s,
+            stride_s=stride_s,
+            overlap_threshold=self._overlap_threshold,
+            montage=self._montage,
+            label_mode=self._label_mode,
+            normalize=self._normalize,
+            recording_indices=rec_indices,
+            signal_cache_size=signal_cache_size,
+        )
+
+    # -- global embedding cache (epilepsy/_global_cache.py) ----------------
+
+    def _n_recordings(self) -> int:
+        return len(self._bids_index.recordings)
+
+    def _subject_of(self, rec_index: int) -> str:
+        return self._bids_index.recordings[rec_index].subject_id
 
     def _make_loader(self, split: str) -> _LoaderAdapter:
         ds = self._get_dataset(split)

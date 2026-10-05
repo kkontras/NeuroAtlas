@@ -90,18 +90,16 @@ python -m neuroatlas.entrypoints.fetch --dataset shin2017a
 python -m neuroatlas.entrypoints.fetch --dataset weibo2014
 
 # ==========================================================================
-# 2. PREPARE -- 5 of 45 need a build step
-# Everything else reads its raw corpus directly. Only the MOABB MI
-# cohorts have to be materialised first. The epilepsy cohorts can
-# also build an optional HDF5 cache that speeds up large sweeps
-# (`prepare --dataset tusz`), but `embed` reads their EDFs as they
-# are, so it is not a prerequisite and is not listed here.
+# 2. PREPARE -- none of the 45 needs a build step
+# Every cohort reads its raw corpus directly; the MOABB cohorts are
+# epoched by their reader as `embed` loads them. Two kinds of optional
+# build exist and are not listed here: the epilepsy HDF5 caches that
+# speed up large sweeps (`prepare --dataset tusz`), and dataio/bci.py's
+# pickles for five MI cohorts (`prepare --dataset bnci2014_001`), which
+# `embed` does not read. (The paper's BCI embeddings were extracted from
+# per-model pickles of an earlier pipeline; see the MI cohort manifests'
+# known_issues.)
 # ==========================================================================
-python -m neuroatlas.entrypoints.prepare --dataset bnci2014_001
-python -m neuroatlas.entrypoints.prepare --dataset bnci2014_004
-python -m neuroatlas.entrypoints.prepare --dataset bnci2015_001
-python -m neuroatlas.entrypoints.prepare --dataset shin2017a
-python -m neuroatlas.entrypoints.prepare --dataset weibo2014
 
 # ==========================================================================
 # 3. EMBED -- frozen backbones, one pass per (dataset, model)
@@ -217,34 +215,39 @@ python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --set co
 
 # ==========================================================================
 # 4. PROBE -- reads the embeddings above; refuses if they are absent
+# A probe finds the embeddings by a key computed from the dataset config,
+# so each probe repeats its embed line's --set flags, spelled the same
+# (window_s=10, not 10.0: the key hashes the values as written).
+# --expected-epoch-seconds belongs to the checkpoint and is not part of
+# the key, so it stays on the embed line.
 # ==========================================================================
 
 # --- Epilepsy: seizure detection, AUPRC-selected C (C.1) ------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bonn --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset chbmit --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset epilepsiae --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset helsinki_neonatal --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset nmt --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset siena --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset sz1 --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset sz2 --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset tuab --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset tusz --task seizure_detection --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset bonn --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset chbmit --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset epilepsiae --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset helsinki_neonatal --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset nmt --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset sz1 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset sz2 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset tuab --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all --dataset tusz --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
 
 # --- Sleep axis 1: epoch-wise staging, unweighted loss (C.2) --------------
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task sleep_staging --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.probe --models all --dataset dcsm --task sleep_staging
 python -m neuroatlas.entrypoints.probe --models all --dataset dod --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset hmc --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset hpap_lab_full --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all --dataset hmc --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all --dataset hpap_lab_full --task sleep_staging --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task sleep_staging
 python -m neuroatlas.entrypoints.probe --models all --dataset mass --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset mesa --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all --dataset mesa --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all --dataset mros --task sleep_staging --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task sleep_staging
 python -m neuroatlas.entrypoints.probe --models all --dataset shhs --task sleep_staging
 python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset stages --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all --dataset stages --task sleep_staging --set window_s=30 --set stride_s=30
 python -m neuroatlas.entrypoints.probe --models all --dataset ucddb --task sleep_staging
 python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task sleep_staging
 
@@ -272,15 +275,15 @@ python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --ta
 #     A task over the sleep cohorts that carry age labels, not a
 #     separate domain. The brain_age task fits the ridge and selects
 #     alpha itself, so no --probe-type or --tune-c here.
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
 python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task brain_age --set label_mode=age --aggregation mean

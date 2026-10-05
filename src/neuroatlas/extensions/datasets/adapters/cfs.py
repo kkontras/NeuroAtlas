@@ -237,6 +237,14 @@ def _load_metadata(data_root: Path) -> Dict[int, Dict[str, Any]]:
     if not csvs:
         # Fall back to the unharmonized CSV.
         csvs = sorted(datasets_dir.glob("cfs-visit*-dataset-*.csv"))
+    if not csvs:
+        raise FileNotFoundError(
+            f"CFS demographics not found: no cfs-visit*-harmonized-*.csv or "
+            f"cfs-visit*-dataset-*.csv under {datasets_dir}. They ship with the NSRR "
+            f"download (datasets/) and are the only source of age and sex. "
+            f"Check that data_root={data_root} is the CFS root "
+            f"(the polysomnography/ EDFs next to datasets/)."
+        )
     for csv_path in csvs:
         df = pd.read_csv(csv_path)
         for _, row in df.iterrows():

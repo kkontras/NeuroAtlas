@@ -37,6 +37,7 @@ from neuroatlas.extensions.datasets.dataio.nmt import (
 )
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ from ._loader_adapters import SplitTaggingLoader as _LoaderAdapter  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-class NMTBenchmarkDataModule(BenchmarkDataModule):
+class NMTBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the NMT Scalp EEG Dataset.
 
     Args:
@@ -158,6 +159,10 @@ class NMTBenchmarkDataModule(BenchmarkDataModule):
         self._splits_per_rec: List[str] = [r["split"] for r in self._all_recordings]
 
         self._train_idx, self._val_idx, self._test_idx = self._compute_splits()
+        # The names the global-cache mixin reads.
+        self._train_recs, self._val_recs, self._test_recs = (
+            self._train_idx, self._val_idx, self._test_idx)
+        self._collate_fn = collate_nmt
         logger.info(
             "NMT splits (mode=%s, fold=%d/%d): train=%d val=%d test=%d recordings",
             split_mode, fold, n_folds,
@@ -224,17 +229,20 @@ class NMTBenchmarkDataModule(BenchmarkDataModule):
             )
 
         stride_s = self._stride_s if split == "train" else self._window_s
-        ds = NMTEdfDataset(
+        ds = self._window_dataset(rec_indices, stride_s)
+        self._datasets[split] = ds
+        return ds
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: Optional[int] = None):
+        return NMTEdfDataset(
             recordings=self._all_recordings,
             window_s=self._window_s,
             stride_s=stride_s,
             normalize=self._normalize,
             recording_indices=rec_indices,
-            cache_max_recordings=self._cache_max,
+            cache_max_recordings=self._cache_max if signal_cache_size is None else signal_cache_size,
             montage=self._montage,
         )
-        self._datasets[split] = ds
-        return ds
 
     # ------------------------------------------------------------------
     # Loader construction
@@ -293,84 +301,13 @@ class NMTBenchmarkDataModule(BenchmarkDataModule):
         return dict(self._datasets)
 
     # ------------------------------------------------------------------
-    # Global embedding cache: embed all recordings once, slice per fold.
+    # Global embedding cache (epilepsy/_global_cache.py): every window of
+    # every recording once, folds assigned when probing. Seizure detection
+    # used to cut this fold's train split instead, so fold 1 found nothing.
     # ------------------------------------------------------------------
 
-    def cache_context(self, purpose: str = "default") -> Dict[str, object]:
-        # The global cache is fold-invariant — drop fold from the key so
-        # all folds share one cached embedding payload.
-        context = dict(self.metadata)
-        if purpose == "global_embeddings":
-            context.pop("fold", None)
-        return context
+    def _n_recordings(self) -> int:
+        return len(self._all_recordings)
 
-    def supports_global_embedding_cache(self) -> bool:
-        return True
-
-    def full_embedding_dataloader(self) -> _LoaderAdapter:
-        rec_indices = list(range(len(self._all_recordings)))
-        ds = NMTEdfDataset(
-            recordings=self._all_recordings,
-            window_s=self._window_s,
-            stride_s=self._window_s,  # no-overlap embed pass
-            normalize=self._normalize,
-            recording_indices=rec_indices,
-            cache_max_recordings=self._cache_max,
-            montage=self._montage,
-        )
-        loader = DataLoader(
-            ds,
-            batch_size=self._batch_size,
-            shuffle=False,
-            num_workers=self._num_workers,
-            collate_fn=collate_nmt,
-            pin_memory=True,
-            drop_last=False,
-        )
-        return _LoaderAdapter(loader, split_name="all")
-
-    def split_global_embedding_payload(self, payload):
-        from neuroatlas.benchmarking_helpers import EmbeddingPayload
-
-        train_subjects = {self._subject_ids[i] for i in self._train_idx}
-        val_subjects = {self._subject_ids[i] for i in self._val_idx}
-        test_subjects = {self._subject_ids[i] for i in self._test_idx}
-
-        features = np.asarray(payload.features)
-        labels = np.asarray(payload.labels)
-        metadata = list(payload.metadata)
-
-        split_idx: Dict[str, List[int]] = {"train": [], "val": [], "test": []}
-        unassigned = 0
-        for i, m in enumerate(metadata):
-            subj = str(m.get("subject_id", ""))
-            if subj in train_subjects:
-                split_idx["train"].append(i)
-            elif subj in val_subjects:
-                split_idx["val"].append(i)
-            elif subj in test_subjects:
-                split_idx["test"].append(i)
-            else:
-                unassigned += 1
-        if unassigned:
-            raise ValueError(
-                f"NMT global embedding split: {unassigned} windows had a subject_id "
-                f"not in any fold split — fold/seed mismatch between embed and probe?"
-            )
-
-        result: Dict[str, Any] = {}
-        for split_name, idx in split_idx.items():
-            idx_arr = np.asarray(idx, dtype=np.int64)
-            if idx_arr.size:
-                result[split_name] = EmbeddingPayload(
-                    features=features[idx_arr],
-                    labels=labels[idx_arr],
-                    metadata=[metadata[j] for j in idx],
-                )
-            else:
-                result[split_name] = EmbeddingPayload(
-                    features=np.zeros((0, features.shape[1]), dtype=features.dtype),
-                    labels=np.zeros((0,), dtype=labels.dtype),
-                    metadata=[],
-                )
-        return result
+    def _subject_of(self, rec_index: int) -> str:
+        return self._subject_ids[rec_index]

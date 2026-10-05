@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: mass
-name: Mass
+name: Montreal Archive of Sleep Studies (MASS)
 domain: sleep
 paper_dataset: true
 
@@ -23,6 +23,11 @@ cohort:
 
 acquisition:
   kind: manual
+  upstream: https://borealisdata.ca/dataverse/MASS
+  note: >
+    Access is granted on request (a data use agreement through Borealis). The
+    reader expects SS01/ ... SS05/, each with the PSG EDFs and an annotations/
+    folder of base EDFs: <path>/SS03/01-03-0001 PSG.edf.
 
 signal:
   notch_freq: 60.0
@@ -47,7 +52,11 @@ splits:
   n_folds: 5
 
 runtime_defaults:
-  montage: mass_eeg_6                       # the 6-channel MASS derivation; lived only in mass_fm_probe.sh
+  # No `montage` key: mass_fm_probe.sh passed `--montage mass_eeg_6` as
+  # channel_specs, which the runner always replaced with channel_maps/mass.yaml
+  # channels_used -- 19 channels, not the 6 the name says. No code ever read the
+  # name; the channels come from the channel map. (As a runtime default it
+  # crashed the datamodule.)
   subsets: [1, 2, 3, 4, 5]                  # all five MASS subsets; lived only in mass_fm_probe.sh
   batch_size: 32
   data_root: "${EEG_DATA_ROOT}/data/raw/mass"

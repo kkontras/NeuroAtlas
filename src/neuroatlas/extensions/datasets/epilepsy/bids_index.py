@@ -17,6 +17,9 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# (resolved root, root mtime) -> BIDSRecordingIndex; see from_bids_root.
+_INDEX_MEMO: Dict[tuple, "BIDSRecordingIndex"] = {}
+
 
 # ---------------------------------------------------------------------------
 # BIDS discovery helpers (deduplicated from preprocessors)
@@ -114,10 +117,33 @@ class BIDSRecordingIndex:
 
     @classmethod
     def from_bids_root(cls, bids_root: str | Path) -> "BIDSRecordingIndex":
-        """Scan a BIDS directory and build the recording index."""
+        """Scan a BIDS directory and build the recording index.
+
+        Memoised per process: one datamodule used to scan the tree four times
+        (once itself, once per split dataset), and ``check`` once more per
+        model. The scan is a recursive glob plus one JSON and one TSV read per
+        recording, which on NFS is seconds per call. Keyed on the resolved
+        root and the mtimes of it and its ``sub-*`` folders, so a tree that
+        gains subjects or sessions is rescanned.
+        """
         bids_root = Path(bids_root)
         if not bids_root.exists():
             raise FileNotFoundError(f"BIDS root not found: {bids_root}")
+        try:
+            stamps = tuple(sorted((p.name, p.stat().st_mtime_ns)
+                                  for p in bids_root.glob("sub-*")))
+            key = (str(bids_root.resolve()), bids_root.stat().st_mtime_ns, stamps)
+        except OSError:
+            key = None
+        if key is not None and key in _INDEX_MEMO:
+            return _INDEX_MEMO[key]
+        index = cls._scan(bids_root)
+        if key is not None:
+            _INDEX_MEMO[key] = index
+        return index
+
+    @classmethod
+    def _scan(cls, bids_root: Path) -> "BIDSRecordingIndex":
 
         # Find all JSON sidecars (one per EDF)
         json_files = sorted(bids_root.rglob("*_eeg.json"))

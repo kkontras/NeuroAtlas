@@ -1,45 +1,93 @@
-# REFERENCE ONLY — the runtime channel-map loader (MODEL_CONTRACTS §1) is
-# not yet wired. Wrappers currently read meta['channels'] directly. This
-# YAML documents the authoritative (Helsinki neonatal, model) channel plan.
+# The (Helsinki neonatal, model) channel plan, applied by the runner before
+# each wrapper sees a batch (benchmarking_helpers/channels/channel_map.py).
+#
+# Montage: unipolar, the 19 electrodes of the recordings. That is the
+# manifest's and the datamodule's default (montage: unipolar), and what the
+# paper's run used (run/configs/benchmark_helsinki_neonatal_w10s_s10s.json,
+# "montage": "unipolar"). This map used to list the 20-pair bipolar TCP
+# montage instead, so every model failed on the first batch: the reader
+# hands over FP1, FP2, ... and the map knew only FP1-F7, ... (F-057).
+# `--set montage=bipolar` produces the pair labels and is not covered here.
+#
+# Every registered model family has an entry: a rename, `mode:
+# label_pass_through` (the wrapper receives these labels unchanged and
+# resolves them itself, as it did before the map was applied at run time),
+# or `skip` (not run: the pair shows n/a). A family with no entry is an
+# invalid pair, refused before any data is read.
 
 dataset: helsinki_neonatal
 channels_available:
   [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
-# Default montage is bipolar TCP (20 pairs); flip to CANONICAL_19 when
-# the entrypoint passes montage='unipolar'.
 channels_used:
-  [FP1-F7, F7-T3, T3-T5, T5-O1,
-   FP2-F8, F8-T4, T4-T6, T6-O2,
-   T3-C3, C3-CZ, CZ-C4, C4-T4,
-   FP1-F3, F3-C3, C3-P3, P3-O1,
-   FP2-F4, F4-C4, C4-P4, P4-O2]
+  [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
 
 per_model:
   reve:
-    FP1-F7: FP1-F7
-    F7-T3: F7-T3
-    T3-T5: T3-T5
-    T5-O1: T5-O1
-    FP2-F8: FP2-F8
-    F8-T4: F8-T4
-    T4-T6: T4-T6
-    T6-O2: T6-O2
-    T3-C3: T3-C3
-    C3-CZ: C3-CZ
-    CZ-C4: CZ-C4
-    C4-T4: C4-T4
-    FP1-F3: FP1-F3
-    F3-C3: F3-C3
-    C3-P3: C3-P3
-    P3-O1: P3-O1
-    FP2-F4: FP2-F4
-    F4-C4: F4-C4
-    C4-P4: C4-P4
-    P4-O2: P4-O2
+    # REVE's published position bank carries the upper-case and old 10-20
+    # temporal spellings (FP1, FZ, T3-T6) the recordings use.
+    FP1: FP1
+    FP2: FP2
+    F7: F7
+    F3: F3
+    FZ: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    CZ: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    PZ: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  biot:
+    # Monopolar inputs: the wrapper derives BIOT's 16 double-banana slots by
+    # subtraction (T3/T4/T5/T6 aliased to T7/T8/P7/P8), filling all 16.
+    FP1: FP1
+    FP2: FP2
+    F7: F7
+    F3: F3
+    FZ: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    CZ: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    PZ: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
   cbramod:
     mode: label_pass_through
     non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+  brain_age_cnn: {mode: label_pass_through}
+  chronos: {mode: label_pass_through}
+  core_sleep: {mode: label_pass_through}
+  deepsoz_hem: {mode: label_pass_through}
+  eegnetv4: {mode: label_pass_through}
+  eegpt: {mode: label_pass_through}
+  labram: {mode: label_pass_through}
+  moirai: {mode: label_pass_through}
+  moment: {mode: label_pass_through}
+  neurogpt: {mode: label_pass_through}
+  neurolm: {mode: label_pass_through}
+  neurorvq: {mode: label_pass_through}
+  seizure_transformer: {mode: label_pass_through}
+  sleep_transformer: {mode: label_pass_through}
+  sleepfm: {mode: label_pass_through}
+  sleepyco: {mode: label_pass_through}
+  steegformer: {mode: label_pass_through}
 
 notes:
-  reve: "Helsinki neonatal — TCP bipolar montage. REVE midpoints each pair. Neonatal head sizes differ from adult 10-20 but position-bank coordinates are adult-reference; acknowledged approximation."
-  cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged. Neonatal montage; CBraMod was pretrained on adult TUEG — domain shift acknowledged."
+  reve: "Helsinki neonatal, 19 unipolar electrodes at their 10-20 positions. Neonatal head sizes differ from the adult 10-20 reference the position bank uses; acknowledged approximation."
+  biot: "19 unipolar electrodes; the wrapper derives the 16 bipolar slots."
+  cbramod: "Label pass-through (index-based ACPE). Neonatal montage; CBraMod was pretrained on adult TUEG -- domain shift acknowledged."

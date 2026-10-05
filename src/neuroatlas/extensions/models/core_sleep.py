@@ -35,9 +35,10 @@ MODEL_SPECS = [
                 wrapper_name="core_sleep",
                 status="ready",
                 notes="Existing in-repo SHHS checkpoint. Architecturally bimodal "
-                "(EEG+EOG); this project supplies EEG only, and the wrapper runs true "
-                "unimodal inference via skip_view='eog' — the EOG branch is never built "
-                "and the EEG-only head preds['c'] / features['eeg'] is used.",
+                "(EEG+EOG); this project supplies EEG only and, as in the paper, the "
+                "wrapper feeds a zero EOG spectrogram and reads the fused 'combined' "
+                "features and head. Windows of 21 epochs, every epoch kept: one "
+                "embedding row per 30 s epoch.",
                 runtime_overrides={
                     "stride": 21, "target_idx": "all",
                     "embedding_stride": 21, "embedding_target_idx": "all",

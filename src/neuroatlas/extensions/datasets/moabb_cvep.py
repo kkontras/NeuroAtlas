@@ -8,8 +8,10 @@ from neuroatlas.benchmarking_helpers import DatasetSpec
 def _make_factory(slug: str):
     def _create(**config):
         from .adapters.moabb_generic import MOABBBenchmarkDataModule
+        from neuroatlas.benchmarking_helpers.registry.contracts import construct_datamodule
 
-        return MOABBBenchmarkDataModule(slug=slug, **config)
+        return construct_datamodule(
+            MOABBBenchmarkDataModule, {"slug": slug, **config}, dataset=slug)
 
     return _create
 

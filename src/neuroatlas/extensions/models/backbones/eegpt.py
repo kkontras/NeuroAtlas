@@ -13,6 +13,9 @@ Model-specific transforms applied in _prepare_input:
     2. fs resample to 256 Hz (shared helper).
     3. Strict length check: final length must equal epoch_seconds × 256.
     4. Amplitude scale x × 1000 (paper convention: µV → scaled unit).
+       BCI trials (``is_bci_batch``) take the BCI reference pipeline's path
+       instead: ÷1000, no CAR, no amplitude-band rescue, channels outside the
+       58-ch vocabulary dropped, any patch-multiple length accepted.
     5. Strip all-zero channels (defensive guard against dataio padding).
     6. Conditional Common Average Reference (CAR): applied only when the
        remaining channel count is ≥ 3 AND no original label is bipolar
@@ -48,6 +51,8 @@ from ._preproc import (
     assert_finite,
     car_reference,
     declared_units_from_batch,
+    is_bci_batch,
+    read_sampling_rate,
     resample_poly_with_fallback,
     snap_to_epoch_length,
     strip_zero_channels,
@@ -238,6 +243,7 @@ class EEGPTBackbone(BenchmarkBackbone):
         self._last_resample_report: Dict[str, Any] = {}
         self._last_reference_applied: str = "unknown"
         self._last_car_skip_reason: str | None = None
+        self._last_scale: float = _AMP_SCALE_FACTOR
 
     def _log_banner_once(self, n_chans: int, n_tiles: int, ref_applied: str, skip_reason: str | None) -> None:
         if self._banner_logged:
@@ -247,7 +253,7 @@ class EEGPTBackbone(BenchmarkBackbone):
             "[backbone=eegpt] fs=%g Hz window=%g s (%d samples, %d tiles) "
             "tile=%d s scale=×%g ref=%s n_chans=%d",
             _TARGET_SFREQ, self.window_seconds, self.target_len, n_tiles,
-            _NATIVE_TILE_SECONDS, _AMP_SCALE_FACTOR, ref_str, n_chans,
+            _NATIVE_TILE_SECONDS, self._last_scale, ref_str, n_chans,
         )
         self._banner_logged = True
 
@@ -277,7 +283,8 @@ class EEGPTBackbone(BenchmarkBackbone):
         # (some STAGES recordings appear ~1000x too small / too large vs declared µV).
         # BCI parity: Angeliki never rescaled — skip for BCI datasets.
         dataset = meta[0].get("dataset") if meta else None
-        if dataset not in _ESAT_DATASETS and dataset != "bci":
+        bci = is_bci_batch(meta)
+        if dataset not in _ESAT_DATASETS and not bci:
             import logging as _lg
             try:
                 assert_amplitude_band(
@@ -308,14 +315,22 @@ class EEGPTBackbone(BenchmarkBackbone):
             epoch_sec = self.window_seconds
         _target_len = int(round(epoch_sec * _TARGET_SFREQ))
 
-        # fs resample to 256 Hz (shared helper).
+        # fs resample to 256 Hz (shared helper). The rate is the one the
+        # adapter declares (canonical ``sampling_rate``, MODEL_CONTRACTS §3);
+        # it is inferred from the length only when none is declared. This
+        # read ``meta['sfreq']`` alone, which no adapter publishes, so the rate
+        # was always T / window: a 30 s window handed to a 10 s backbone was
+        # silently squashed to 10 s (fs "768 Hz"), and a 10-sample input
+        # became a 10 s window at "1 Hz", where every other wrapper refuses
+        # the mismatch.
         T = x.shape[-1]
-        meta_sfreq = meta[0].get("sfreq") if meta else None
+        meta_sfreq = read_sampling_rate(meta[0]) if meta else None
         if meta_sfreq is not None:
             expected_T = int(round(float(meta_sfreq) * epoch_sec))
-            if dataset != "bci" and abs(T - expected_T) > 1:
+            # BCI parity: a trial of any patch-multiple length is accepted.
+            if not bci and abs(T - expected_T) > 1:
                 raise ValueError(
-                    f"EEGPT: duration mismatch — meta['sfreq']={meta_sfreq} Hz and "
+                    f"EEGPT: duration mismatch — meta['sampling_rate']={meta_sfreq} Hz and "
                     f"window_seconds={epoch_sec:g} s imply {expected_T} samples, "
                     f"but got T={T}."
                 )
@@ -328,7 +343,7 @@ class EEGPTBackbone(BenchmarkBackbone):
             x = snap_to_epoch_length(x, _TARGET_SFREQ, meta)
 
         resampled_len = x.shape[-1]
-        if dataset == "bci":
+        if bci:
             if resampled_len <= 0 or resampled_len % _PATCH_SIZE != 0:
                 raise ValueError(
                     f"EEGPT: after resampling to {_TARGET_SFREQ:g} Hz, got "
@@ -343,8 +358,9 @@ class EEGPTBackbone(BenchmarkBackbone):
             )
 
         # Amplitude scale.
-        scale = _AMP_SCALE_FACTOR_BCI if dataset == "bci" else _AMP_SCALE_FACTOR
+        scale = _AMP_SCALE_FACTOR_BCI if bci else _AMP_SCALE_FACTOR
         x = x * scale
+        self._last_scale = scale
 
         self._last_resample_report = {
             "input_sfreq_observed": float(src_sfreq_f),
@@ -378,7 +394,8 @@ class EEGPTBackbone(BenchmarkBackbone):
 
         # Channel IDs from surviving (raw → normalized) labels.
         dataset = meta[0].get("dataset") if meta else None
-        if dataset == "bci":
+        bci = is_bci_batch(meta)
+        if bci:
             keep_indices: List[int] = []
             kept_names: List[str] = []
             dropped: List[str] = []
@@ -420,7 +437,7 @@ class EEGPTBackbone(BenchmarkBackbone):
         has_bipolar_label = any("-" in c for c in raw_kept)
         if dataset in _ESAT_DATASETS:
             apply_car, skip_reason = False, "esat_parity"
-        elif dataset == "bci":
+        elif bci:
             apply_car, skip_reason = False, "bci_parity"
         elif c_eff < 3:
             apply_car, skip_reason = False, "c_lt_3"
@@ -485,8 +502,8 @@ class EEGPTBackbone(BenchmarkBackbone):
 
         x, raw_kept, _ = strip_zero_channels(x, raw_channels)
 
-        dataset = meta[0].get("dataset") if meta else None
-        if dataset == "bci":
+        bci = is_bci_batch(meta)
+        if bci:
             keep_indices: List[int] = []
             kept_names: List[str] = []
             for i, ch in enumerate(raw_kept):
@@ -510,7 +527,7 @@ class EEGPTBackbone(BenchmarkBackbone):
 
         c_eff = x.shape[-2]
         has_bipolar_label = any("-" in c for c in raw_kept)
-        if dataset == "bci":
+        if bci:
             apply_car = False
         elif c_eff < 3:
             apply_car = False
@@ -552,7 +569,7 @@ class EEGPTBackbone(BenchmarkBackbone):
             "native_tile_len": _NATIVE_TILE_LEN,
             "patch_size": _PATCH_SIZE,
             "pretrain_sfreq": _TARGET_SFREQ,
-            "amplitude_scale_factor": _AMP_SCALE_FACTOR,
+            "amplitude_scale_factor": self._last_scale,
             "reference_applied": self._last_reference_applied,
             "car_skip_reason": self._last_car_skip_reason,
             "embedding_reduction": "duration_weighted_mean_of_per_tile_summary_token_means",

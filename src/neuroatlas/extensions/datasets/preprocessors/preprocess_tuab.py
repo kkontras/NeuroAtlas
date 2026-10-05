@@ -5,7 +5,7 @@ Usage::
 
     python -m neuroatlas.extensions.datasets.preprocessors.preprocess_tuab \\
         --raw-root ${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_abnormal/v3.0.1/edf \\
-        --cache-root ${REPO_ROOT}/tuab_cache/hdf5 \\
+        --cache-root ${EEG_CACHE_ROOT}/prepared/tuab \\
         --splits train eval \\
         --workers 4
 

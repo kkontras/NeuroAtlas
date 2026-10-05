@@ -11,6 +11,9 @@ with hardcoded channel lists and preprocessed-file support.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -48,6 +51,65 @@ MI_MOTOR_BAND = (4.0, 40.0)
 
 #: seconds dropped from the head of each trial when confound control is on
 CONFOUND_CONTROL_TMIN = 1.0
+
+#: The paper's motor-imagery trial: the first 4 s after the cue. Every MI
+#: config the published BCI embeddings were preprocessed with
+#: (dataio/bci.py DATASET_CONFIGS, tmax=4.0) cuts the trial there --
+#: bci_windowing forces each annotation to 4.0 s -- whatever MOABB's own
+#: interval is (BNCI2014_004 4.5 s, BNCI2015_001 and Dreyer2023 5 s,
+#: Shin2017A 10 s). The published embeddings agree: STEEGFormer's per-patch
+#: BCI embeddings hold 32 patches of 0.125 s (4.0 s) for every MI cohort, and
+#: 24 (3.0 s) in the confound-controlled track.
+MI_TRIAL_SECONDS = 4.0
+
+
+def trial_window(cfg: "MOABBDatasetConfig", annotation_seconds: float):
+    """``(start, stop)`` of the paper's trial, in s after the annotation onset.
+
+    The annotation is the trial as MOABB publishes it (onset at the cue plus
+    the dataset's ``interval[0]``, ``annotation_seconds`` long). The window is
+    the one the paper's own preprocessing cut for this cohort:
+
+    1. the cohort's config in dataio/bci.py ``DATASET_CONFIGS`` (its own key,
+       else its ``_labram`` variant -- every variant has the same window):
+       start ``tmin``, stop ``trial_duration``, as bci.load_and_preprocess
+       cuts it (Nakanishi2015: 0.15-4.15 s, a 4.0 s trial);
+    2. otherwise, for motor imagery, the first :data:`MI_TRIAL_SECONDS` --
+       never more than the annotation, so a cohort with shorter trials keeps
+       them whole;
+    3. otherwise MOABB's trial as published.
+
+    Confound control's 1 s offset is added on top by the caller.
+    """
+    from neuroatlas.extensions.datasets.dataio.bci import DATASET_CONFIGS
+
+    paper = DATASET_CONFIGS.get(cfg.slug) or DATASET_CONFIGS.get(f"{cfg.slug}_labram")
+    if paper is not None:
+        return float(paper.tmin), float(paper.trial_duration)
+    if cfg.paradigm == "mi":
+        return 0.0, min(MI_TRIAL_SECONDS, float(annotation_seconds))
+    return 0.0, float(annotation_seconds)
+
+
+def _annotation_seconds(dataset, trials: Optional[Dict[str, int]] = None) -> Optional[float]:
+    """The single trial duration MOABB gave the trial annotations, or None.
+
+    braindecode builds every annotation of a MOABB recording from the
+    dataset's one ``interval``, so the trials share a duration. Only the
+    annotations named in *trials* count when it is given: MNE cuts an event
+    at a recording's edge short (Dreyer2023's run-start marker, 0.0625 s).
+    None when they differ (or there are none): the caller then leaves MOABB's
+    trials as they are.
+    """
+    durations = set()
+    for rec in dataset.datasets:
+        raw = getattr(rec, "raw", None)
+        if raw is not None and len(raw.annotations):
+            durations.update(round(float(d), 6)
+                             for d, name in zip(raw.annotations.duration,
+                                                raw.annotations.description)
+                             if trials is None or name in trials)
+    return durations.pop() if len(durations) == 1 else None
 
 
 def loso_fold_count(slug: str) -> int:
@@ -338,12 +400,106 @@ for _lst in (_MI, _P300, _SSVEP, _CVEP, _RESTING):
 # Subject discovery
 # ---------------------------------------------------------------------------
 
+class MOABBDatasetUnavailable(LookupError):
+    """The installed moabb has no class for this cohort, and none is vendored."""
+
+
+def moabb_dataset_class(moabb_name: str) -> type:
+    """The MOABB dataset class *moabb_name*.
+
+    The installed moabb's own class when it has one, else the copy in
+    ``moabb_vendored`` (Dreyer2023 and Kim2025BetaRange, which moabb 1.2.0 --
+    the last release on numpy<2 -- predates). Anything else raises
+    :class:`MOABBDatasetUnavailable`, naming the moabb version: most of the
+    MOABB cohorts registered here beyond the paper's 14 arrived in moabb
+    releases that need numpy>=2.
+    """
+    import moabb
+
+    from neuroatlas.extensions.datasets.dataio.moabb_vendored import dataset_class
+
+    cls = dataset_class(moabb_name)
+    if cls is None:
+        raise MOABBDatasetUnavailable(
+            f"moabb {moabb.__version__} has no dataset {moabb_name!r}, and NeuroAtlas "
+            f"vendors only Dreyer2023 and Kim2025BetaRange. It is in a later moabb, "
+            f"which needs numpy>=2 (the benchmark's stack is numpy 1.26 with moabb 1.2.0)."
+        )
+    return cls
+
+
+def moabb_dataset_arg(moabb_name: str):
+    """What braindecode's ``MOABBDataset(dataset_name=...)`` should get.
+
+    The name, when the installed moabb registers the class (braindecode looks
+    it up in moabb's ``dataset_list``); an instance of the vendored class
+    otherwise -- braindecode accepts a ``BaseDataset`` instance too. Without
+    moabb the name is passed through, for braindecode to report.
+    """
+    try:
+        import moabb.datasets as upstream
+    except ImportError:
+        return moabb_name
+    if hasattr(upstream, moabb_name):
+        return moabb_name
+    from neuroatlas.extensions.datasets.dataio.moabb_vendored import VENDORED
+
+    return moabb_dataset_class(moabb_name)() if moabb_name in VENDORED else moabb_name
+
+
+class MOABBDataMissing(FileNotFoundError):
+    """MOABB would have to download this cohort, and downloads are off."""
+
+
+@contextlib.contextmanager
+def no_download_when_offline(slug: str):
+    """With downloads switched off, refuse instead of letting MOABB fetch.
+
+    MOABB downloads whatever a dataset lacks the moment it is read, through
+    whichever transport that dataset uses (pooch, urllib, mne's fetcher,
+    NEMAR's client). Every one of them opens an internet socket, so under
+    offline mode (``neuroatlas.config.is_offline``: every command but the
+    download ones, unless ``--online``) the read runs with internet sockets
+    refused; the first attempt ends it with one message naming the command
+    that fetches the cohort. A run would otherwise fetch it unannounced, as
+    `run` did with 132 MB of Nakanishi2015.
+    """
+    from neuroatlas.config import is_offline
+
+    if not is_offline():
+        yield
+        return
+    attempted: List[Any] = []
+    real_connect = socket.socket.connect
+
+    def _refuse(sock, address, *args, **kwargs):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            attempted.append(address)
+            raise OSError(f"NeuroAtlas is offline: refused a connection to {address!r}")
+        return real_connect(sock, address, *args, **kwargs)
+
+    message = (
+        f"{slug}: its MOABB data is not all under $MNE_DATA "
+        f"({os.environ.get('MNE_DATA') or '~/mne_data'}), and downloads are off. "
+        f"Fetch it with `neuroatlas data download {slug}` (or pass --online)."
+    )
+    socket.socket.connect = _refuse
+    try:
+        yield
+    except Exception as exc:
+        if attempted:
+            raise MOABBDataMissing(message) from exc
+        raise
+    finally:
+        socket.socket.connect = real_connect
+    if attempted:                                    # a transport that swallowed the error
+        raise MOABBDataMissing(message)
+
+
 def get_moabb_subjects(cfg: MOABBDatasetConfig) -> List[int]:
     """Discover available subjects from MOABB, minus exclusions."""
-    import moabb.datasets as moabb_ds
-
-    ds_cls = getattr(moabb_ds, cfg.moabb_name)
-    ds = ds_cls()
+    with no_download_when_offline(cfg.slug):
+        ds = moabb_dataset_class(cfg.moabb_name)()
     return [s for s in ds.subject_list if s not in cfg.exclude_subjects]
 
 
@@ -361,11 +517,12 @@ def load_and_preprocess_moabb(
 
     Pipeline:
       1. Load raw data via braindecode ``MOABBDataset``
-      2. Scale V → µV
+      2. Keep the EEG channels; scale V → µV
       3. Bandpass filter  (paradigm-specific defaults)
       4. Optional common average reference
       5. Resample to target sampling rate
-      6. Window from event annotations
+      6. Window from event annotations: the paper's trial window
+         (:func:`trial_window`), plus confound control's 1 s offset
 
     Returns
     -------
@@ -377,11 +534,19 @@ def load_and_preprocess_moabb(
     from braindecode.preprocessing.windowers import create_windows_from_events
 
     subjects = list(subject_ids) if subject_ids else get_moabb_subjects(cfg)
-    dataset = MOABBDataset(dataset_name=cfg.moabb_name, subject_ids=subjects)
+    with no_download_when_offline(cfg.slug):
+        dataset = MOABBDataset(dataset_name=moabb_dataset_arg(cfg.moabb_name),
+                               subject_ids=subjects)
 
     fmin, fmax, start_offset = resolve_confound_control(cfg, confound_control)
 
     preprocessors = [
+        # EEG channels only. Without this the windows also carried the
+        # recording's EOG and stimulus channels -- BNCI2014_001 came out as
+        # 22 EEG + EOG1-3 + STI = 26 channels against the 22 its config and
+        # metadata declare -- and, since the scaling below only touches data
+        # channels, the EOG stayed in volts (~1e-6) next to EEG in µV.
+        Preprocessor("pick", picks="eeg"),
         Preprocessor(lambda x: x * 1e6),  # V -> µV
         Preprocessor("filter", l_freq=fmin, h_freq=fmax),
     ]
@@ -393,11 +558,43 @@ def load_and_preprocess_moabb(
 
     preprocess(dataset, preprocessors, n_jobs=n_jobs)
 
+    # The paper's trial, not MOABB's: BNCI2014_004's 4.5 s and BNCI2015_001's
+    # 5 s trials were cut to the 4 s after the cue. Left at 4.5 s the trial
+    # was a whole number of patches for no 1 s-patch model, so LaBraM,
+    # CBraMod and NeuroLM refused it.
+    trials = _trial_mapping(cfg)
+    start, stop = 0, 0
+    annotation_seconds = _annotation_seconds(dataset, trials)
+    if annotation_seconds is not None:
+        t0, t1 = trial_window(cfg, annotation_seconds)
+        start = int(round(t0 * cfg.resample_sfreq))
+        stop = int(round((t1 - annotation_seconds) * cfg.resample_sfreq))
+
     windows_dataset = create_windows_from_events(
         dataset,
-        trial_start_offset_samples=start_offset,
-        trial_stop_offset_samples=0,
+        trial_start_offset_samples=start + start_offset,
+        trial_stop_offset_samples=stop,
+        mapping=trials,
         preload=True,
     )
 
     return windows_dataset
+
+
+def _trial_mapping(cfg: MOABBDatasetConfig) -> Optional[Dict[str, int]]:
+    """The cohort's own trial events -> 0-based labels, or None to infer.
+
+    braindecode turns every annotation into a trial unless told which. For a
+    cohort read from BIDS (Dreyer2023, ErpCore2021) the annotations are every
+    event in events.tsv -- run starts, fixation crosses, feedback -- and
+    Dreyer2023 failed outright ("Overlapping trials detected"). The mapping
+    keeps the classes the MOABB dataset declares (its ``event_id``), numbered
+    in sorted order, which is the numbering braindecode infers when those are
+    the only annotations -- so the other cohorts' labels are unchanged. (The
+    paper's pipeline passed its own class mapping the same way.)
+    """
+    try:
+        events = moabb_dataset_class(cfg.moabb_name)().event_id
+    except Exception:                   # no moabb, or a cohort it does not know
+        return None
+    return {name: i for i, name in enumerate(sorted(events))}

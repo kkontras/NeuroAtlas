@@ -15,7 +15,7 @@ import torch
 
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 
-from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE
+from .ts_foundation_base import UnivariateTimeSeriesBackbone, _HF_CACHE, _install_hint
 
 # MOMENT supports up to 8192 time steps.
 _MAX_SEQ_LEN = 8192
@@ -29,7 +29,7 @@ class MomentBackbone(UnivariateTimeSeriesBackbone):
             from momentfm import MOMENTPipeline
         except ImportError as exc:
             raise ImportError(
-                "momentfm is required for MOMENT. Install: pip install momentfm"
+                "momentfm is required for MOMENT. Install: " + _install_hint("moment")
             ) from exc
 
         hf_id = spec.checkpoint_path or "AutonLab/MOMENT-1-base"

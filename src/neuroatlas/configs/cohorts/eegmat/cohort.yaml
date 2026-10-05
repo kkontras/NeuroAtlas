@@ -7,7 +7,7 @@
 schema_version: 1
 
 slug: eegmat
-name: EEGMat
+name: EEG During Mental Arithmetic Tasks (EEGMat)
 domain: bci
 paper_dataset: true
 
@@ -22,11 +22,17 @@ cohort:
 
 acquisition:
   kind: physionet
-  ref: eegmat/1.0.0
-  note: >
-    Read from the preprocessed pickles this cohort was benchmarked on, which
-    is what the published embeddings and probes were built from. There is no
-    download path in this repository.
+  ref: eegmat
+  version: 1.0.0
+  upstream: https://physionet.org/content/eegmat/1.0.0/
+  size_gb: 0.18                             # "Total uncompressed size: 175.1 MB"
+  dest: ${EEG_DATA_ROOT}/eegmat             # where `data download` puts the raw EDFs
+  expect: {glob: "Subject*.edf", count: 72} # RECORDS: 36 subjects x (rest, task)
+  prepared_only: >
+    The benchmark reads the preprocessed pickle (4 s windows at 128 Hz) the
+    published embeddings were built from; no script in this repository builds
+    it from the raw EDFs. Ask the authors for EEGMat_preprocessed_*.pkl and set
+    eegmat.preprocessed_path to it.
 
 signal:
   notch_freq: 50.0
@@ -52,6 +58,7 @@ splits:
 
 runtime_defaults:
   batch_size: 64
+  preprocessed_path: null              # `config set eegmat.preprocessed_path FILE`
   fold: 0
   n_folds: 5
   num_workers: 0

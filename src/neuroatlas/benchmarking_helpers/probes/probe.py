@@ -32,6 +32,37 @@ def _higher_is_better(metric_name: str) -> bool:
     return _HIGHER_IS_BETTER.get(metric_name, True)
 
 
+# The metrics a regression probe reports and can therefore select on.
+# compute_regression_metrics also returns pearson_p and the residual moments,
+# which are diagnostics, not selection criteria.
+REGRESSION_SELECTION_METRICS = ("mae", "rmse", "r2", "pearson_r")
+
+
+def _check_selection_metric(selection_metric: str, is_regression: bool) -> None:
+    """Refuse a selection metric the probe will not compute, before fitting.
+
+    A classification metric handed to a regression probe used to surface as
+    ``KeyError: 'macro_f1'`` after the first seed had been fitted (F-072).
+    """
+    if is_regression and selection_metric not in REGRESSION_SELECTION_METRICS:
+        raise ValueError(
+            f"selection_metric={selection_metric!r} is not a regression metric; a "
+            f"regression probe reports {', '.join(REGRESSION_SELECTION_METRICS)} "
+            f"(use 'mae', lower is better)."
+        )
+
+
+def _selection_value(metrics: Dict[str, Any], selection_metric: str, split: str) -> float:
+    try:
+        return float(metrics[selection_metric])
+    except KeyError:
+        available = sorted(k for k, v in metrics.items() if isinstance(v, (int, float)))
+        raise ValueError(
+            f"selection_metric={selection_metric!r} is not among the {split} metrics "
+            f"this probe computed ({', '.join(available)})."
+        ) from None
+
+
 @dataclass
 class ProbeResult:
     metrics: Dict[str, Any]
@@ -121,6 +152,7 @@ def train_probe(
     ridge_alpha: float = 1.0,
 ) -> ProbeResult:
     is_regression = _REGRESSION_PROBE_FIX and mode == "regression"
+    _check_selection_metric(selection_metric, is_regression)
 
     # Filter out non-finite embedding rows (e.g. GPU-corrupted cache entries).
     def _drop_nonfinite(feats, labs, name):
@@ -248,7 +280,7 @@ def train_probe(
         primary_test_key = "mae" if is_regression else "accuracy"
         print(
             f"[probe] seed={seed} "
-            f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
+            f"val_{selection_metric}={_selection_value(val_metrics, selection_metric, 'val'):.6f} "
             f"{primary_test_metric}={float(test_metrics[primary_test_key]):.6f}"
         )
 

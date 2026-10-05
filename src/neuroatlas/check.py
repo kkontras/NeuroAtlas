@@ -8,6 +8,7 @@ single batch cannot show. Nothing is trained, cached or downloaded.
 from __future__ import annotations
 
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -22,24 +23,60 @@ class PairCheck:
     forward: str = "-"
     notes: List[str] = field(default_factory=list)
     error: bool = False
+    seconds: Optional[float] = None      # wall time of this pair's check
+    #: The whole error message of a failed forward pass (the JSON ``error``
+    #: field); the table note carries its first line.
+    message: Optional[str] = None
 
 
-def _dataset_config(slug: str, embed_argv, model: str):
+def _error_note(exc: BaseException) -> str:
+    """The table note for a failed pair: the message's whole first line, and
+    how many lines follow it. It used to be cut at 300 characters, which left
+    BIOT's state_dict mismatch as its header line alone."""
+    text = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    lines = text.splitlines() or [text]
+    if len(lines) > 1:
+        return (f"{lines[0]} (+{len(lines) - 1} more line{'s' if len(lines) > 2 else ''}: "
+                f"`--format json` shows the whole message)")
+    return lines[0]
+
+
+def _dataset_config(slug: str, embed_argv, model: str, num_workers: Optional[int] = None):
     from neuroatlas.entrypoints import embed
 
-    argv = [*embed_argv, "--models", model]
+    # One batch is read: loader workers would only add start-up time (each
+    # forks the process), so check reads in-process unless told otherwise.
+    argv = [*embed_argv, "--models", model, "--num-workers", str(num_workers or 0)]
     return embed.build_config(embed.build_parser(argv).parse_args(argv))
 
 
 def _first_batch(datamodule):
+    """A batch from the loader extraction reads -- in order.
+
+    Not ``train_dataloader``: the epilepsy readers draw train windows through
+    a weighted random sampler, so its first batch decoded ~50 whole
+    recordings (CHB-MIT: ~110 s per pair) where an in-order batch decodes
+    one.
+    """
     if datamodule.supports_global_embedding_cache():
         loader = datamodule.full_embedding_dataloader()
     else:
-        loader = datamodule.train_dataloader()
+        loader = None
+        for name in ("val_dataloader", "test_dataloader"):
+            try:
+                candidate = getattr(datamodule, name)()
+                if len(candidate):
+                    loader = candidate
+                    break
+            except Exception:
+                continue
+        if loader is None:
+            loader = datamodule.train_dataloader()
     return next(iter(loader))
 
 
-def check_pair(slug: str, spec, embed_argv, data_status, model_status) -> PairCheck:
+def check_pair(slug: str, spec, embed_argv, data_status, model_status,
+               num_workers: Optional[int] = None) -> PairCheck:
     import numpy as np
 
     from neuroatlas.benchmarking_helpers.channels.channel_map import load_channel_map
@@ -53,12 +90,19 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status) -> PairCh
         pc.notes.append(str(exc).split(": ", 1)[-1])
         return pc
     if cmap is not None:
-        if cmap.is_skip(spec.model_family):
+        # The pair's map state, decided before any data is read (values:
+        # channel_map.CHANNEL_MAP_STATES). A family the map has no entry for
+        # is `invalid` here rather than `applied` and a failure on the batch.
+        state, detail = cmap.state_for(spec.model_family)
+        if state == "skip":
             pc.channel_map = "n/a (skip)"
-            note = cmap.notes.get(spec.model_family)
-            pc.notes.append(f"not applicable: {note}" if note else "not applicable to this dataset")
+            pc.notes.append(f"not applicable: {detail}" if detail else "not applicable to this dataset")
             return pc
-        pc.channel_map = "applied"
+        if state == "invalid":
+            pc.channel_map, pc.error = "invalid", True
+            pc.notes.append(detail)
+            return pc
+        pc.channel_map = f"applied ({detail})" if detail else "applied"
 
     if not data_status.found and data_status.state != "fetched on first use":
         pc.notes.append(f"data {data_status.state}: forward skipped"
@@ -73,7 +117,7 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status) -> PairCh
         return pc
 
     try:
-        config = _dataset_config(slug, embed_argv, spec.identifier)
+        config = _dataset_config(slug, embed_argv, spec.identifier, num_workers)
         with tempfile.TemporaryDirectory(prefix="neuroatlas-check-") as tmp:
             config["benchmark"]["cache_root"] = tmp
             config["benchmark"]["output_root"] = tmp
@@ -100,12 +144,15 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status) -> PairCh
         pc.notes.append("the loader yielded nothing: no windows survived the dataset's filters")
     except Exception as exc:
         pc.forward, pc.error = "error", True
-        pc.notes.append(f"{type(exc).__name__}: {str(exc).splitlines()[0][:300] if str(exc) else ''}")
+        pc.notes.append(_error_note(exc))
+        pc.message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
     return pc
 
 
 def check(benchmark: str, models: str, suite: str = "single",
-          variant: str = "default") -> List[PairCheck]:
+          variant: str = "default", num_workers: Optional[int] = None) -> List[PairCheck]:
+    """``num_workers``: loader workers for the one batch (default 0: read in
+    this process, which is fastest for a single batch)."""
     from neuroatlas import catalog, data, selectors
     from neuroatlas import models as model_state
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
@@ -121,5 +168,9 @@ def check(benchmark: str, models: str, suite: str = "single",
             continue
         ds = data.status(step.dataset)
         for spec in specs:
-            out.append(check_pair(step.dataset, spec, list(step.argv), ds, model_state.status(spec)))
+            started = time.monotonic()
+            pc = check_pair(step.dataset, spec, list(step.argv), ds, model_state.status(spec),
+                            num_workers=num_workers)
+            pc.seconds = time.monotonic() - started
+            out.append(pc)
     return out

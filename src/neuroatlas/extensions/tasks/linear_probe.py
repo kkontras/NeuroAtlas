@@ -14,8 +14,10 @@ from neuroatlas.benchmarking_helpers.runtime.cache import (
     IncrementalEmbeddingWriter,
     build_cache_key,
     cache_exists,
+    discard_partial,
     load_embedding_payload,
     merge_embedding_chunks,
+    read_progress,
     save_embedding_payload,
     save_probe_payload,
 )
@@ -61,6 +63,82 @@ def require_cached_embeddings(active: bool = True):
 
 class EmbeddingsNotFound(FileNotFoundError):
     """No embeddings for this (dataset, model, split), and probing may not make them."""
+
+
+def _json(value) -> str:
+    import json
+
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _benchmarks_with(dataset_name: str) -> List[str]:
+    try:
+        from neuroatlas import catalog
+
+        return [name for name in catalog.benchmarks_using(dataset_name)
+                if not catalog.load(name).derived_from]
+    except Exception:
+        return []
+
+
+def _not_found_message(cache_dir: Path, dataset_name: str, checkpoint_spec, split_name: str,
+                       wanted: Dict[str, object]) -> str:
+    """Say which cache was wanted, which ones exist, and how they differ.
+
+    The usual cause is not a missing extraction but a different key: the
+    embed step and the probe were given different dataset settings (a
+    ``--set window_s=10`` on one and the manifest's 10.0 on the other is
+    already a different key). So this prints the inputs that differ between
+    the wanted key and the nearest cache that exists, and suggests only a
+    command that gives both steps the same settings.
+    """
+    import json
+
+    model = checkpoint_spec.identifier
+    pair_dir = cache_dir.parent.parent            # <cache_root>/<dataset>/<model>
+    found = []
+    if pair_dir.is_dir():
+        for meta in sorted(pair_dir.glob("*/*/metadata.json")):
+            try:
+                have = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            keys = set(have) | set(wanted)
+            diff = sorted(k for k in keys if _json(have.get(k)) != _json(wanted.get(k)))
+            found.append((len(diff), meta.parent, have, diff))
+    lines = [
+        f"No embeddings for dataset={dataset_name!r} checkpoint={model!r} split={split_name!r}.",
+        f"  looked in: {cache_dir}",
+    ]
+    if found:
+        found.sort(key=lambda t: (t[0], str(t[1])))
+        _, where, have, diff = found[0]
+        lines.append(f"  nearest existing cache for this dataset and model: {where}")
+        lines.append("  it was made with different inputs:")
+        for k in diff:
+            lines.append(f"    {k}: that cache {_json(have.get(k)) if k in have else '(absent)'}, "
+                         f"this probe {_json(wanted.get(k)) if k in wanted else '(absent)'}")
+        if len(found) > 1:
+            lines.append(f"  ({len(found) - 1} other cache(s) for this pair under {pair_dir})")
+        lines.append("A probe reads only embeddings made with the same dataset settings "
+                     "(--set ..., --expected-epoch-seconds) it is given itself.")
+    else:
+        lines.append(f"  no embeddings exist yet for this dataset and model under {pair_dir.parent.parent}")
+    if split_name in ("train", "val", "test") and "fold" in wanted:
+        # A per-split cache holds one fold's split: `embed` must be given
+        # that fold (`run` passes the probe's folds to its embed step).
+        lines.append(f"  this dataset caches its embeddings per fold and split: embed fold "
+                     f"{wanted.get('fold')} with `neuroatlas embed ... --folds {wanted.get('fold')}`.")
+    lines.append("Probing reads embeddings; it does not create them.")
+    benches = _benchmarks_with(dataset_name)
+    if len(benches) == 1:
+        lines.append(f"To extract and probe with one set of settings: "
+                     f"neuroatlas run {benches[0]} --dataset {dataset_name} -m {model}")
+    else:
+        lines.append(f"To extract: neuroatlas embed --dataset {dataset_name} --models {model}, "
+                     f"with the same --set/--expected-epoch-seconds flags as this probe, "
+                     f"and the same --cache-root.")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -128,6 +206,26 @@ def current_pooling() -> str:
 
 class PoolingNotSupported(NotImplementedError):
     """This backbone cannot hand back per-patch tokens."""
+
+
+def probe_features(features) -> np.ndarray:
+    """The 2-D ``(n_windows, dim)`` matrix a probe fits on.
+
+    ``--pooling mean`` caches one vector per window, already 2-D.
+    ``--pooling per_patch`` caches each window's tokens, ``(n_windows,
+    n_tokens, token_dim)``; they are concatenated in token order into one
+    ``n_tokens * token_dim`` vector per window. That is the paper's per-patch
+    protocol: the per-patch BCI numbers (Fig. 20 / 21, the per_patch columns
+    of the BCI tables) were probed by ``probe_bci_from_embeddings.py``, whose
+    ``_flatten_features`` reshapes ``(n_trials, n_patches, dim)`` to
+    ``(n_trials, -1)`` -- "flatten the patch axis into the feature dim ...
+    (concatenate patches)" -- before the same StandardScaler + logistic
+    regression. Averaging the tokens instead would be ``--pooling mean``.
+    """
+    arr = features if isinstance(features, np.ndarray) else np.asarray(features)
+    if arr.ndim <= 2:
+        return arr
+    return np.asarray(arr).reshape(arr.shape[0], -1)
 
 
 def _sanitize_meta(m: dict) -> dict:
@@ -249,20 +347,172 @@ def _split_dataset_by_subject(dataset, n_splits: int) -> List:
     return splits
 
 
-def _sequential_round_robin_iterator(loaders: Sequence[DataLoader]) -> Iterator:
-    """Yield ``(loader_idx, batch)`` in strict round-robin order, single-threaded."""
+def _sequential_round_robin_iterator(loaders: Sequence[DataLoader], skip_first_round=()) -> Iterator:
+    """Yield ``(loader_idx, batch)`` in strict round-robin order, single-threaded.
+
+    ``skip_first_round``: loaders that already served their batch of the
+    round an interrupted run stopped in; resuming serves the rest of that
+    round first, so the rows arrive in exactly the uninterrupted order.
+    """
     iters = [iter(loader) for loader in loaders]
     sentinel = object()
     active = list(range(len(iters)))
+    skip = set(skip_first_round)
     while active:
         next_active = []
         for i in active:
+            if i in skip:
+                next_active.append(i)
+                continue
             batch = next(iters[i], sentinel)
             if batch is sentinel:
                 continue
             yield i, batch
             next_active.append(i)
+        skip = set()
         active = next_active
+
+
+def _round_robin_resume_point(lengths: Sequence[int], batch_size: int, skip_rows: int):
+    """Where an interrupted round-robin over *lengths*-row loaders stopped.
+
+    Returns ``(batches consumed per loader, loaders done in the open round)``
+    when *skip_rows* falls exactly on a batch boundary, else None. Replays
+    :func:`_sequential_round_robin_iterator` on the row counts alone, so it
+    is exact even after some loaders have run out (their last batch is short,
+    which is why ``skip_rows % batch_size`` cannot locate the point).
+    """
+    n_batches = [-(-int(n) // batch_size) for n in lengths]
+    consumed = [0] * len(lengths)
+    rows = 0
+    active = [i for i, nb in enumerate(n_batches) if nb > 0]
+    while active:
+        for p, i in enumerate(active):
+            if rows == skip_rows:
+                return consumed, set(active[:p])
+            rows += min(batch_size, int(lengths[i]) - consumed[i] * batch_size)
+            consumed[i] += 1
+            if rows > skip_rows:
+                return None
+        active = [i for i in active if consumed[i] < n_batches[i]]
+    return (consumed, set()) if rows == skip_rows else None
+
+
+class _ListBatchSampler(Sampler):
+    def __init__(self, batches: List[List[int]]) -> None:
+        self._batches = batches
+
+    def __iter__(self):
+        return iter(self._batches)
+
+    def __len__(self) -> int:
+        return len(self._batches)
+
+
+def _inner_dataloader(loader):
+    """``(wrappers outermost first, torch DataLoader or None)``."""
+    chain = []
+    inner = loader
+    while not isinstance(inner, DataLoader) and hasattr(inner, "_loader"):
+        chain.append(inner)
+        inner = inner._loader
+    return chain, (inner if isinstance(inner, DataLoader) else None)
+
+
+def _loader_order_tag(loader) -> Optional[str]:
+    """The batch sampler's order tag, when its order depends on its config."""
+    _, inner = _inner_dataloader(loader)
+    return getattr(getattr(inner, "batch_sampler", None), "order_tag", None)
+
+
+def _resume_loader(loader, skip_rows: int, order_tag: Optional[str] = None):
+    """A copy of *loader* that starts after its first *skip_rows* rows.
+
+    Walks the wrapper chain (each wrapper keeps its inner loader in
+    ``_loader``) down to the torch DataLoader, replays its batch sampler --
+    index lists only, no data is read -- to find the batch where *skip_rows*
+    ends, and rebuilds the chain over a DataLoader that starts there with the
+    same workers and collate. Returns ``(loader, n_batches_skipped)``, or
+    None when the order is not reproducible (a random sampler) or the row
+    count does not fall on a batch boundary.
+    """
+    from torch.utils.data import BatchSampler, SequentialSampler
+
+    chain, inner = _inner_dataloader(loader)
+    if inner is None:
+        return None
+    batch_sampler = inner.batch_sampler
+    current_tag = getattr(batch_sampler, "order_tag", None)
+    if current_tag is not None and order_tag != current_tag:
+        # Written in another order (another worker count): replay that one.
+        if order_tag is None or not hasattr(batch_sampler, "with_order"):
+            return None
+        batch_sampler = batch_sampler.with_order(order_tag)
+    deterministic = getattr(batch_sampler, "deterministic", False) or (
+        isinstance(batch_sampler, BatchSampler)
+        and isinstance(batch_sampler.sampler, SequentialSampler)
+    )
+    if not deterministic:
+        return None
+    batches = [list(b) for b in batch_sampler]
+    rows = 0
+    k = 0
+    while k < len(batches) and rows < skip_rows:
+        rows += len(batches[k])
+        k += 1
+    if rows != skip_rows:
+        return None
+    kwargs = dict(
+        batch_sampler=_ListBatchSampler(batches[k:]),
+        num_workers=inner.num_workers,
+        collate_fn=inner.collate_fn,
+        pin_memory=inner.pin_memory,
+        timeout=inner.timeout,
+        worker_init_fn=inner.worker_init_fn,
+        multiprocessing_context=inner.multiprocessing_context,
+        persistent_workers=inner.persistent_workers,
+    )
+    if inner.num_workers > 0:
+        kwargs["prefetch_factor"] = inner.prefetch_factor
+    rebuilt = DataLoader(inner.dataset, **kwargs)
+    for wrapper in reversed(chain):
+        outer = copy.copy(wrapper)
+        outer._loader = rebuilt
+        rebuilt = outer
+    return rebuilt, k
+
+
+def _require_row_per_item(features: np.ndarray, labels: np.ndarray, meta: List[dict],
+                          checkpoint_spec) -> None:
+    """The cache stores features, labels and items side by side, one row each
+    per item of the batch; refuse a batch whose counts differ rather than
+    write a cache whose rows no longer line up.
+
+    A sequence checkpoint's batch is ``B`` windows of ``W`` epochs, and how
+    many items it carries depends on its target epoch: every epoch (``B * W``)
+    for ``target_idx="all"``, one per window (``B``) otherwise. The backbone
+    must return that many rows. CoRe-Sleep once returned one ``W * dim`` row
+    per window, which wrote 21,807 feature rows next to 457,947 items on
+    Sleep-EDF and failed every probe on "cache row-count mismatch".
+    """
+    n_items = len(meta)
+    n_feat = int(features.shape[0]) if features.ndim else 0
+    n_label = int(labels.shape[0])
+    if n_feat == n_items and n_label == n_items:
+        return
+    seq = int(getattr(checkpoint_spec, "expected_sequence_length", 1) or 1)
+    overrides = getattr(checkpoint_spec, "runtime_overrides", None) or {}
+    hint = ""
+    if seq > 1:
+        hint = (f" It reads windows of {seq} epochs with embedding_target_idx="
+                f"{overrides.get('embedding_target_idx', overrides.get('target_idx', 'all'))!r}: "
+                f"its extract_embeddings must return one row per labelled epoch "
+                f"(every epoch for 'all', the target epoch otherwise).")
+    raise RuntimeError(
+        f"{checkpoint_spec.identifier}: the backbone returned {n_feat} embedding rows "
+        f"(shape {tuple(features.shape)}) for a batch of {n_items} items with "
+        f"{n_label} labels; the cache needs one row per item.{hint}"
+    )
 
 
 def _extract(backbone, batch):
@@ -329,15 +579,19 @@ def _extract_or_load_embeddings(
         return payload, {"cache_dir": str(cache_dir), "cache_hit": True}
 
     if _REQUIRE_CACHED_EMBEDDINGS:
-        raise EmbeddingsNotFound(
-            f"No embeddings for dataset={dataset_name!r} "
-            f"checkpoint={checkpoint_spec.identifier!r} split={split_name!r}.\n"
-            f"  looked in: {cache_dir}\n"
-            f"Probing reads embeddings; it does not create them. Run:\n"
-            f"  python -m neuroatlas.entrypoints.embed "
-            f"--dataset {dataset_name} --models {checkpoint_spec.identifier}\n"
-            f"(then re-run this probe with the same --cache-root)."
-        )
+        raise EmbeddingsNotFound(_not_found_message(
+            cache_dir, dataset_name, checkpoint_spec, split_name,
+            _cache_spec(dataset_name, checkpoint_spec, split_name, datamodule, purpose=cache_purpose),
+        ))
+
+    order_tag = _loader_order_tag(dataloader)
+    if order_tag is not None:
+        progress = read_progress(cache_dir)
+        if progress and progress.get("n_rows") and not progress.get("order"):
+            # Rows written in an unrecorded order cannot be skipped by index.
+            print(f"[embedding] discarding an interrupted extraction at {cache_dir}: "
+                  f"its row order was not recorded", flush=True)
+            discard_partial(cache_dir)
 
     _MAX_SPLITS = 8
     num_workers = min(getattr(dataloader, "_num_workers", 0) or 0, _MAX_SPLITS)
@@ -354,6 +608,8 @@ def _extract_or_load_embeddings(
 
     with IncrementalEmbeddingWriter(cache_dir, num_workers=0) as writer:
         skip_rows = writer.n_rows_done
+        if skip_rows == 0:
+            writer.order_tag = order_tag
         efficient_resume = (
             skip_rows > 0
             and writer.has_restored_items
@@ -375,17 +631,21 @@ def _extract_or_load_embeddings(
             elif hasattr(ds, "evict_recording"):
                 ds.evict_recording(key)
 
+        initial_batches = 0
         if use_subject_split:
             splits = _split_dataset_by_subject(loader_dataset, num_workers)
             sub_offsets = [0] * num_workers
-            if efficient_resume:
-                k_batches = skip_rows // batch_size_val
-                for i in range(num_workers):
-                    if i < k_batches:
-                        skipped = -(-(k_batches - i) // num_workers)  # ceil div
-                    else:
-                        skipped = 0
-                    sub_offsets[i] = skipped * batch_size_val
+            done_in_open_round: set = set()
+            point = None
+            if skip_rows > 0 and writer.has_restored_items:
+                point = _round_robin_resume_point([len(ds) for ds in splits], batch_size_val, skip_rows)
+            if point is not None:
+                consumed, done_in_open_round = point
+                sub_offsets = [c * batch_size_val for c in consumed]
+                initial_batches = sum(consumed)
+                efficient_resume = True
+            else:
+                efficient_resume = False
             sub_loaders = []
             for ds, off in zip(splits, sub_offsets):
                 sampler = _OffsetSequentialSampler(ds, off) if off > 0 else None
@@ -400,12 +660,23 @@ def _extract_or_load_embeddings(
                         pin_memory=False,
                     )
                 )
-            raw_iter = _sequential_round_robin_iterator(sub_loaders)
+            raw_iter = _sequential_round_robin_iterator(sub_loaders, done_in_open_round)
             can_evict_per_loader = all(_has_evict(ds) for ds in splits)
         else:
             splits = None
             can_evict_per_loader = False
-            if efficient_resume:
+            resumed = None
+            if (skip_rows > 0 and writer.has_restored_items and not efficient_resume
+                    and not (num_workers > 0 and loader_dataset is not None and collate_fn is not None)):
+                # The loader is iterated as given (the epilepsy readers, any
+                # wrapper that hides its dataset): skip by batch index rather
+                # than re-reading every finished window.
+                resumed = _resume_loader(dataloader, skip_rows, writer.restored_order_tag)
+            if resumed is not None:
+                resume_dl, initial_batches = resumed
+                efficient_resume = True
+                raw_iter = ((0, batch) for batch in resume_dl)
+            elif efficient_resume:
                 resume_loader = DataLoader(
                     loader_dataset,
                     batch_size=batch_size_val,
@@ -415,6 +686,7 @@ def _extract_or_load_embeddings(
                     sampler=_OffsetSequentialSampler(loader_dataset, skip_rows),
                     pin_memory=False,
                 )
+                initial_batches = skip_rows // batch_size_val
                 raw_iter = ((0, batch) for batch in resume_loader)
             elif num_workers > 0 and loader_dataset is not None and collate_fn is not None and batch_size_val is not None:
                 safe_loader = DataLoader(
@@ -462,7 +734,9 @@ def _extract_or_load_embeddings(
             mode = "efficient" if efficient_resume else "re-walking"
             desc += f" (resuming from {skip_rows} rows, {mode})"
         n_extracted = 0
-        for loader_idx, batch in tqdm(raw_iter, total=total_batches, desc=desc, leave=True):
+        # A resumed bar starts at the resume point, not at 0.
+        for loader_idx, batch in tqdm(raw_iter, total=total_batches, desc=desc, leave=True,
+                                      initial=initial_batches if efficient_resume else 0):
             if _MAX_BATCHES is not None and n_extracted >= _MAX_BATCHES:
                 break
             batch_len = len(batch["meta"])
@@ -478,6 +752,7 @@ def _extract_or_load_embeddings(
             features = np.asarray(_extract(backbone, batch))
             labels = _flatten_labels(batch)
             meta = [_sanitize_meta(m) for m in batch["meta"]]
+            _require_row_per_item(features, labels, meta, checkpoint_spec)
             writer.append(features, labels, meta)
             del features, labels, batch
             if can_evict_per_loader:
@@ -524,6 +799,11 @@ def _extract_only_result(
             **_dataset_context(datamodule),
             "task_name": "linear_probe",
             "extract_only_status": status,
+            # "all": one cache serves every fold, so an extraction pass over
+            # several folds (embed --folds) is done after this one.
+            "embedding_cache_layout": (
+                "all" if any(k.startswith("global_") or k == "chunk_dir" for k in cache_paths)
+                else "per_split"),
         },
     )
 
@@ -613,6 +893,11 @@ def evaluate_linear_probe(
         if extract_only:
             return _extract_only_result(dataset_name, checkpoint_spec, datamodule, backbone, "extracted", cache_paths)
 
+    # Per-patch tokens (--pooling per_patch) become one concatenated vector
+    # per window -- the paper's per-patch probe (see probe_features).
+    for payload in (train_payload, val_payload, test_payload):
+        payload.features = probe_features(payload.features)
+
     # Filter out -1 (unscored) epochs for sleep-staging label modes only.
     label_mode = datamodule.metadata.get("label_mode", "sleep_stage")
     if label_mode == "sleep_stage" or label_mode.startswith("scorer_"):
@@ -665,6 +950,9 @@ def evaluate_linear_probe(
                 "val": int(len(val_payload.labels)),
                 "test": int(len(test_payload.labels)),
             },
+            "pooling": _POOLING,
+            "probe_feature_dim": int(np.asarray(train_payload.features).shape[1])
+            if np.asarray(train_payload.features).ndim == 2 else None,
             "probe_seeds": list(seeds),
             "per_seed": probe_result.per_seed,
         },

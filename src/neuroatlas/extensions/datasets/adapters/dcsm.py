@@ -22,6 +22,7 @@ from neuroatlas.extensions.datasets.dataio.dcsm import (
     scan_dcsm_subjects,
 )
 
+from ._runtime_keys import SLEEP_STAGE_ONLY
 from .base import BenchmarkDataModule
 
 
@@ -134,6 +135,8 @@ class DCSMBenchmarkDataModule(BenchmarkDataModule):
         If True, compute per-recording mean/std/q95 and forward them
         through the batch metadata.
     """
+
+    RUNTIME_KEYS_FIXED = SLEEP_STAGE_ONLY
 
     def __init__(
         self,

@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: tuab
-name: Tuab
+name: TUH EEG Abnormal Corpus (TUAB)
 domain: epilepsy
 paper_dataset: true
 
@@ -28,6 +28,7 @@ cohort:
 acquisition:
   kind: tuh
   ref: tuh_eeg_abnormal/v3.0.1
+  upstream: https://isip.piconepress.com/projects/nedc/html/tuh_eeg/
 
 signal:
   montage: unipolar
@@ -78,7 +79,7 @@ runtime_defaults:
   balance: weighted_sampler
   batch_size: 64
   cache_max_recordings: 16
-  cache_root: "${REPO_ROOT}/tuab_cache/hdf5"
+  cache_root: "${EEG_CACHE_ROOT}/prepared/tuab"
   corpus_version: v3.0.1
   fold: 0
   label_mode: binary
@@ -126,3 +127,11 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- the paper's text and its TUAB numbers
+       disagree. App. D.1.3 says the official train/eval split with the train
+       subjects stratified into 5 folds, which is what split_mode=official
+       (the default) does. The published numbers (e.g. REVE AUROC 0.898) came
+       from the paper's epilepsy probe, which ran 5-fold CV over all 2,993
+       sessions grouped by session file (3c6721c configs/folds/tuab.json), so
+       a patient's sessions could sit in train and test."

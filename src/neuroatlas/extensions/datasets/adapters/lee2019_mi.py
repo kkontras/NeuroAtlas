@@ -15,6 +15,8 @@ from neuroatlas.extensions.datasets.dataio.bci import (
     load_preprocessed_dataset,
 )
 
+from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
+from ._runtime_keys import BCI_TRIALS, RAW_ONLY
 from .base import BenchmarkDataModule
 
 _CFG = DATASET_CONFIGS["lee2019_mi"]
@@ -137,6 +139,7 @@ class _LoaderAdapter:
             meta = [
                 {
                     "dataset": _SLUG,
+                    "domain": BCI_DOMAIN,
                     "subject_id": batch["subject_ids"][i],
                     "trial_idx": batch["trial_idxs"][i],
                     "session_id": batch["session_ids"][i],
@@ -154,6 +157,10 @@ class Lee2019MIBenchmarkDataModule(BenchmarkDataModule):
 
     If a preprocessed .mat exists, loads from it. Otherwise falls back to MOABB.
     """
+
+    RUNTIME_KEYS_FIXED = RAW_ONLY
+    RUNTIME_KEYS_IGNORED = BCI_TRIALS
+    FIXED_WINDOW = True
 
     def __init__(
         self,
@@ -177,6 +184,7 @@ class Lee2019MIBenchmarkDataModule(BenchmarkDataModule):
         subjects = list(subject_ids) if subject_ids is not None else list(_CFG.subjects)
         train_subj, val_subj, test_subj = get_subject_split(subjects, fold=fold, n_folds=n_folds)
         meta: Dict[str, object] = {
+            "domain": BCI_DOMAIN,
             "canonical_label_space": list(_CFG.targets),
             "epoch_seconds": _CFG.tmax - _CFG.tmin,
             "channel_policy": ["eeg"],

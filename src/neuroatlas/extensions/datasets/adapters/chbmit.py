@@ -17,6 +17,7 @@ from neuroatlas.benchmarking_helpers.registry.splits import make_subject_kfold
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 _CACHE_ROOT_DEFAULT = "${REPO_ROOT}/chbmit_cache/hdf5"
 _CACHE_FILENAME = "chbmit_256hz_continuous_bipolar18.h5"
@@ -100,7 +101,7 @@ def _patient_splits_generic(
 # ---------------------------------------------------------------------------
 
 
-class CHBMITBenchmarkDataModule(BenchmarkDataModule):
+class CHBMITBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the CHB-MIT seizure detection dataset.
 
     Args:
@@ -183,7 +184,7 @@ class CHBMITBenchmarkDataModule(BenchmarkDataModule):
             if root is None:
                 raise FileNotFoundError(
                     f"No BIDS root found at {bids_root}. Download with: "
-                    "python -m neuroatlas.entrypoints.fetch --dataset chbmit --download"
+                    "`neuroatlas data download chbmit`; if it is elsewhere, `neuroatlas config set chbmit.bids_root <path>`"
                 )
             self._bids_root = str(root)
             self._bids_index = BIDSRecordingIndex.from_bids_root(root)
@@ -274,30 +275,45 @@ class CHBMITBenchmarkDataModule(BenchmarkDataModule):
             }[split]
 
             stride = self._stride_s if split == "train" else self._window_s
-
-            if self._backend == "bids":
-                self._datasets[split] = self._DatasetCls(
-                    bids_root=self._bids_root,
-                    window_s=self._window_s,
-                    stride_s=stride,
-                    overlap_threshold=self._overlap_threshold,
-                    montage=self._montage,
-                    label_mode=self._label_mode,
-                    normalize=self._normalize,
-                    recording_indices=rec_indices,
-                )
-            else:  # hdf5
-                self._datasets[split] = self._DatasetCls(
-                    h5_path=self._h5_path,
-                    window_s=self._window_s,
-                    stride_s=stride,
-                    overlap_threshold=self._overlap_threshold,
-                    montage=self._montage,
-                    label_mode=self._label_mode,
-                    normalize=self._normalize,
-                    recording_indices=rec_indices,
-                )
+            self._datasets[split] = self._window_dataset(rec_indices, stride)
         return self._datasets[split]
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: int = 8):
+        if self._backend == "bids":
+            return self._DatasetCls(
+                bids_root=self._bids_root,
+                window_s=self._window_s,
+                stride_s=stride_s,
+                overlap_threshold=self._overlap_threshold,
+                montage=self._montage,
+                label_mode=self._label_mode,
+                normalize=self._normalize,
+                recording_indices=rec_indices,
+                signal_cache_size=signal_cache_size,
+            )
+        return self._DatasetCls(  # hdf5
+            h5_path=self._h5_path,
+            window_s=self._window_s,
+            stride_s=stride_s,
+            overlap_threshold=self._overlap_threshold,
+            montage=self._montage,
+            label_mode=self._label_mode,
+            normalize=self._normalize,
+            recording_indices=rec_indices,
+        )
+
+    # -- global embedding cache (epilepsy/_global_cache.py) ----------------
+
+    def supports_global_embedding_cache(self) -> bool:
+        # The hdf5 reader's per-window metadata has not been checked against
+        # the fold split; that backend keeps per-split extraction.
+        return self._backend == "bids" and super().supports_global_embedding_cache()
+
+    def _n_recordings(self) -> int:
+        return len(self._bids_index.recordings)
+
+    def _subject_of(self, rec_index: int) -> str:
+        return self._bids_index.recordings[rec_index].subject_id
 
     def _make_loader(self, split: str) -> _LoaderAdapter:
         ds = self._get_dataset(split)

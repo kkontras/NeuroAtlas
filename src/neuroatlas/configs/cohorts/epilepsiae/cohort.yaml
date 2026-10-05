@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: epilepsiae
-name: Epilepsiae
+name: EPILEPSIAE European Epilepsy Database
 domain: epilepsy
 paper_dataset: true
 
@@ -23,6 +23,10 @@ cohort:
 
 acquisition:
   kind: manual
+  upstream: https://campus-technologies.de/en/the-european-epilepsy-database-2/   # www.epilepsy-database.eu redirects here
+  note: >
+    Licensed, not free: the European Epilepsy Database is sold by its
+    maintainers. The reader expects the raw .data/.head files as delivered.
 
 signal:
   montage: bipolar
@@ -43,13 +47,18 @@ labels:
     - multiclass
     - pattern
 splits:
+  manifest_note: >
+    The paper's folds, frozen (3c6721c configs/folds/epilepsiae.json, re-derived
+    and identical from the paper-era embeddings): the paper's epilepsy probe drew
+    them over 148 patients stratified on "has any seizure window" (144 do). The
+    reader's own splitter stratifies on variant x seizure-sample bins and drew
+    other folds; it runs only with --set folds_manifest=none (not the paper's
+    folds).
+  manifest: folds.json
+  derived_by: src/neuroatlas/extensions/datasets/adapters/epilepsiae.py  # EpilepsiAEBenchmarkDataModule.__init__
   derivation: >
-    StratifiedKFold(shuffle=True, random_state=42) over sorted patient ids
-  derived_by: src/neuroatlas/extensions/datasets/adapters/epilepsiae.py:141
-  # No fold manifest: there is no file to inspect, but the split is
-  # reproducible because the splitter is seeded and the subject order
-  # is sorted.
-  manifest: null
+    folds_manifest=none only: StratifiedKFold(shuffle=True, random_state=42)
+    over sorted patient ids, stratified on variant x seizure-sample bin
   grouping: patient
   n_folds: 5
 

@@ -13,6 +13,9 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
+
+from ._runtime_keys import BCI_TRIALS, RAW_ONLY
 from .base import BenchmarkDataModule
 
 
@@ -86,6 +89,9 @@ class _LoaderAdapter:
             meta = [
                 {
                     "dataset": self._slug,
+                    # What the wrappers' BCI branches key on (is_bci_batch);
+                    # the slug alone never matched them.
+                    "domain": BCI_DOMAIN,
                     "subject_id": batch["subject_ids"][i],
                     "trial_idx": batch["trial_idxs"][i],
                     "session_id": batch["session_ids"][i],
@@ -113,6 +119,10 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
     Data is loaded entirely from MOABB (download + preprocess + window).
     """
 
+    RUNTIME_KEYS_FIXED = RAW_ONLY
+    RUNTIME_KEYS_IGNORED = BCI_TRIALS
+    FIXED_WINDOW = True
+
     def __init__(
         self,
         slug: str,
@@ -138,6 +148,9 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         )
 
         meta: Dict[str, object] = {
+            # In the cache context too: embeddings made before the BCI
+            # branches fired are a different input, not a cache hit.
+            "domain": BCI_DOMAIN,
             "paradigm": cfg.paradigm,
             "n_classes": cfg.n_classes,
             "epoch_seconds": cfg.trial_duration,
@@ -159,6 +172,10 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
             cfg, subject_ids=subjects, n_jobs=n_jobs,
             confound_control=confound_control,
         )
+        self._windows = windows
+        self._subjects = list(subjects)
+        self._split_subjects = {"train": list(train_subj), "val": list(val_subj),
+                                "test": list(test_subj)}
         self._train_ds = _EpochDataset(windows, train_subj)
         self._val_ds = _EpochDataset(windows, val_subj)
         self._test_ds = _EpochDataset(windows, test_subj)
@@ -167,6 +184,14 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         self._num_workers = num_workers
         self._slug = slug
         self._sampling_rate = float(cfg.resample_sfreq)
+        # The length of the windows actually cut, which is what FIXED_WINDOW
+        # hands the backbone: the trial, or the trial less the first second
+        # under confound control (resolve_confound_control's start offset).
+        for ds in windows.datasets:
+            if len(ds):
+                n_times = int(ds[0][0].shape[-1])
+                self.metadata["epoch_seconds"] = n_times / float(cfg.resample_sfreq)
+                break
         self._channels: List[str] = []
         if windows.datasets:
             raw = windows.datasets[0].raw
@@ -198,3 +223,50 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
 
     def test_dataloader(self) -> _LoaderAdapter:
         return self._make_loader(self._test_ds, shuffle=False)
+
+    # -- global embedding cache ----------------------------------------------
+    #
+    # A trial's embedding does not depend on the fold, so the cohort is
+    # embedded once and each fold's split is cut from it by subject. Without
+    # this the embeddings were cached per (fold, n_folds): `embed` (5-fold
+    # default) and `probe --set n_folds=loso` looked in different cells, so
+    # `run bci_motor_imagery` failed with "No embeddings ... split='train'"
+    # right after its own embed step, and LOSO would have embedded the cohort
+    # once per subject.
+
+    def cache_context(self, purpose: str = "default") -> Dict[str, object]:
+        context = dict(self.metadata)
+        if purpose == "global_embeddings":
+            context.pop("fold", None)
+            context.pop("n_folds", None)
+        return context
+
+    def supports_global_embedding_cache(self) -> bool:
+        return True
+
+    def full_embedding_dataloader(self) -> _LoaderAdapter:
+        subjects = self._subjects
+        if self.embed_chunk is not None:
+            chunk_idx, n_chunks = self.embed_chunk
+            subjects = [s for i, s in enumerate(sorted(subjects)) if i % n_chunks == chunk_idx]
+        return self._make_loader(_EpochDataset(self._windows, subjects), shuffle=False)
+
+    def split_global_embedding_payload(self, payload) -> Dict[str, object]:
+        from neuroatlas.benchmarking_helpers import EmbeddingPayload
+        import numpy as np
+
+        subject = np.asarray([int(m["subject_id"]) for m in payload.metadata])
+        out: Dict[str, object] = {}
+        for split, members in self._split_subjects.items():
+            keep = np.flatnonzero(np.isin(subject, members))
+            if keep.size == 0:
+                raise ValueError(
+                    f"{self._slug}: no embedding rows for the {split} subjects {members} "
+                    f"(fold {self.metadata.get('fold')}, n_folds {self.metadata.get('n_folds')})."
+                )
+            out[split] = EmbeddingPayload(
+                features=payload.features[keep],
+                labels=np.asarray(payload.labels)[keep],
+                metadata=[payload.metadata[i] for i in keep],
+            )
+        return out

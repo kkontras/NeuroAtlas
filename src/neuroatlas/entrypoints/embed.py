@@ -33,10 +33,16 @@ Usage
 
 Notes
 -----
-The embedding cache is keyed globally (``purpose="global_embeddings"``), so
-one extraction pass serves every fold, label mode and probe type for that
-``(dataset, model)`` pair. ``--folds`` therefore defaults to a single pass;
-pass it explicitly only if a dataset's windowing genuinely differs per fold.
+Most datasets key their embedding cache globally (``purpose=
+"global_embeddings"``, ``<cache>/<dataset>/<model>/all/<key>``), so one
+extraction pass serves every fold, label mode and probe type for that
+``(dataset, model)`` pair, and ``--folds`` defaults to that single pass (the
+configured fold). The cohorts whose datamodule cannot serve a global cache
+-- HMC, MESA, STAGES and HomePAP (PhysioEx format), SHHS, the four
+bci_cognitive cohorts, TUAB's H5 fast path, CHB-MIT's HDF5 backend, and any
+run with ``stride_s`` other than ``window_s`` -- cache per fold and split, and
+need ``--folds`` to name every fold the probe will read; ``neuroatlas run``
+passes them (``run.embed_argv``).
 """
 from __future__ import annotations
 
@@ -76,6 +82,22 @@ def default_cache_root() -> Path:
     """
     env = os.environ.get("EEG_CACHE_ROOT")
     return Path(env) if env else SHARED_EMBEDDING_CACHE_ROOT
+
+
+def resolve_num_workers(flag: Optional[int], dataset_config: Dict[str, Any]) -> int:
+    """Loader workers: ``--num-workers``, else the cohort's own value, else
+    the CPUs this job may use (affinity- and cgroup-aware) minus one, at most
+    16. ``os.cpu_count()`` -- used before -- counts the node, not the job: 63
+    workers on a 4-core HTCondor slot of a 64-core machine."""
+    from neuroatlas.benchmarking_helpers.runtime.resources import default_num_workers
+
+    if flag is not None:
+        if int(flag) < 0:
+            raise SystemExit(f"--num-workers must be 0 or more, got {flag}")
+        return int(flag)
+    if dataset_config.get("num_workers") is not None:
+        return int(dataset_config["num_workers"])
+    return default_num_workers()
 
 
 def _parse_csv(value: str) -> List[str]:
@@ -146,18 +168,24 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
                              "`neuroatlas list aliases`.")
     parser.add_argument("--set", dest="overrides", action="append", metavar="KEY=VALUE",
                         help="Dataset config override, repeatable. Merged on top of "
-                             "DatasetSpec.config_defaults (e.g. --set montage=dod_eeg_5).")
+                             "DatasetSpec.config_defaults (e.g. --set num_folds=10).")
     parser.add_argument("--checkpoint", dest="checkpoints", action="append", metavar="MODEL=PATH",
                         help="Override a model's checkpoint path, repeatable.")
     parser.add_argument("--folds", default=None,
-                        help="Comma-separated fold indices. Default: one pass (the "
-                             "embedding cache is shared across folds).")
+                        help="Comma-separated fold indices. Default: the dataset's configured "
+                             "fold only (--set fold=K; usually 0). Most datasets keep one "
+                             "cache that serves every fold, so one pass is enough. Those that "
+                             "cache per fold and split -- HMC, MESA, STAGES and HomePAP (the "
+                             "PhysioEx-format sleep cohorts), SHHS, the four bci_cognitive "
+                             "cohorts, TUAB's H5 fast path, CHB-MIT's HDF5 backend, any run "
+                             "with a stride other than the window -- need every fold the "
+                             "probe will read (`neuroatlas run` passes them).")
     parser.add_argument("--data-root", default=None, help="Override the dataset's data root.")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--cache-root", default=None,
                         help="Embedding cache root. Default: the cache_root setting "
-                             "($EEG_CACHE_ROOT), else <workspace>/artifacts/embedding_cache.")
+                             "($EEG_CACHE_ROOT), else $NEUROATLAS_HOME/artifacts/embedding_cache.")
     parser.add_argument("--output-root", default=None,
                         help="Run directory. Extraction writes no results here, but the "
                              "runner creates it (default: artifacts/embeddings/<dataset>).")
@@ -261,10 +289,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
         dataset_config["data_root"] = args.data_root
     if args.batch_size is not None:
         dataset_config["batch_size"] = args.batch_size
-    dataset_config["num_workers"] = (
-        args.num_workers if args.num_workers is not None
-        else dataset_config.get("num_workers", max(1, (os.cpu_count() or 2) - 1))
-    )
+    dataset_config["num_workers"] = resolve_num_workers(args.num_workers, dataset_config)
     if args.folds is not None:
         dataset_config["folds"] = _parse_int_list(args.folds)
 

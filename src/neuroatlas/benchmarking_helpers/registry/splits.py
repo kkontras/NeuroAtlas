@@ -17,16 +17,27 @@ That third behaviour is what makes leave-one-subject-out impossible to ask
 for: LOSO is just ``n_folds = n_subjects``, and stratification cannot survive
 one subject per fold.
 
-The rule here is ISRUC's, which was the only one that got it right: keep the
-fold count the caller asked for, and drop stratification when the labels
-cannot support it.  Reducing the folds answers a question nobody asked;
-dropping stratification still answers this one.
+The rule: keep the fold count the caller asked for, and drop stratification
+only where scikit-learn itself refuses it.  Reducing the folds answers a
+question nobody asked; dropping stratification still answers this one.
+
+"Where scikit-learn refuses" is the whole of it.  ``StratifiedKFold`` raises
+only when *every* class has fewer members than folds; a class that is merely
+sparse (fewer members than folds, while another class has enough) is split
+anyway, with a warning.  Every splitter the published folds were drawn with --
+the adapters' own ``StratifiedKFold`` calls, the paper's epilepsy probe
+(``probe_sz1_sklearn._build_patient_splits``) and the brain-age folds -- had
+exactly that behaviour.  A first version of this module fell back to ``KFold``
+as soon as *any* class was sparse, which moved the folds of every cohort with
+one sparse stratum (all five ISRUC brain-age test folds; EPILEPSIAE, whose
+four seizure-free patients are a class of four).  That stricter rule is still
+available as ``sparse_classes="fall_back"``; nothing uses it by default.
 
 The invariant that makes this safe to adopt everywhere:
 
-    whenever stratification is possible, this returns exactly the splitter
-    the adapter built before -- same class, same n_splits, same seed, so the
-    same folds.
+    whenever scikit-learn accepts the labels, this returns exactly the
+    splitter the adapter built before -- same class, same n_splits, same
+    seed, so the same folds.
 
 Only the cases that used to crash behave differently.  The internal test suite
 pins that.
@@ -54,7 +65,11 @@ def effective_n_splits(requested: int, n_samples: int) -> int:
 
 
 def _can_stratify(labels: Optional[Sequence], n_splits: int) -> bool:
-    """``StratifiedKFold``'s own precondition, checked before it raises.
+    """Every class has at least ``n_splits`` members (no sparse class).
+
+    This is the strict condition ``sparse_classes="fall_back"`` requires;
+    scikit-learn's own (and the default here) is weaker, see
+    :func:`make_subject_kfold`.
 
     A single class is deliberately allowed.  It looks like a case for plain
     ``KFold`` -- there is nothing to stratify by -- but the two do not produce
@@ -80,6 +95,10 @@ def why_not_stratified(labels: Optional[Sequence], n_splits: int) -> str:
     counts = Counter(labels)
     if not counts:
         return "no labels"
+    largest = max(counts.values())
+    if largest < n_splits:
+        return (f"every class has fewer subjects than the {n_splits} folds "
+                f"(the largest has {largest})")
     smallest = min(counts.values())
     return (f"the smallest class has {smallest} subject"
             f"{'' if smallest == 1 else 's'}, fewer than the {n_splits} folds")
@@ -91,6 +110,7 @@ def make_subject_kfold(
     *,
     seed: int = 42,
     n_samples: Optional[int] = None,
+    sparse_classes: str = "stratify",
 ) -> Tuple[object, bool, int]:
     """Return ``(splitter, stratified, n_splits)`` for a subject-level split.
 
@@ -100,6 +120,14 @@ def make_subject_kfold(
         labels: per-subject stratification labels, or None for no attempt.
         seed: ``random_state``; every splitter here shuffles.
         n_samples: subject count, when *labels* is None or a different length.
+        sparse_classes: what a class with fewer members than folds does.
+            ``"stratify"`` (the default) keeps ``StratifiedKFold`` whenever
+            scikit-learn accepts the labels -- it only refuses when *every*
+            class is smaller than the fold count, and merely warns otherwise
+            -- which is what an adapter that called ``StratifiedKFold``
+            directly got, and so what every published fold was drawn with.
+            ``"fall_back"`` drops to ``KFold`` as soon as any class is
+            smaller than the fold count; it reproduces no published fold.
 
     The returned flag says whether stratification survived, so the caller can
     record it rather than leave a reader guessing which one ran.
@@ -111,7 +139,13 @@ def make_subject_kfold(
         raise ValueError("give either labels or n_samples")
     n_splits = effective_n_splits(n_splits, total)
 
-    if _can_stratify(labels, n_splits):
+    if sparse_classes not in ("fall_back", "stratify"):
+        raise ValueError(f"sparse_classes must be 'fall_back' or 'stratify', got {sparse_classes!r}")
+    stratifiable = _can_stratify(labels, n_splits)
+    if not stratifiable and sparse_classes == "stratify" and labels is not None:
+        counts = Counter(labels)
+        stratifiable = bool(counts) and max(counts.values()) >= n_splits
+    if stratifiable:
         return StratifiedKFold(n_splits=n_splits, shuffle=True,
                                random_state=seed), True, n_splits
     return KFold(n_splits=n_splits, shuffle=True, random_state=seed), False, n_splits

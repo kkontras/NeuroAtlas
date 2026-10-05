@@ -17,6 +17,7 @@ from .core_sleep import (
 )
 from .core_sleep_model import SleepEnc
 from neuroatlas.benchmarking_helpers import CheckpointSpec
+from neuroatlas.benchmarking_helpers.runtime.sequential_epochs import rows_per_labelled_epoch
 
 _LOG = logging.getLogger(__name__)
 
@@ -128,23 +129,18 @@ class SleepTransformerBackbone(BenchmarkBackbone):
             return self.model(model_inputs)
 
     def native_head_logits(self, batch) -> np.ndarray:
+        """One row of logits per labelled epoch (the window's target epoch,
+        or every epoch when the target is ``"all"``)."""
         output = self._forward(batch)
-        return output["preds"]["combined"].detach().cpu().numpy()
+        logits = output["preds"]["combined"]
+        return rows_per_labelled_epoch(logits, batch).detach().cpu().numpy()
 
     def extract_embeddings(self, batch) -> np.ndarray:
+        """One row per labelled epoch: ``(B, 128)`` for the centre-epoch
+        target of the registry spec, ``(B * W, 128)`` for ``"all"``."""
         output = self._forward(batch)
         features = output["features"][self.spec.embedding_key]
-
-        target = batch.get("_seq_target_idx")
-        if target is not None and target != "all":
-            eeg = batch["signals"]["eeg"]
-            B, W = eeg.shape[0], eeg.shape[1]
-            idx = int(target) % W
-            features = features.view(B, W, -1)[:, idx, :]
-
-        if features.ndim > 2:
-            features = features.reshape(features.shape[0], -1)
-        return features.detach().cpu().numpy()
+        return rows_per_labelled_epoch(features, batch).detach().cpu().numpy()
 
     def metadata(self) -> dict:
         return {

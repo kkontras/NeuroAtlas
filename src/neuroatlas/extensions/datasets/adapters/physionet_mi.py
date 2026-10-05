@@ -15,6 +15,8 @@ from neuroatlas.extensions.datasets.dataio.bci import (
     load_preprocessed_dataset,
 )
 
+from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
+from ._runtime_keys import BCI_TRIALS, RAW_ONLY
 from .base import BenchmarkDataModule
 
 _CFG = DATASET_CONFIGS["physionet_mi"]
@@ -117,6 +119,7 @@ class _LoaderAdapter:
             meta = [
                 {
                     "dataset": _SLUG,
+                    "domain": BCI_DOMAIN,
                     "subject_id": batch["subject_ids"][i],
                     "trial_idx": batch["trial_idxs"][i],
                     "sampling_rate": float(_CFG.resample_sfreq),
@@ -144,6 +147,10 @@ class PhysionetMIBenchmarkDataModule(BenchmarkDataModule):
     Otherwise falls back to MOABB download + preprocessing.
     """
 
+    RUNTIME_KEYS_FIXED = RAW_ONLY
+    RUNTIME_KEYS_IGNORED = BCI_TRIALS
+    FIXED_WINDOW = True
+
     def __init__(
         self,
         fold: int = 0,
@@ -159,6 +166,7 @@ class PhysionetMIBenchmarkDataModule(BenchmarkDataModule):
             subjects, fold=fold, n_folds=n_folds
         )
         meta: Dict[str, object] = {
+            "domain": BCI_DOMAIN,
             "canonical_label_space": list(_CFG.targets),
             "epoch_seconds": _CFG.tmax - _CFG.tmin,
             "channel_policy": ["eeg"],

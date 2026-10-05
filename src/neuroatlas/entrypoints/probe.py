@@ -281,9 +281,9 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
         dataset_config["data_root"] = args.data_root
     if args.batch_size is not None:
         dataset_config["batch_size"] = args.batch_size
-    if args.num_workers is not None:
-        dataset_config["num_workers"] = args.num_workers
-    dataset_config.setdefault("num_workers", max(1, (os.cpu_count() or 2) - 1))
+    from neuroatlas.entrypoints.embed import resolve_num_workers
+
+    dataset_config["num_workers"] = resolve_num_workers(args.num_workers, dataset_config)
 
     if args.folds is not None:
         dataset_config["folds"] = _parse_int_list(args.folds)
@@ -414,9 +414,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Imported here, not at module scope: linear_probe pulls in torch, and
     # probing is CPU-only by design -- `--help` and config assembly must not
     # drag in the GPU stack.
+    import contextlib
+
+    from neuroatlas.benchmarking_helpers.runtime.resources import limit_probe_threads
     from neuroatlas.extensions.tasks.linear_probe import embedding_pooling
 
-    with embedding_pooling(args.pooling):
+    # BLAS/OpenMP threads: at most 8 (see resources.MAX_PROBE_THREADS). Left
+    # alone, OpenBLAS starts one thread per core of the node -- 28 on
+    # deanston, where the probe ran 2.5x slower than on an 8-core desktop.
+    threads = (contextlib.nullcontext() if config["benchmark"].get("extract_only")
+               else limit_probe_threads())
+    with embedding_pooling(args.pooling), threads:
         results = runner.run()
 
     failures = [r for r in results if r.failure is not None]

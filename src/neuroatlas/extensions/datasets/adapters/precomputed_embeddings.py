@@ -36,6 +36,46 @@ class _EmptyLoader:
         return iter(())
 
 
+def _has_value(value: Any) -> bool:
+    """A usable label: present and, if numeric, finite (a NaN age is no age)."""
+    if value is None:
+        return False
+    try:
+        return bool(np.isfinite(float(value)))
+    except (TypeError, ValueError):
+        return True
+
+
+def _age_bin_kfold(n_folds: int, age_bin_ids: np.ndarray, seed: int):
+    """The splitter the published brain-age folds were drawn with.
+
+    The paper's adapter built scikit-learn's ``StratifiedKFold`` itself
+    (n_folds, shuffle=True, random_state=seed) on the age-bin ids. scikit-learn stratifies
+    as long as *some* bin has ``n_folds`` members (a sparser bin only warns).
+    The shared rule's ``sparse_classes="fall_back"`` is stricter -- it drops
+    to plain ``KFold`` as soon as *any* bin is smaller than ``n_folds`` --
+    which draws other folds than the published ones on a cohort with a sparse
+    age bin (ISRUC's 80+ bin has 2 subjects: every ISRUC fold moved).
+    ``sparse_classes="stratify"`` (now the shared rule's default too; named
+    here so this splitter cannot drift with it) keeps scikit-learn's behaviour
+    and falls back only where scikit-learn rejects the labels, which used to
+    crash.
+    """
+    from collections import Counter
+
+    from neuroatlas.benchmarking_helpers.registry.splits import make_subject_kfold
+
+    labels = np.asarray(age_bin_ids).tolist()
+    splitter, stratified, n = make_subject_kfold(
+        n_folds, labels, seed=seed, sparse_classes="stratify")
+    counts = Counter(labels)
+    if stratified and counts and min(counts.values()) < n:
+        print(f"[precomputed] age bins {dict(sorted(counts.items()))}: the smallest "
+              f"has fewer than {n} subjects; stratifying anyway, as the published "
+              f"splitter did.", flush=True)
+    return splitter, n
+
+
 def _stratified_subject_splits(
     subjects: Sequence[str],
     ages_by_subject: Dict[str, float],
@@ -50,21 +90,12 @@ def _stratified_subject_splits(
     StratifiedKFold on the remaining subjects picks val. Deterministic for
     fixed (seed, age_bins, subjects).
     """
-    from neuroatlas.benchmarking_helpers.registry.splits import (
-        make_subject_kfold,
-    )
-
     subjects_arr = list(subjects)
     subject_ages = np.array([ages_by_subject[s] for s in subjects_arr], dtype=float)
     bins = np.asarray(age_bins, dtype=float)
     age_bin_ids = np.digitize(subject_ages, bins) - 1
 
-    # Shared rule: benchmarking_helpers/splits. Age bins are a harsher
-    # stratification than a binary label -- one sparse decade can hold
-    # fewer subjects than folds -- so passing n_folds straight to
-    # StratifiedKFold raised on exactly the cohorts it mattered for.
-    outer, _stratified, n_folds = make_subject_kfold(
-        n_folds, age_bin_ids, seed=seed)
+    outer, n_folds = _age_bin_kfold(n_folds, age_bin_ids, seed)
     outer_splits = list(outer.split(subjects_arr, age_bin_ids))
 
     train_val_idx, test_idx = outer_splits[fold % n_folds]
@@ -72,8 +103,7 @@ def _stratified_subject_splits(
 
     train_val_subjects = [subjects_arr[i] for i in train_val_idx]
     train_val_bins = age_bin_ids[train_val_idx]
-    inner, _inner_strat, inner_folds = make_subject_kfold(
-        n_folds, train_val_bins, seed=seed)
+    inner, inner_folds = _age_bin_kfold(n_folds, train_val_bins, seed)
     val_fold = (fold + 1) % inner_folds
     inner_splits = list(inner.split(train_val_subjects, train_val_bins))
     inner_train_idx, inner_val_idx = inner_splits[val_fold % len(inner_splits)]
@@ -171,6 +201,7 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
         age_bins: Sequence[float] = (0, 35, 50, 65, 80, 200),
         aggregation_group: str = "recording_id",
         cv_filter: Optional[Dict[str, Any]] = None,
+        cv_filter_scope: str = "splits",
         train_filter: Optional[Dict[str, Any]] = None,
         label_lookup_table: Optional[str] = None,
         label_lookup_join: Sequence[str] = ("subject_id",),
@@ -197,6 +228,17 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
         # ``cv_filter`` restricts the whole CV pool (e.g. cassette-only for
         # Sleep-EDF SC); ``train_filter`` restricts only the training split.
         self._cv_filter = self._normalize_filter(cv_filter)
+        # Where cv_filter acts. "pool": before fold assignment, so the folds are
+        # drawn over the filtered cohort only -- the Sleep-EDF SC protocol behind
+        # the published numbers (78 cassette subjects, folded among themselves).
+        # "splits": after fold assignment, as a row mask on train/val/test --
+        # the PhysioNet 2026 brain-age-gap protocol, where folds are drawn over
+        # both groups and the ridge is trained on one.
+        if cv_filter_scope not in ("pool", "splits"):
+            raise ValueError(
+                f"cv_filter_scope must be 'pool' or 'splits', got {cv_filter_scope!r}"
+            )
+        self._cv_filter_scope = str(cv_filter_scope)
         self._train_filter = self._normalize_filter(train_filter)
         # Labels can be recovered from an external table rather than trusted
         # from the cache — the sleep-staging cache this reads was written for a
@@ -260,6 +302,7 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             "age_bins": list(self._age_bins),
             "aggregation_group": self._aggregation_group,
             "cv_filter": self._cv_filter,
+            "cv_filter_scope": self._cv_filter_scope,
             "train_filter": self._train_filter,
             "label_lookup_table": self._label_lookup_table,
             "label_lookup_join": (
@@ -590,12 +633,16 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
 
         1. drop rows with non-finite features;
         2. apply the label lookup, then drop rows whose label is still missing;
-        3. reserve the age-matched holdout cohort, if configured, from the full
-           labelled set -- before any filtering, since it needs both groups;
-        4. assign folds over every remaining (non-holdout) subject;
-        5. apply ``cv_filter`` to train/val/test and ``train_filter`` to
-           train/val as row masks. They restrict what each split *contains*,
-           not which subjects take part in fold assignment.
+        3. with ``cv_filter_scope="pool"``, apply ``cv_filter`` here, so only
+           the subjects it keeps take part in fold assignment;
+        4. reserve the age-matched holdout cohort, if configured, from the full
+           labelled set -- before any further filtering, since it needs both
+           groups;
+        5. assign folds over every remaining (non-holdout) subject;
+        6. with ``cv_filter_scope="splits"`` (the default), apply ``cv_filter``
+           to train/val/test, and always ``train_filter`` to train/val, as row
+           masks. They restrict what each split *contains*, not which subjects
+           take part in fold assignment.
 
         The holdout split is never touched by ``cv_filter``/``train_filter``:
         the point is to score one trained model on a controlled cohort spanning
@@ -630,7 +677,7 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
         self._apply_label_lookup(metadata_list)
 
         labelled_mask = np.array(
-            [row.get(self._label_field) is not None for row in metadata_list], dtype=bool
+            [_has_value(row.get(self._label_field)) for row in metadata_list], dtype=bool
         )
         if not labelled_mask.all():
             groups = sorted({
@@ -644,6 +691,26 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
                 flush=True,
             )
             _keep(labelled_mask)
+
+        if self._cv_filter and self._cv_filter_scope == "pool":
+            pool_mask = np.array(
+                [self._row_matches(row, self._cv_filter) for row in metadata_list],
+                dtype=bool,
+            )
+            if not pool_mask.any():
+                raise ValueError(
+                    f"cv_filter {self._cv_filter!r} excluded every row of "
+                    f"{self._dataset_slug_in_cache}. Check the field names against "
+                    f"items.json."
+                )
+            before = len({str(r.get("subject_id")) for r in metadata_list})
+            _keep(pool_mask)
+            after = len({str(r.get("subject_id")) for r in metadata_list})
+            print(
+                f"[precomputed] cv_filter={self._cv_filter!r} on the CV pool: kept "
+                f"{n_rows} rows, {after}/{before} subjects.",
+                flush=True,
+            )
 
         # Reserve the holdout cohort before the CV split so its subjects never
         # appear in any train/val/test fold.
@@ -695,7 +762,7 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             stages[i] = int(stage) if stage is not None else 0
 
         cv_filter_mask: Optional[np.ndarray] = None
-        if self._cv_filter:
+        if self._cv_filter and self._cv_filter_scope == "splits":
             cv_filter_mask = np.array(
                 [self._row_matches(row, self._cv_filter) for row in metadata_list],
                 dtype=bool,
@@ -765,3 +832,59 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
                 flush=True,
             )
         return result
+
+
+# ---------------------------------------------------------------------------
+# The published brain-age split, on a cohort's own embeddings
+# ---------------------------------------------------------------------------
+
+#: Keys a per-cohort brain-age protocol may set (``task.cohort_protocols`` in
+#: ``configs/tasks/brain_age.json``). They are the split-time settings of the
+#: pre-merge ``*_age_from_cache`` specs; none of them is a dataset setting, so
+#: none enters the embedding cache key.
+AGE_COHORT_PROTOCOL_KEYS = frozenset({
+    "n_folds", "split_seed", "age_bins", "label_field", "aggregation_group",
+    "cv_filter", "cv_filter_scope", "train_filter", "drop_unscored",
+    "holdout_eval_groups", "holdout_eval_size_per_group",
+    "holdout_eval_match_field", "holdout_eval_match_tolerance", "holdout_eval_seed",
+})
+
+
+def split_age_cohort(
+    payload: EmbeddingPayload,
+    *,
+    dataset_name: str,
+    fold: int,
+    protocol: Dict[str, Any],
+) -> Tuple[Dict[str, EmbeddingPayload], Dict[str, Any]]:
+    """Split a cohort's full embedding payload the way the paper's brain age did.
+
+    The published brain-age numbers did not use the sleep-staging folds: each
+    cohort had a spec (``sleep_edf_sc_age_from_cache``, ``isruc_age_from_cache``,
+    ...) that read the staging embeddings and re-split them at probe time -- a
+    cohort filter, subject-level folds stratified on age bins from a seeded
+    outer/inner ``StratifiedKFold``, the unit the ridge sees and, for PhysioNet
+    2026, an age-matched holdout. This applies such a protocol to *payload*
+    (every row of the cohort's own ``all`` cache) and returns
+    ``(splits, metadata)``: train/val/test (+ holdout), and the settings that
+    produced them. Keys starting with ``_`` (comments) are ignored.
+    """
+    settings = {k: v for k, v in dict(protocol).items() if not str(k).startswith("_")}
+    unknown = sorted(set(settings) - AGE_COHORT_PROTOCOL_KEYS)
+    if unknown:
+        raise ValueError(
+            f"brain-age protocol for {dataset_name!r} has unknown key(s) {unknown}; "
+            f"allowed: {sorted(AGE_COHORT_PROTOCOL_KEYS)}"
+        )
+    splitter = PrecomputedEmbeddingDataModule(
+        name=f"{dataset_name}_brain_age",
+        dataset_slug_in_cache=dataset_name,
+        external_cache_root="",
+        fold=int(fold),
+        **settings,
+    )
+    splits = splitter.split_global_embedding_payload(payload)
+    meta = {k: v for k, v in splitter.metadata.items()
+            if k not in ("external_cache_root", "dataset_slug_in_cache",
+                         "label_lookup_table", "label_lookup_join", "label_lookup_source")}
+    return splits, meta

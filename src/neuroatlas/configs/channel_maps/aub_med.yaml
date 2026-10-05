@@ -1,5 +1,7 @@
-# REFERENCE ONLY — the runtime channel-map loader (MODEL_CONTRACTS §1) is
-# not yet wired. Wrappers currently read meta['channels'] directly. This
+# Applied by the runner before each wrapper sees a batch
+# (benchmarking_helpers/channels/channel_map.py). Every registered model
+# family has an entry; `mode: label_pass_through` hands the wrapper these
+# labels unchanged, as it got them while this map was reference only. This
 # YAML documents the authoritative (AUB-Med, model) channel plan.
 
 dataset: aub_med
@@ -39,7 +41,49 @@ per_model:
   cbramod:
     mode: label_pass_through
     non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+  biot:
+    FP1-F7: FP1-F7
+    F7-T3: F7-T7
+    T3-T5: T7-P7
+    T5-O1: P7-O1
+    FP2-F8: FP2-F8
+    F8-T4: F8-T8
+    T4-T6: T8-P8
+    T6-O2: P8-O2
+    T3-C3: T3-C3
+    C3-CZ: C3-CZ
+    CZ-C4: CZ-C4
+    C4-T4: C4-T4
+    FP1-F3: FP1-F3
+    F3-C3: F3-C3
+    C3-P3: C3-P3
+    P3-O1: P3-O1
+    FP2-F4: FP2-F4
+    F4-C4: F4-C4
+    C4-P4: C4-P4
+    P4-O2: P4-O2
+  brain_age_cnn: {mode: label_pass_through}
+  chronos: {mode: label_pass_through}
+  core_sleep: {mode: label_pass_through}
+  deepsoz_hem: skip
+  eegnetv4: skip
+  eegpt: {mode: label_pass_through}
+  labram: {mode: label_pass_through}
+  moirai: {mode: label_pass_through}
+  moment: {mode: label_pass_through}
+  neurogpt: {mode: label_pass_through}
+  neurolm: {mode: label_pass_through}
+  neurorvq: {mode: label_pass_through}
+  seizure_transformer: {mode: label_pass_through}
+  sleep_transformer: {mode: label_pass_through}
+  sleepfm: {mode: label_pass_through}
+  sleepyco: {mode: label_pass_through}
+  steegformer: skip
 
 notes:
+  eegnetv4: "Not run on the 20-pair bipolar montage: the EEGNetv4 wrapper reads C3, Cz and C4 by name, none of which is a channel here, so every window became zeros and embedded identically."
+  steegformer: "Not run on the 20-pair bipolar montage: S-TEEGformer resolves monopolar 10-20 names only, and none of the 20 pairs matches its vocabulary (0 of 20 matched)."
+  deepsoz_hem: "Not run on the 20-pair bipolar montage: DeepSOZ-HEM's channel transformer has a slot for 16 of the pairs (each routed to an anchor electrode) and none for the central chain T3-C3, C3-CZ, CZ-C4, C4-T4, so the wrapper rejects the input. It runs on the 19-electrode unipolar montage (checked on Helsinki)."
+  biot: "Exact renames, not approximations: T3=T7, T4=T8, T5=P7, T6=P8, so F7-T3 is BIOT's F7-T7 slot. All 16 slots filled directly; the four central-chain pairs feed none."
   reve: "AUB-Med — TCP bipolar montage. REVE midpoints each pair using 10-20 electrode positions."
   cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged."

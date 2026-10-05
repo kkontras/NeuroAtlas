@@ -65,6 +65,7 @@ runtime_defaults:
   batch_size: 8
   num_workers: 0
   fold: 0
+  n_folds: 5                    # the manifest's five folds: `run` probes all five, as the paper did
   signal_kind: raw
   pipeline_name: legacy
 

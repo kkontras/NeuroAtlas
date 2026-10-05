@@ -22,6 +22,7 @@ from neuroatlas.benchmarking_helpers.registry.splits import make_subject_kfold
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .base import BenchmarkDataModule
+from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
 _DATA_ROOT_DEFAULT: str = "${EEG_DATA_ROOT}/SeizeIT1/Data"
 _CACHE_ROOT_DEFAULT: str = ""
@@ -103,7 +104,7 @@ def _patient_splits_generic(
 # ---------------------------------------------------------------------------
 
 
-class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
+class SeizeIt1BenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     """BenchmarkDataModule for the SeizeIt1 seizure detection dataset.
 
     Args:
@@ -141,6 +142,8 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
         overlap_threshold: float = 0.0,
         signal_kind: str = "raw",
         subject_allowlist: Optional[List[str]] = None,
+        folds_manifest: Optional[str] = "sz1",
+        strict_folds: bool = True,
         **kwargs,
     ) -> None:
         metadata = {
@@ -152,12 +155,17 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
             "n_folds": n_folds,
             "backend": backend,
             "subject_allowlist": sorted(subject_allowlist) if subject_allowlist is not None else None,
+            "folds_manifest": folds_manifest,
         }
         super().__init__(name="sz1", metadata=metadata)
 
         self._backend = backend
         self._fold = fold
         self._n_folds = n_folds
+        self._folds_manifest = folds_manifest
+        # An allowlist runs on a chosen subset, so the manifest's other
+        # subjects are absent by design rather than by a broken download.
+        self._strict_folds = bool(strict_folds) and subject_allowlist is None
         self._batch_size = batch_size
         self._num_workers = num_workers
         self._window_s = window_s
@@ -187,6 +195,10 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
                 )
                 _build_synthetic_h5_cache(synthetic_path)
                 h5_path = synthetic_path
+                # Synthetic subjects are not the corpus's: no published fold
+                # can apply, so the reader's own splitter runs.
+                self._folds_manifest = None
+                self.metadata["folds_manifest"] = None
 
             self._h5_path = str(h5_path)
             self._DatasetCls = SeizeIt1ContinuousDataset
@@ -207,8 +219,9 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
                 has_seizure.append(bool(np.any(chunk == 1)))
 
             self._train_recs, self._val_recs, self._test_recs = (
-                _patient_splits_generic(subj_ids, has_seizure, fold, n_folds)
+                self._resolve_splits(subj_ids, has_seizure, fold, n_folds)
             )
+            self._subject_ids_per_rec = list(subj_ids)
 
         elif backend == "edf":
             from neuroatlas.extensions.datasets.dataio.sz1_edf import (
@@ -246,11 +259,14 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
             self._collate_fn = _collate_sz1_edf
 
             subj_ids = [r[2] for r in recordings]
+            # Seizure presence is unknown without reading every TSV, so the
+            # runtime splitter (folds_manifest=None only) sees one class.
             has_seizure = [True] * len(recordings)
 
             self._train_recs, self._val_recs, self._test_recs = (
-                _patient_splits_generic(subj_ids, has_seizure, fold, n_folds)
+                self._resolve_splits(subj_ids, has_seizure, fold, n_folds)
             )
+            self._subject_ids_per_rec = list(subj_ids)
 
         else:
             raise ValueError(
@@ -258,6 +274,39 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
             )
 
         self._datasets: Dict[str, Any] = {}
+
+    def _resolve_splits(
+        self,
+        subject_ids_per_rec: List[str],
+        has_seizure_per_rec: List[bool],
+        fold: int,
+        n_folds: int,
+    ) -> Tuple[List[int], List[int], List[int]]:
+        """The paper's folds, from ``configs/cohorts/sz1/folds.json``.
+
+        The published SeizeIT1 folds were drawn by the paper's epilepsy probe
+        over 60 subjects stratified on "has any seizure window" (42 do, 18 do
+        not). The EDF reader cannot know that without reading every
+        annotation, so its own splitter saw one class and drew other folds
+        (10-12 of every fold's 12 test subjects differed). The manifest fixes
+        them. ``folds_manifest=None`` restores the runtime splitter, for a
+        fold count the manifest does not have.
+        """
+        if self._folds_manifest is None:
+            return _patient_splits_generic(
+                subject_ids_per_rec, has_seizure_per_rec, fold, n_folds)
+
+        from neuroatlas.benchmarking_helpers.registry.fold_manifest import (
+            fold_source_label,
+            recording_splits_from_manifest,
+        )
+
+        train, val, test, split = recording_splits_from_manifest(
+            self._folds_manifest, fold, n_folds, subject_ids_per_rec,
+            strict=self._strict_folds,
+        )
+        self.metadata["fold_source"] = fold_source_label(split)
+        return train, val, test
 
     def _get_dataset(self, split: str):
         if split not in self._datasets:
@@ -268,30 +317,35 @@ class SeizeIt1BenchmarkDataModule(BenchmarkDataModule):
             }[split]
 
             stride = self._stride_s if split == "train" else self._window_s
-
-            if self._backend == "hdf5":
-                self._datasets[split] = self._DatasetCls(
-                    h5_path=self._h5_path,
-                    window_s=self._window_s,
-                    stride_s=stride,
-                    overlap_threshold=self._overlap_threshold,
-                    montage=self._montage,
-                    label_mode=self._label_mode,
-                    normalize=self._normalize,
-                    recording_indices=rec_indices,
-                )
-            else:
-                self._datasets[split] = self._DatasetCls(
-                    recordings=self._recordings,
-                    window_s=self._window_s,
-                    stride_s=stride,
-                    overlap_threshold=self._overlap_threshold,
-                    montage=self._montage,
-                    label_mode=self._label_mode,
-                    normalize=self._normalize,
-                    recording_indices=rec_indices,
-                )
+            self._datasets[split] = self._window_dataset(rec_indices, stride)
         return self._datasets[split]
+
+    def _window_dataset(self, rec_indices, stride_s, signal_cache_size: Optional[int] = None):
+        common = dict(
+            window_s=self._window_s,
+            stride_s=stride_s,
+            overlap_threshold=self._overlap_threshold,
+            montage=self._montage,
+            label_mode=self._label_mode,
+            normalize=self._normalize,
+            recording_indices=rec_indices,
+        )
+        if self._backend == "hdf5":
+            return self._DatasetCls(h5_path=self._h5_path, **common)
+        if signal_cache_size is not None:
+            common["signal_cache_size"] = signal_cache_size
+        return self._DatasetCls(recordings=self._recordings, **common)
+
+    # -- global embedding cache (epilepsy/_global_cache.py) ----------------
+    # Every window of every recording once, folds assigned when probing;
+    # the per-split caches held one fold's resampled train split, so fold 1
+    # found nothing to read.
+
+    def _n_recordings(self) -> int:
+        return len(self._subject_ids_per_rec)
+
+    def _subject_of(self, rec_index: int) -> str:
+        return self._subject_ids_per_rec[rec_index]
 
     def _make_loader(self, split: str) -> _LoaderAdapter:
         ds = self._get_dataset(split)

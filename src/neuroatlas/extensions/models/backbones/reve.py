@@ -14,6 +14,7 @@ from ._preproc import (
     _ESAT_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     resample_poly_with_fallback,
     snap_to_epoch_length,
     strip_zero_channels,
@@ -61,9 +62,8 @@ def _stats_shape_matches(mean, std, expected_c: int) -> bool:
 # resulting 3D coordinates are averaged. This is the convention REVE used to
 # evaluate on bipolar corpora (e.g. TUEV double-banana).
 
-# Local artifact paths (committed to the repo via git-lfs)
-_LOCAL_MODEL_DIR = models_dir("foundation", "reve")
-_LOCAL_POS_DIR = models_dir("foundation", "reve-positions")
+# Where `models download reve_pretrained` / `reve_random_init` put the files
+_LOCAL_MODEL_DIR = models_dir("foundation", "reve")   # the position bank sits next to it
 
 
 class REVEBackbone(BenchmarkBackbone):
@@ -76,17 +76,30 @@ class REVEBackbone(BenchmarkBackbone):
         self.target_sfreq = _TARGET_SFREQ
         self.target_len = int(round(self.epoch_seconds * self.target_sfreq))
 
-        # Position bank — prefer local, fall back to HuggingFace.
+        # The files come from the models root, where `models download` puts
+        # them, or from a complete snapshot in the Hugging Face cache (a job
+        # that once ran online leaves one; transformers reads it offline too).
+        # Online, a missing piece is fetched from the hub, as for every
+        # hub-loaded model; offline, say which command fetches it rather than
+        # let transformers fail with "couldn't connect to huggingface.co".
+        from ._checkpoint_download import REVE_REPO, downloads_off, reve_sources
+
+        random_init = getattr(spec, "source_type", "") == "random_init"
+        local_dir = Path(spec.checkpoint_path or str(_LOCAL_MODEL_DIR))
+        sources = reve_sources(local_dir, random_init)
+        if sources.lacking and (downloads_off() or os.environ.get("HF_HUB_OFFLINE") == "1"):
+            raise FileNotFoundError(
+                f"REVE needs {', '.join(sources.lacking)}, and downloads are off. Fetch them "
+                f"with `neuroatlas models download {spec.identifier}`, or pass --online."
+            )
+
         # CPU init for the same reason as the trunk below.
-        pos_source = str(_LOCAL_POS_DIR) if (_LOCAL_POS_DIR / "config.json").exists() else "brain-bzh/reve-positions"
+        pos_source = sources.positions or "brain-bzh/reve-positions"
         with torch.device("cpu"):
             self.pos_bank = AutoModel.from_pretrained(pos_source, trust_remote_code=True)
 
-        # Model — prefer local, fall back to HuggingFace (gated for weights).
-        # random_init reads config from the same dir but skips weight loading.
-        model_source = spec.checkpoint_path or str(_LOCAL_MODEL_DIR)
-        if not Path(model_source).is_dir() or not (Path(model_source) / "config.json").exists():
-            model_source = "brain-bzh/reve-base"
+        # random_init reads the config from the same folder but loads no weights.
+        model_source = sources.model or REVE_REPO
         # Force model construction on CPU regardless of from_config vs
         # from_pretrained. Some CUDA kernels (RTX 5060 Ti / Blackwell,
         # observed 2026-05-04) segfault during the REVE custom modeling
@@ -277,6 +290,7 @@ class REVEBackbone(BenchmarkBackbone):
         overrides = self._resolve_overrides()
 
         dataset = meta[0].get("dataset") if meta else None
+        bci = is_bci_batch(meta)
 
         if dataset in _ESAT_DATASETS:
             x = x - x.mean(dim=-1, keepdim=True)
@@ -293,7 +307,7 @@ class REVEBackbone(BenchmarkBackbone):
         if meta_sfreq is None:
             meta_sfreq = meta[0].get("sfreq") if meta else None
         if meta_sfreq is not None:
-            if dataset != "bci":
+            if not bci:
                 expected_T = int(round(float(meta_sfreq) * epoch_sec))
                 if abs(T - expected_T) > 1:
                     raise ValueError(
@@ -309,7 +323,8 @@ class REVEBackbone(BenchmarkBackbone):
         x, _ = resample_poly_with_fallback(x, src_sfreq_f, self.target_sfreq, backend=_backend)
         if dataset in _ESAT_DATASETS:
             x = snap_to_epoch_length(x, float(self.target_sfreq), meta)
-        if dataset == "bci":
+        if bci:
+            # BCI parity: keep whole 200-sample (1 s) patches.
             actual_len = x.shape[-1]
             _REVE_PATCH = 200
             if actual_len % _REVE_PATCH != 0:
@@ -399,9 +414,7 @@ class REVEBackbone(BenchmarkBackbone):
 
     def _filter_bci_channels(self, x, ch_names, batch):
         """For BCI: drop channels not in the position bank, select from tensor."""
-        meta = batch.get("meta", [{}])
-        dataset = meta[0].get("dataset") if meta else None
-        if dataset != "bci":
+        if not is_bci_batch(batch.get("meta")):
             return x, ch_names
         known = set(self.pos_bank.position_names)
         def _ch_known(n):
@@ -461,6 +474,7 @@ class REVEBackbone(BenchmarkBackbone):
     def extract_embeddings_perpatch(self, batch) -> np.ndarray:
         x = self._prepare_input(batch)
         ch_names = self._channel_names(batch)
+        x, ch_names = self._filter_bci_channels(x, ch_names, batch)
         positions = self._resolve_positions(ch_names).unsqueeze(0).expand(x.shape[0], -1, -1)
         with torch.inference_mode():
             out = self.model(x, positions)

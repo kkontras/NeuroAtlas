@@ -16,6 +16,7 @@ from neuroatlas.extensions.datasets.dataio.parkinson import (
     load_subject_list,
 )
 
+from ._runtime_keys import RAW_ONLY
 from .base import BenchmarkDataModule
 from neuroatlas.benchmarking_helpers import dataloader_worker_init_fn
 
@@ -29,13 +30,22 @@ def _collate_fn(batch):
     pd_label = torch.tensor([item["pd_label"] for item in batch], dtype=torch.long)
     subject_ids = [item["subject_id"] for item in batch]
     epoch_idxs = [item["epoch_idx"] for item in batch]
-    return {
+    out = {
         "eeg": eeg,
         "sleep_stage": sleep_stage,
         "pd_label": pd_label,
         "subject_ids": subject_ids,
         "epoch_idxs": epoch_idxs,
     }
+    # Per-sample recording statistics, kept as lists (one dict/array per
+    # sample), present only when the dataset was asked to compute them.
+    for key in _RECORDING_STAT_KEYS:
+        if all(key in item for item in batch):
+            out[key] = [item[key] for item in batch]
+    return out
+
+
+_RECORDING_STAT_KEYS = ("recording_mean", "recording_std", "recording_q95", "recording_q95_bipolar")
 
 
 class _LoaderAdapter:
@@ -89,6 +99,7 @@ class _LoaderAdapter:
                     "epoch_index": batch["epoch_idxs"][i],
                     "sleep_stage": int(batch["sleep_stage"][i]),
                     **per_sample,
+                    **{key: batch[key][i] for key in _RECORDING_STAT_KEYS if key in batch},
                 }
                 for i in range(len(batch["subject_ids"]))
             ]
@@ -156,7 +167,17 @@ class ParkinsonBenchmarkDataModule(BenchmarkDataModule):
         target_sfreq: Resample to this frequency (Hz); None keeps native rate.
         num_workers: DataLoader worker count.
         subject_list_file: Filename inside Datasets/ subdirectory listing subjects.
+        compute_recording_stats: Publish each night's amplitude statistics
+            in ``meta`` for the models that normalise per recording.
     """
+
+    RUNTIME_KEYS_FIXED = RAW_ONLY
+    RUNTIME_KEYS_IGNORED = {
+        "epoch_seconds": (
+            "the samples are the hypnogram's scored 30-s epochs "
+            "(dataio/parkinson.py EPOCH_SECONDS); a model's own window is met by its wrapper"
+        ),
+    }
 
     def __init__(
         self,
@@ -170,6 +191,7 @@ class ParkinsonBenchmarkDataModule(BenchmarkDataModule):
         subject_list_file: str = "ds_all_86.tsv",
         channel_specs=None,
         use_all_eeg_channels: bool = False,
+        compute_recording_stats: bool = False,
     ) -> None:
         mode = str(mode).lower()
         if use_all_eeg_channels:
@@ -217,6 +239,7 @@ class ParkinsonBenchmarkDataModule(BenchmarkDataModule):
             pd_labels=pd_labels,
             channels=self._channels,
             target_sfreq=target_sfreq,
+            compute_recording_stats=compute_recording_stats,
         )
         self._val_ds = ParkinsonDataset(
             data_root=str(self._data_root),
@@ -224,6 +247,7 @@ class ParkinsonBenchmarkDataModule(BenchmarkDataModule):
             pd_labels=pd_labels,
             channels=self._channels,
             target_sfreq=target_sfreq,
+            compute_recording_stats=compute_recording_stats,
         )
         self._test_ds = ParkinsonDataset(
             data_root=str(self._data_root),
@@ -231,6 +255,7 @@ class ParkinsonBenchmarkDataModule(BenchmarkDataModule):
             pd_labels=pd_labels,
             channels=self._channels,
             target_sfreq=target_sfreq,
+            compute_recording_stats=compute_recording_stats,
         )
 
     def _make_loader(self, dataset: ParkinsonDataset, shuffle: bool) -> _LoaderAdapter:

@@ -25,9 +25,11 @@ acquisition:
   kind: moabb
   ref: erpcore2021_n170
   note: >
-    Downloaded by MOABB itself on first use, into its own cache
-    (~/mne_data by default). `fetch` does not need to do anything.
+    `neuroatlas data download erpcore2021_n170` has MOABB fetch it into
+    $MNE_DATA (`neuroatlas config show` prints the folder).
   checksum: TBD              # MOABB verifies its own downloads
+  nemar: nm000132                         # moabb 1.7: erpcore2021_n170 downloads NEMAR/nm000132
+  moabb_folder: MNE-erpcoren1702021-data   # where moabb 1.2.0 keeps it under $MNE_DATA (1.6+: NEMAR/<id>)
 
 signal:
   montage: as-published      # MOABB returns the dataset's own channel set

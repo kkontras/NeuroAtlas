@@ -45,6 +45,7 @@ from ._preproc import (
     _ESAT_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     resample_poly_with_fallback,
     snap_to_epoch_length,
     unit_to_uv,
@@ -396,9 +397,8 @@ class NeuroGPTBackbone(BenchmarkBackbone):
             )
 
         overrides = self._resolve_overrides()
-        dataset = meta[0].get("dataset") if meta else None
 
-        if dataset == "bci":
+        if is_bci_batch(meta):
             # BCI parity: channel remap first, then z-score (Angeliki order).
             raw_channels = meta[0].get("channels", None) if meta else None
             if raw_channels is None:

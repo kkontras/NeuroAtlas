@@ -19,7 +19,10 @@ MODEL_SPECS = [
                 identifier="reve_pretrained",
                 model_family="reve",
                 variant="pretrained",
-                source_type="local",
+                # Public on the hub (no longer gated) under the REVE Responsible
+                # Use License; `models download` fetches the repository and the
+                # position bank brain-bzh/reve-positions next to it.
+                source_type="huggingface",
                 source_reference="brain-bzh/reve-base",
                 checkpoint_path="artifacts/models/foundation/reve",
                 input_kind="raw_timeseries",
@@ -30,7 +33,7 @@ MODEL_SPECS = [
                 embedding_dim=512,
                 wrapper_name="reve",
                 status="ready",
-                notes="REVE base (local). Input: (B,1,6000) at 200 Hz. Electrode positions from artifacts/models/foundation/reve-positions/.",
+                notes="REVE base from brain-bzh/reve-base (REVE Responsible Use License v1.0: downloading or using it accepts its terms). Input: (B,1,6000) at 200 Hz. Electrode positions from brain-bzh/reve-positions, kept in artifacts/models/foundation/reve-positions/.",
             ),
             CheckpointSpec(
                 identifier="reve_random_init",
@@ -47,7 +50,7 @@ MODEL_SPECS = [
                 embedding_dim=512,
                 wrapper_name="reve",
                 status="ready",
-                notes="Random-init baseline — same REVE architecture, no pretraining. checkpoint_path locates the config; weights are not loaded. Position bank still loaded from artifacts/models/foundation/reve-positions/.",
+                notes="Random-init baseline — same REVE architecture, no pretraining. Needs reve-base's config and modelling code (not its weights) and the position bank; `neuroatlas models download reve_random_init` fetches them into artifacts/models/foundation/reve{,-positions}/.",
             ),
         ],
     )

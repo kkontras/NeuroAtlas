@@ -5,20 +5,33 @@ and the user's settings (``data_root``, ``dataset_paths``) -- the same
 resolution ``embed`` and ``probe`` use, so a dataset `data status` reports as
 found is the one a run will read.
 
-Nothing here touches the network except :func:`download`, and that only when
-asked to.
+Everything ``data download`` writes goes under the data root (or, for
+MOABB, under ``$MNE_DATA``, see :func:`neuroatlas.config.mne_data`); nothing
+lands in the source tree.
+
+Nothing here touches the network except :func:`run_download`, and that only
+when asked to.
 """
 from __future__ import annotations
 
+import contextlib
+import fnmatch
+import hashlib
+import io
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neuroatlas import _paths
 from neuroatlas import config as user_config
@@ -35,10 +48,11 @@ EEG_SUFFIXES = (".edf", ".bdf", ".rec", ".fif", ".set", ".vhdr", ".h5", ".hdf5",
 SCAN_SECONDS = 8.0
 SCAN_ENTRIES = 200_000
 
-# How each acquisition.kind is fetched, and whether `data download` can do it.
+# How each acquisition.kind is fetched by `data download`.
 HANDLERS = {
     "physionet": "physionet",
     "zenodo": "zenodo",
+    "url": "url",
     "nsrr": "nsrr",
     "moabb": "moabb",
     "tuh": "manual",
@@ -48,10 +62,29 @@ HANDLERS = {
     "internal": "internal",
 }
 
-ACCESS = {
-    "physionet": "open", "zenodo": "open", "moabb": "open", "figshare": "open",
-    "mendeley": "open", "manual": "manual", "nsrr": "nsrr", "tuh": "tuh DUA",
-    "internal": "internal",
+# What `data download` does for each handler -- the `download` column.
+DOWNLOAD = {
+    "physionet": "automatic", "zenodo": "automatic", "url": "automatic",
+    "moabb": "automatic", "nsrr": "with NSRR token", "manual": "instructions",
+    "internal": "from the authors", "refused": "refused", "blocked": "blocked",
+}
+
+# Kept for callers of the old column; `access` is now the manifest's kind,
+# the same word `list datasets` prints.
+ACCESS = {kind: kind for kind in HANDLERS}
+
+# Every state `data status` can report, with its meaning: printed under the
+# table and the vocabulary the guide should list.
+STATES = {
+    "found": "every expected file is there (n files, or n/N when the total is known)",
+    "partial": "some files, fewer than expected (n/N): an interrupted download?",
+    "empty": "the folder exists but holds no recordings",
+    "missing": "the folder does not exist",
+    "prepared": "the prepared file a reader needs is there",
+    "not prepared": "the raw data may be there, but the prepared file the reader needs is not",
+    "not downloaded": "MOABB data not under $MNE_DATA yet",
+    "not configured": "no data root set: `neuroatlas config init --data-root DIR`",
+    "no path": "the manifest names no folder for it",
 }
 
 
@@ -59,6 +92,10 @@ def _spec(slug: str):
     from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
 
     return load_dataset_spec(slug)
+
+
+def _manifest(slug: str) -> Dict[str, Any]:
+    return dict(_spec(slug).manifest or {})
 
 
 def resolved_config(slug: str) -> Dict[str, Any]:
@@ -77,25 +114,51 @@ def resolved_config(slug: str) -> Dict[str, Any]:
 
 
 def acquisition(slug: str) -> Dict[str, Any]:
-    return dict((_spec(slug).manifest or {}).get("acquisition") or {})
+    return dict(_manifest(slug).get("acquisition") or {})
+
+
+def _unresolved(value: str) -> List[str]:
+    return re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", str(value))
 
 
 def raw_location(slug: str) -> Tuple[Optional[str], Optional[Path], List[str]]:
-    """(key, path, unresolved variables) of the raw corpus."""
+    """(key, path, unresolved variables) of the raw corpus.
+
+    ``key`` is the per-dataset setting that moves it (``chbmit.bids_root``);
+    for a cohort whose reader reads no raw path, ``acquisition.dest`` says
+    where a download goes and the key is None.
+    """
     cfg = resolved_config(slug)
     for key in RAW_KEYS:
         value = cfg.get(key)
         if value:
-            unresolved = re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", str(value))
+            unresolved = _unresolved(value)
             return key, (None if unresolved else Path(str(value))), unresolved
+    dest = acquisition(slug).get("dest")
+    if dest:
+        from neuroatlas.entrypoints._common import expand_dataset_paths
+
+        value = expand_dataset_paths({"dest": dest})["dest"]
+        unresolved = _unresolved(value)
+        return None, (None if unresolved else Path(str(value))), unresolved
     return None, None, []
 
 
+def _matcher(pattern: Optional[str]) -> Callable[[str], bool]:
+    if pattern:
+        name_pattern = pattern.rsplit("/", 1)[-1]
+        return lambda name: fnmatch.fnmatchcase(name, name_pattern)
+    return lambda name: name.lower().endswith(EEG_SUFFIXES)
+
+
 def _count(root: Path, pattern: Optional[str]) -> Tuple[int, bool]:
-    """(files matching, whether the scan stopped early)."""
+    """(files matching, whether the scan stopped early).
+
+    ``pattern`` is matched against file names (a leading ``**/`` or
+    directory part is ignored); macOS ``._`` resource files never count.
+    """
     started, seen, hits = time.monotonic(), 0, 0
-    suffix_re = re.compile(pattern.replace(".", r"\.").replace("**/", "").replace("*", ".*") + "$") \
-        if pattern else None
+    match = _matcher(pattern)
     stack = [root]
     while stack:
         try:
@@ -103,10 +166,9 @@ def _count(root: Path, pattern: Optional[str]) -> Tuple[int, bool]:
                 for entry in it:
                     seen += 1
                     if entry.is_dir(follow_symlinks=False):
-                        stack.append(Path(entry.path))
-                    elif suffix_re is not None:
-                        hits += bool(suffix_re.match(entry.name))
-                    elif entry.name.lower().endswith(EEG_SUFFIXES):
+                        if entry.name != "__MACOSX":
+                            stack.append(Path(entry.path))
+                    elif not entry.name.startswith("._") and match(entry.name):
                         hits += 1
                     if seen >= SCAN_ENTRIES or time.monotonic() - started > SCAN_SECONDS:
                         return hits, True
@@ -119,63 +181,192 @@ def _count(root: Path, pattern: Optional[str]) -> Tuple[int, bool]:
 class DatasetStatus:
     slug: str
     kind: str
-    access: str
-    handler: str
-    state: str                       # found | partial | missing | not configured | ...
+    access: str                      # the manifest's kind, as `list datasets` says it
+    handler: str                     # how `data download` gets it
+    state: str                       # a key of STATES, maybe with "(n/N files)"
     path: Optional[Path] = None
-    path_key: Optional[str] = None
+    path_key: Optional[str] = None   # `config set <slug>.<path_key> DIR` moves it
     n_files: Optional[int] = None
+    expected: Optional[int] = None
     notes: List[str] = field(default_factory=list)
     channel_map: bool = False
+    download: str = ""               # what `data download` does (DOWNLOAD)
 
     @property
     def found(self) -> bool:
         return self.state.startswith("found") or self.state == "prepared"
 
+    @property
+    def setting(self) -> Optional[str]:
+        """The `config set` key for this dataset's folder, or None."""
+        return f"{self.slug}.{self.path_key}" if self.path_key else None
 
-def _moabb_status(slug: str, st: DatasetStatus) -> DatasetStatus:
-    manifest = _spec(slug).manifest or {}
-    has_builder = bool((manifest.get("pipeline") or {}).get("preprocessor"))
-    mne_data = os.environ.get("MNE_DATA") or str(Path.home() / "mne_data")
-    st.path = Path(mne_data)
-    if not has_builder:
-        st.state = "fetched on first use"
-        st.notes.append(f"MOABB downloads it into {mne_data} the first time `embed` reads it")
-        return st
+
+def mne_data_dir() -> Path:
+    return user_config.mne_data().value
+
+
+def _moabb_keeps_cohort_folders() -> bool:
+    """True when the installed moabb predates 1.6, which moved every cohort
+    under NEMAR/<id>: moabb 1.2.0 (the numpy<2 stack) keeps its own folders."""
+    from importlib import metadata
+
     try:
-        from neuroatlas.extensions.datasets.dataio.bci import PREPROCESSED_SEARCH_PATHS
-    except ImportError as exc:                    # braindecode / moabb not installed
-        st.state = "unknown"
-        st.notes.append(f"install the [bci] extra to check it ({exc.name} missing)")
-        return st
+        major, minor = (int(x) for x in metadata.version("moabb").split(".")[:2])
+    except (metadata.PackageNotFoundError, ValueError):
+        return False
+    return (major, minor) < (1, 6)
+
+
+def _nemar_state(slug: str, acq: Dict[str, Any], st: DatasetStatus) -> None:
+    """found / partial / not downloaded, from MOABB's NEMAR deposit."""
+    base = mne_data_dir()
+    nemar = acq.get("nemar")
+    if not nemar:
+        st.path = base
+        st.state = "not downloaded" if not base.is_dir() else "found"
+        st.notes.append("which MOABB folder holds it is not recorded (no acquisition.nemar); "
+                        f"MOABB keeps it under {base}")
+        return
+    store = base / "NEMAR" / str(nemar)
+    st.path = store
+    legacy = acq.get("moabb_folder")
+    if not store.is_dir() and legacy:
+        # moabb 1.2.0 (the numpy<2 stack) stores each cohort in its own folder
+        # under MNE_DATA; NEMAR/ is where moabb 1.6+ puts it.
+        folder = base / str(legacy)
+        n = sum(1 for p in folder.rglob("*") if p.is_file()) if folder.is_dir() else 0
+        if n:
+            st.path, st.n_files = folder, n
+            st.state = f"found ({n} files)"
+            return
+    if not store.is_dir():
+        if legacy and _moabb_keeps_cohort_folders():
+            st.path = base / str(legacy)      # where this moabb will put it
+        st.state = "not downloaded"
+        st.notes.append(f"`neuroatlas data download {slug}`")
+        return
+    expected = None
+    provenance = store / "sourcedata" / "sourcedata_provenance.json"
+    try:
+        expected = int(json.loads(provenance.read_text()).get("n_files"))
+    except (OSError, ValueError, TypeError):
+        pass
+    sourcedata = store / "sourcedata"
+    n = sum(1 for p in sourcedata.rglob("*") if p.is_file()
+            and p.name != "sourcedata_provenance.json") if sourcedata.is_dir() else 0
+    st.n_files, st.expected = n, expected
+    if expected and n < expected:
+        st.state = f"partial ({n}/{expected} files)"
+        st.notes.append(f"`neuroatlas data download {slug}` again to finish it")
+    elif n:
+        st.state = f"found ({n}/{expected} files)" if expected else f"found ({n} files)"
+    else:
+        st.state = "empty"
+        st.notes.append(f"`neuroatlas data download {slug}`")
+
+
+def _prepared_hit(slug: str, explicit: Optional[str]) -> Tuple[Optional[Path], List[Path]]:
+    """(the prepared file a reader would open, or None; every candidate)."""
+    if explicit:
+        return (Path(explicit) if Path(explicit).is_file() else None), [Path(explicit)]
+    from neuroatlas.extensions.datasets.dataio.bci import PREPROCESSED_SEARCH_PATHS
     from neuroatlas.entrypoints._common import expand_dataset_paths
 
     candidates = [Path(p) for p in expand_dataset_paths(
         {f"p{i}": p for i, p in enumerate(PREPROCESSED_SEARCH_PATHS.get(slug, []))}).values()]
-    hit = next((p for p in candidates if p.exists()), None)
+    return next((p for p in candidates if p.is_file()), None), candidates
+
+
+def _legacy_prepared(candidate: Path) -> Optional[Path]:
+    """The same prepared file where an earlier version wrote it (the checkout)."""
+    checkout = _paths.checkout_root()
+    if checkout is None:
+        return None
+    try:
+        rel = candidate.relative_to(_paths.prepared_dir())
+    except ValueError:
+        return None
+    old = checkout / "data" / "preprocessed" / rel
+    return old if old.is_file() else None
+
+
+def _prepared_status(slug: str, st: DatasetStatus, acq: Dict[str, Any],
+                     needs_build: bool) -> DatasetStatus:
+    """prepared / not prepared, for readers that read only a built file."""
+    explicit = user_config.dataset_paths(slug).get("preprocessed_path")
+    try:
+        hit, candidates = _prepared_hit(slug, explicit)
+    except ImportError as exc:                    # braindecode / moabb not installed
+        st.state = "unknown"
+        st.notes.append(f"install the [bci] extra and moabb 1.2.0 (--no-deps) to check it "
+                        f"({exc.name} missing)")
+        return st
+    if explicit:
+        st.path_key = "preprocessed_path"
     if hit:
         st.state, st.path = "prepared", hit
-    else:
-        st.state = "not prepared"
-        if candidates:
-            st.path = candidates[0]
-        st.notes.append(f"`neuroatlas data download {slug}`, then `neuroatlas data prepare {slug}`")
+        return st
+    st.state = "not prepared"
+    st.path = candidates[0] if candidates else None
+    old = _legacy_prepared(st.path) if st.path else None
+    if old:
+        st.notes.append(f"an earlier version built it inside the source tree: "
+                        f"mkdir -p {st.path.parent} && mv {old} {st.path}")
+    if needs_build:
+        return st
+    st.path_key = "preprocessed_path"
+    st.notes.append(" ".join(str(acq["prepared_only"]).split()))
     return st
 
 
 def status(slug: str) -> DatasetStatus:
     acq = acquisition(slug)
     kind = acq.get("kind") or "manual"
-    st = DatasetStatus(slug, kind, ACCESS.get(kind, kind), HANDLERS.get(kind, "manual"), "missing",
-                       channel_map=_paths.configs_dir("channel_maps", f"{slug}.yaml").is_file())
+    handler = HANDLERS.get(kind, "manual")
+    if acq.get("unusable_download"):
+        handler = "refused"
+    st = DatasetStatus(slug, kind, kind, handler, "missing",
+                       channel_map=_paths.configs_dir("channel_maps", f"{slug}.yaml").is_file(),
+                       download=DOWNLOAD.get(handler, handler))
     if kind == "nsrr" and not user_config.locate_token("nsrr"):
         st.notes.append("nsrr token not found")
+    manifest = _manifest(slug)
+    pipeline = manifest.get("pipeline") or {}
+    has_builder = isinstance(pipeline.get("preprocessor"), dict)
+    # A MOABB cohort whose pickle nothing reads (pipeline.required: false) is
+    # reported by its raw data, like the MOABB cohorts with no builder.
+    needs_build = has_builder and pipeline.get("required", True) is not False
+
     if kind == "moabb":
-        return _moabb_status(slug, st)
+        if needs_build:
+            _prepared_status(slug, st, acq, needs_build=True)
+            if st.state == "not prepared":
+                raw = DatasetStatus(slug, kind, kind, handler, "missing")
+                _nemar_state(slug, acq, raw)
+                if raw.found:
+                    st.notes.append(f"raw data {raw.state}; `neuroatlas data prepare {slug}`")
+                else:
+                    st.notes.append(f"`neuroatlas data download {slug}`, then "
+                                    f"`neuroatlas data prepare {slug}`")
+            return st
+        _nemar_state(slug, acq, st)
+        return st
+    if acq.get("prepared_only"):
+        _prepared_status(slug, st, acq, needs_build=False)
+        if st.state == "not prepared" and acq.get("dest"):
+            _, raw_path, _ = raw_location(slug)
+            if raw_path is not None:
+                n, _ = _count(raw_path, (acq.get("expect") or {}).get("glob")) \
+                    if raw_path.is_dir() else (0, False)
+                have = f"{n} files there now" if n else "none there yet"
+                st.notes.append(f"`neuroatlas data download {slug}` fetches the raw EDFs into "
+                                f"{raw_path} ({have}), but the benchmark does not read them")
+        return st
 
     key, path, unresolved = raw_location(slug)
     st.path_key = key
-    if key is None:
+    if key is None and path is None:
         st.state = "no path"
         st.notes.append("the manifest names no raw path")
         return st
@@ -184,20 +375,34 @@ def status(slug: str) -> DatasetStatus:
         st.notes.append(f"set {' and '.join(unresolved)}: `neuroatlas config init --data-root DIR`")
         return st
     st.path = path
-    if not path.exists():
-        return st
+    if acq.get("unusable_download"):
+        st.notes.append(" ".join(str(acq["unusable_download"]).split()))
     expect = acq.get("expect") or {}
+    count = expect.get("count")
+    st.expected = int(count) if count else None
+    if not path.exists():
+        legacy = _paths.legacy_raw(slug)
+        if legacy is not None:
+            old = legacy / path.name if (legacy / path.name).is_dir() else legacy
+            st.notes.append(f"an earlier version downloaded it into the source tree; to use "
+                            f"that copy: `neuroatlas config set {st.setting} {old}`")
+        return st
     n, truncated = _count(path, expect.get("glob"))
     st.n_files = n
-    minimum = int(expect.get("min", 1))
-    if n >= minimum:
-        st.state = f"found ({'≥' if truncated else ''}{n} files)"
+    minimum = int(count or expect.get("min", 1))
+    total = f"/{count}" if count else ""
+    if n >= minimum or (truncated and n):
+        st.state = f"found ({'≥' if truncated else ''}{n}{total} files)"
     elif n:
-        st.state = "partial"
-        st.notes.append(f"{n} files, expected at least {minimum}")
+        st.state = f"partial ({n}{total} files)"
+        st.notes.append(f"{n} of {minimum} expected files: an interrupted download? "
+                        + (f"`neuroatlas data download {slug}` resumes it"
+                           if handler in ("physionet", "zenodo", "url") else
+                           "complete the copy"))
     else:
-        st.state = "partial"
-        st.notes.append("the folder exists but holds no recordings")
+        st.state = "empty"
+        st.notes.append("the folder exists but holds no recordings"
+                        + (f" matching {expect['glob']}" if expect.get("glob") else ""))
     return st
 
 
@@ -206,16 +411,30 @@ def status(slug: str) -> DatasetStatus:
 # --------------------------------------------------------------------------
 
 @dataclass
+class Fetch:
+    """One file to transfer: url -> dest, checked against size and/or md5."""
+    url: str
+    dest: Path
+    size: Optional[int] = None
+    md5: Optional[str] = None
+
+
+@dataclass
 class DownloadPlan:
     slug: str
     handler: str
-    commands: List[List[str]] = field(default_factory=list)   # argv lists
+    commands: List[List[str]] = field(default_factory=list)   # argv lists (wget, nsrr)
     cwd: Optional[Path] = None
     dest: Optional[Path] = None
-    message: Optional[str] = None      # for manual/internal: what a person must do
+    message: Optional[str] = None      # manual / internal / refused: what a person must do
     stdin_token: Optional[str] = None  # name of the token fed on stdin
     size_gb: Optional[float] = None
     after: List[str] = field(default_factory=list)
+    fetches: List[Fetch] = field(default_factory=list)       # done in Python, resumable
+    listing: Optional[str] = None      # zenodo record / S3 prefix to list when it runs
+    unpack: List[Path] = field(default_factory=list)          # zips to unpack into dest
+    keep_archive: bool = False
+    mirror: str = "physionet"
 
 
 def _download_root(path: Path, acq: Dict[str, Any]) -> Path:
@@ -226,12 +445,34 @@ def _download_root(path: Path, acq: Dict[str, Any]) -> Path:
     return path
 
 
-def plan_download(slug: str) -> DownloadPlan:
+def _archive_root(path: Path, archive: str) -> Path:
+    """Where to unpack an archive so its top folder lands at ``path``.
+
+    BIDS_CHB-MIT.zip holds BIDS_CHB-MIT/..., and the reader reads
+    .../BIDS_CHB-MIT, so it unpacks into the parent. An archive whose stem
+    is not the reader's folder (dodh.zip -> dodh/) unpacks into ``path``.
+    """
+    return path.parent if Path(archive).stem == path.name else path
+
+
+ZENODO_FILE = "https://zenodo.org/api/records/{ref}/files/{name}/content"
+ZENODO_RECORD = "https://zenodo.org/api/records/{ref}"
+S3_BUCKET = "https://physionet-open.s3.amazonaws.com"
+
+
+def plan_download(slug: str, *, mirror: str = "physionet",
+                  keep_archive: bool = False) -> DownloadPlan:
     acq = acquisition(slug)
     kind = acq.get("kind") or "manual"
     handler = HANDLERS.get(kind, "manual")
-    plan = DownloadPlan(slug, handler, size_gb=acq.get("size_gb"))
+    plan = DownloadPlan(slug, handler, size_gb=acq.get("size_gb"),
+                        keep_archive=keep_archive, mirror=mirror)
     landing = acq.get("upstream")
+
+    if acq.get("unusable_download"):
+        plan.handler = "refused"
+        plan.message = " ".join(str(acq["unusable_download"]).split())
+        return plan
 
     if handler == "moabb":
         from neuroatlas.extensions.datasets.dataio.moabb_loader import MOABB_DATASETS
@@ -240,14 +481,16 @@ def plan_download(slug: str) -> DownloadPlan:
         if cfg is None:
             plan.handler, plan.message = "manual", f"{slug} has no MOABB configuration"
             return plan
-        plan.dest = Path(os.environ.get("MNE_DATA") or Path.home() / "mne_data")
+        plan.dest = mne_data_dir()
         plan.commands = [["moabb", f"{cfg.moabb_name}().download()"]]
-        plan.after = [f"then `neuroatlas data prepare {slug}`"] if (
-            ((_spec(slug).manifest or {}).get("pipeline") or {}).get("preprocessor")) else []
+        pipeline = _manifest(slug).get("pipeline") or {}
+        if (isinstance(pipeline.get("preprocessor"), dict)
+                and pipeline.get("required", True) is not False):
+            plan.after = [f"then `neuroatlas data prepare {slug}`"]
         return plan
 
     key, path, unresolved = raw_location(slug)
-    if unresolved or path is None:
+    if handler not in ("manual", "internal") and (unresolved or path is None):
         plan.handler = "blocked"
         plan.message = ("set the data root first: `neuroatlas config init --data-root DIR`"
                         if unresolved else "the manifest names no raw path")
@@ -256,21 +499,43 @@ def plan_download(slug: str) -> DownloadPlan:
 
     if handler == "physionet" and acq.get("ref") and acq.get("version"):
         root = _download_root(path, acq)
-        url = f"https://physionet.org/files/{acq['ref']}/{acq['version']}/"
         plan.dest = root
-        plan.commands = [["wget", "-r", "-N", "-c", "-np", "-nH", "--cut-dirs=3",
-                          "-P", str(root), url]]
+        prefix = f"{acq['ref']}/{acq['version']}/"
+        if mirror == "aws":
+            # PhysioNet's open-data mirror on AWS: anonymous HTTPS, no
+            # credentials, typically far faster than physionet.org.
+            plan.listing = f"{S3_BUCKET}/?list-type=2&prefix={prefix}"
+            return plan
+        url = f"https://physionet.org/files/{prefix}"
+        plan.commands = [["wget", "-r", "-N", "-c", "-np", "-nH", "--cut-dirs=3", "-nv",
+                          "--reject", "index.html*", "-P", str(root), url]]
+        plan.after = [f"faster: `neuroatlas data download {slug} --mirror aws` (PhysioNet's "
+                      f"open-data copy on AWS, no account needed)"]
         return plan
 
-    if handler == "zenodo" and acq.get("ref") and acq.get("file"):
-        archive = str(acq["file"])
-        parent = path.parent
-        url = f"https://zenodo.org/api/records/{acq['ref']}/files/{archive}/content"
-        plan.dest = parent
-        plan.commands = [["wget", "-c", "-O", str(parent / archive), url]]
-        if archive.endswith(".zip"):
-            plan.commands.append(["unzip", "-n", "-q", str(parent / archive), "-d", str(parent)])
-            plan.after = [f"expects the archive to unpack to {path}"]
+    if handler == "zenodo" and acq.get("ref"):
+        ref = str(acq["ref"])
+        archives = [acq["file"]] if acq.get("file") else list(acq.get("files") or [])
+        if archives:
+            for name in archives:
+                where = _archive_root(path, str(name))
+                plan.fetches.append(Fetch(ZENODO_FILE.format(ref=ref, name=name), where / str(name)))
+                if str(name).endswith(".zip"):
+                    plan.unpack.append(where / str(name))
+            if acq.get("checksum", "").startswith("md5:") and len(plan.fetches) == 1:
+                plan.fetches[0].md5 = acq["checksum"].split(":", 1)[1]
+            plan.listing = ZENODO_RECORD.format(ref=ref)     # sizes and md5s, when it runs
+        else:
+            plan.listing = ZENODO_RECORD.format(ref=ref)     # every file of the record
+        return plan
+
+    if handler == "url" and acq.get("files"):
+        for item in acq["files"]:
+            url = item["url"] if isinstance(item, dict) else str(item)
+            target = path / url.rstrip("/").rsplit("/", 1)[-1]
+            plan.fetches.append(Fetch(url, target, md5=(item.get("md5") if isinstance(item, dict) else None)))
+            if target.suffix == ".zip":
+                plan.unpack.append(target)
         return plan
 
     if handler == "nsrr" and acq.get("ref"):
@@ -290,22 +555,24 @@ def plan_download(slug: str) -> DownloadPlan:
         plan.cwd, plan.dest = cwd, cwd / ref
         plan.commands = [["nsrr", "download", sub] for sub in subpaths]
         plan.stdin_token = "nsrr"
-        if slug == "shhs":
-            plan.after.append("the SHHS reader needs the CoRe-Sleep preprocessed version, which "
-                              "this does not build")
         return plan
 
     plan.handler = "manual" if handler != "internal" else "internal"
     reason = {
         "tuh": "needs a signed TUH data use agreement; credentials arrive by email",
-        "internal": "not publicly licensed; obtain it from the authors",
-    }.get(kind, "has no download API")
+        "internal": "is not publicly licensed; obtain it from the authors",
+    }.get(kind, "has to be fetched by hand (no download API, or access on request)")
     parts = [f"{slug} {reason}."]
     if landing:
         parts.append(f"Get it from {landing}")
     if acq.get("note"):
         parts.append(" ".join(str(acq["note"]).split()))
-    parts.append(f"Put it at {path}")
+    if acq.get("prepared_only"):
+        parts.append("Note: " + " ".join(str(acq["prepared_only"]).split()))
+    if path is not None:
+        setting = f"{slug}.{key}" if key else None
+        parts.append(f"Put it at {path}" + (f" (or `neuroatlas config set {setting} DIR` "
+                                            f"to point at a copy)" if setting else ""))
     plan.message = " ".join(parts)
     return plan
 
@@ -321,6 +588,8 @@ def free_gb(path: Path) -> Optional[float]:
 
 
 NSRR_MIN_FREE_GB = 50.0
+TOOL_HINTS = {"nsrr": "install it once: gem install --user-install nsrr irb",
+              "wget": "install wget", "unzip": "install unzip"}
 
 
 def check_nsrr_allowed(slug: str) -> Optional[str]:
@@ -336,48 +605,285 @@ def check_nsrr_allowed(slug: str) -> Optional[str]:
     return None
 
 
-def run_download(plan: DownloadPlan, *, echo=print) -> int:
-    """Execute a plan. Returns a process exit status."""
-    if plan.handler in ("manual", "internal", "blocked"):
-        echo(f"{plan.slug}: {plan.handler} — {plan.message}")
-        return 2 if plan.handler == "blocked" else 0
-
-    token = None
+def refusal(plan: DownloadPlan) -> Optional[str]:
+    """Why this plan must not run, or None. The same checks for a real run and a
+    dry run, so a dry run never prints a command the real one would refuse."""
+    if plan.handler in ("refused", "blocked"):
+        return plan.message
     if plan.stdin_token:
-        refusal = check_nsrr_allowed(plan.slug)
-        if refusal:
-            echo(f"error: {refusal}")
-            return 2
-        where = user_config.locate_token(plan.stdin_token)
-        if where is None:
-            echo(f"error: no {plan.stdin_token} token; put it in "
-                 f"{user_config.token_file(plan.stdin_token)} (chmod 600)")
-            return 2
-        token = os.environ["NSRR_TOKEN"] if where == "$NSRR_TOKEN" else Path(where).read_text().strip()
-
+        why = check_nsrr_allowed(plan.slug)
+        if why:
+            return why
+        if user_config.locate_token(plan.stdin_token) is None:
+            return (f"no {plan.stdin_token} token; put it in "
+                    f"{user_config.token_file(plan.stdin_token)} (chmod 600)")
     need = plan.size_gb or (NSRR_MIN_FREE_GB if plan.handler == "nsrr" else None)
+    if need and plan.unpack:
+        need *= 2            # the archive and what it unpacks to, until the archive goes
     if need and plan.dest is not None:
         free = free_gb(plan.dest)
         if free is not None and free < need * 1.1:
-            echo(f"error: {plan.slug} needs about {need:g} GB; {free:.0f} GB free under {plan.dest}")
+            return f"{plan.slug} needs about {need:g} GB; {free:.0f} GB free under {plan.dest}"
+    if plan.handler == "moabb":
+        import importlib.util
+
+        if importlib.util.find_spec("moabb") is None:
+            return ("MOABB is not installed: in your NeuroAtlas clone, "
+                    "pip install -e '.[fm,bci]' && "
+                    "pip install --no-deps 'moabb==1.2.0'  (moabb 1.2.0 is the last "
+                    "release on numpy<2; --no-deps keeps its stale caps from "
+                    "downgrading scikit-learn)")
+    tools = [argv[0] for argv in plan.commands if argv and argv[0] != "moabb"]
+    for tool in dict.fromkeys(tools):
+        if shutil.which(tool) is None:
+            return f"`{tool}` is not on PATH. {TOOL_HINTS.get(tool, '')}".rstrip()
+    return None
+
+
+def describe(plan: DownloadPlan) -> List[str]:
+    """What a plan would do, one line each (the dry run)."""
+    lines = []
+    where = f"  (in {plan.cwd})" if plan.cwd else ""
+    for argv in plan.commands:
+        lines.append(f"command: {' '.join(argv)}{where}")
+    if plan.listing and not plan.fetches:
+        source = ("every file of the record" if "zenodo" in plan.listing
+                  else "every file under the prefix")
+        lines.append(f"fetch: {source} listed by {plan.listing} -> {plan.dest}/")
+    for f in plan.fetches:
+        lines.append(f"fetch: {f.url} -> {f.dest}" + (f"  (md5 {f.md5})" if f.md5 else ""))
+    for archive in plan.unpack:
+        lines.append(f"unpack: {archive} -> {archive.parent}/"
+                     + ("" if plan.keep_archive else "  (then delete the archive; "
+                        "--keep-archive keeps it)"))
+    for line in plan.after:
+        lines.append(f"note: {line}")
+    return lines
+
+
+# -- transfers done in Python: resumable, verified, one progress line per file
+
+def _http_json(url: str) -> Any:
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return json.load(response)
+
+
+def _zenodo_files(listing: str) -> List[Dict[str, Any]]:
+    return list(_http_json(listing).get("files") or [])
+
+
+def _s3_keys(listing: str) -> List[Tuple[str, int, Optional[str]]]:
+    """(key, size, md5 or None) under an S3 prefix, following continuation tokens."""
+    import xml.etree.ElementTree as ET
+
+    ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+    out, token = [], None
+    while True:
+        url = listing + (f"&continuation-token={urllib.parse.quote(token)}" if token else "")
+        with urllib.request.urlopen(url, timeout=60) as response:
+            root = ET.fromstring(response.read())
+        for item in root.findall("s3:Contents", ns):
+            key = item.findtext("s3:Key", namespaces=ns)
+            size = int(item.findtext("s3:Size", default="0", namespaces=ns))
+            etag = (item.findtext("s3:ETag", default="", namespaces=ns) or "").strip('"')
+            out.append((key, size, etag if etag and "-" not in etag else None))
+        if root.findtext("s3:IsTruncated", namespaces=ns) != "true":
+            return out
+        token = root.findtext("s3:NextContinuationToken", namespaces=ns)
+
+
+def _md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 22), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _human(n: float) -> str:
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} TB"
+
+
+def _fetch(f: Fetch, echo, label: str) -> None:
+    """Transfer one file, resuming a partial one; raise on any failure."""
+    f.dest.parent.mkdir(parents=True, exist_ok=True)
+    if f.dest.is_file() and f.size is not None and f.dest.stat().st_size == f.size \
+            and (f.md5 is None or _md5(f.dest) == f.md5):
+        echo(f"{label} {f.dest.name}: already complete")
+        return
+    part = f.dest.with_name(f.dest.name + ".part")
+    have = part.stat().st_size if part.is_file() else 0
+    request = urllib.request.Request(f.url, headers={"Range": f"bytes={have}-"} if have else {})
+    started, last = time.monotonic(), time.monotonic()
+    with urllib.request.urlopen(request, timeout=120) as response:
+        if have and response.status != 206:        # server ignored the range: start over
+            have = 0
+        total = f.size or (int(response.headers.get("Content-Length", 0)) + have) or None
+        done = have
+        with open(part, "ab" if have else "wb") as out:
+            while True:
+                chunk = response.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if time.monotonic() - last > 30 and total:
+                    last = time.monotonic()
+                    rate = (done - have) / max(last - started, 1e-6)
+                    echo(f"{label} {f.dest.name}: {_human(done)} of {_human(total)} "
+                         f"({_human(rate)}/s)")
+    if f.size is not None and part.stat().st_size != f.size:
+        raise IOError(f"{f.dest.name}: got {part.stat().st_size} bytes, expected {f.size}; "
+                      f"run the download again to resume")
+    if f.md5 and _md5(part) != f.md5:
+        part.unlink()
+        raise IOError(f"{f.dest.name}: md5 mismatch (expected {f.md5}); the partial file "
+                      f"was removed, run the download again")
+    part.replace(f.dest)
+    seconds = max(time.monotonic() - started, 1e-6)
+    echo(f"{label} {f.dest.name}: {_human(f.dest.stat().st_size)} in {seconds:.0f} s"
+         + (", md5 ok" if f.md5 else ""))
+
+
+def _resolve_listing(plan: DownloadPlan) -> None:
+    """Fill sizes and md5s (or the whole file list) from the record's API."""
+    if not plan.listing:
+        return
+    if "zenodo.org" in plan.listing:
+        files = {f["key"]: f for f in _zenodo_files(plan.listing)}
+        if not plan.fetches:                          # the whole record
+            ref = plan.listing.rstrip("/").rsplit("/", 1)[-1]
+            for name, f in sorted(files.items()):
+                plan.fetches.append(Fetch(ZENODO_FILE.format(ref=ref, name=name),
+                                          plan.dest / name))
+        for fetch in plan.fetches:
+            meta = files.get(fetch.dest.name)
+            if meta is None:
+                raise IOError(f"{fetch.dest.name} is not in {plan.listing}")
+            fetch.size = int(meta.get("size") or 0) or None
+            checksum = str(meta.get("checksum") or "")
+            if checksum.startswith("md5:"):
+                fetch.md5 = fetch.md5 or checksum.split(":", 1)[1]
+        return
+    prefix = plan.listing.split("prefix=", 1)[1]
+    for key, size, md5 in _s3_keys(plan.listing):
+        rel = key[len(prefix):]
+        if not rel or rel.endswith("/"):
+            continue
+        plan.fetches.append(Fetch(f"{S3_BUCKET}/{key}", plan.dest / rel, size=size, md5=md5))
+
+
+def _unpack(archive: Path, echo, keep: bool) -> None:
+    target = archive.parent
+    echo(f"unpack: {archive.name} -> {target}/")
+    with zipfile.ZipFile(archive) as zf:
+        members = [m for m in zf.infolist() if not m.filename.startswith("__MACOSX/")
+                   and not m.filename.rsplit("/", 1)[-1].startswith("._")]
+        for member in members:
+            out = target / member.filename
+            if member.is_dir():
+                out.mkdir(parents=True, exist_ok=True)
+            elif not (out.is_file() and out.stat().st_size == member.file_size):
+                zf.extract(member, target)
+    if not keep:
+        archive.unlink()
+        echo(f"deleted {archive.name} (pass --keep-archive to keep it)")
+
+
+@contextlib.contextmanager
+def _quiet(log: io.StringIO):
+    """Collect a library's prints (MOABB, nemar-py) instead of showing them."""
+    with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+        yield
+
+
+def _moabb_download(plan: DownloadPlan, echo) -> int:
+    import logging
+
+    from neuroatlas.extensions.datasets.dataio.moabb_loader import (
+        MOABB_DATASETS,
+        moabb_dataset_class,                   # refusal() checked moabb is installed
+    )
+    plan.dest.mkdir(parents=True, exist_ok=True)
+    # Exported, so MNE never falls back to writing ~/.mne/mne-python.json, and
+    # never follows a per-dataset folder from it (see config.mne_data).
+    os.environ["MNE_DATA"] = str(plan.dest)
+    os.environ.setdefault("MNE_DONTWRITE_HOME", "true")
+    cfg = MOABB_DATASETS[plan.slug]
+    try:
+        # the installed moabb's class, or the vendored copy it predates
+        dataset = moabb_dataset_class(cfg.moabb_name)()
+    except Exception as exc:                          # noqa: BLE001
+        echo(f"error: {plan.slug}: MOABB cannot build {cfg.moabb_name}: {type(exc).__name__}: {exc}")
+        return 1
+    subjects = list(getattr(dataset, "subject_list", []) or [None])
+    echo(f"moabb: {cfg.moabb_name}, {len(subjects)} subject(s), into {plan.dest}")
+    if logging.getLogger().level > logging.DEBUG:    # `neuroatlas -v` keeps them
+        # One request line per file per subject otherwise (O-8).
+        for name in ("moabb", "mne", "pooch", "httpx", "httpcore", "nemar", "urllib3"):
+            logging.getLogger(name).setLevel(logging.WARNING)
+    started = time.monotonic()
+    for i, subject in enumerate(subjects, 1):
+        log = io.StringIO()
+        try:
+            with _quiet(log):
+                if subject is None:
+                    dataset.download(path=str(plan.dest), update_path=False)
+                else:
+                    # accept stays False: a dataset whose licence must be
+                    # accepted says so in the one-line error below.
+                    dataset.download(subject_list=[subject], path=str(plan.dest),
+                                     update_path=False)
+        except Exception as exc:                      # noqa: BLE001 -- one line, not a traceback
+            tail = " | ".join(line for line in log.getvalue().splitlines()[-3:] if line.strip())
+            echo(f"error: {plan.slug}: subject {subject}: {type(exc).__name__}: {exc}"
+                 + (f" (last output: {tail})" if tail else ""))
             return 1
+        echo(f"  [{i}/{len(subjects)}] subject {subject} ({time.monotonic() - started:.0f} s)")
+    return 0
+
+
+def run_download(plan: DownloadPlan, *, echo=None) -> int:
+    """Execute a plan. Exit status: 0 done (or instructions printed), 1 a
+    transfer or tool failed, 2 refused before anything ran."""
+    if echo is None:
+        # Flushed, so progress shows up at once in a log or a job's output file.
+        def echo(line: str) -> None:
+            print(line, flush=True)
+    if plan.handler in ("manual", "internal"):
+        echo(f"{plan.slug}: {plan.handler} — {plan.message}")
+        return 0
+    why = refusal(plan)
+    if why:
+        echo(f"error: {plan.slug}: {why}")
+        return 2
+
+    token = None
+    if plan.stdin_token:
+        where = user_config.locate_token(plan.stdin_token)
+        token = os.environ["NSRR_TOKEN"] if where == "$NSRR_TOKEN" else Path(where).read_text().strip()
 
     if plan.handler == "moabb":
-        from neuroatlas.extensions.datasets.dataio.moabb_loader import MOABB_DATASETS
-        import moabb.datasets as moabb_ds
+        return _moabb_download(plan, echo)
 
-        os.environ.setdefault("MNE_DATA", str(plan.dest))
-        cfg = MOABB_DATASETS[plan.slug]
-        echo(f"moabb: {cfg.moabb_name}().download() into {plan.dest}")
-        getattr(moabb_ds, cfg.moabb_name)().download()
+    if plan.fetches or plan.listing:
+        try:
+            _resolve_listing(plan)
+            for i, f in enumerate(plan.fetches, 1):
+                _fetch(f, echo, f"[{i}/{len(plan.fetches)}]")
+            for archive in plan.unpack:
+                _unpack(archive, echo, plan.keep_archive)
+        except (OSError, urllib.error.URLError, zipfile.BadZipFile, ValueError) as exc:
+            echo(f"error: {plan.slug}: {exc}")
+            return 1
+        for line in plan.after:
+            echo(f"note: {line}")
         return 0
 
-    tool = plan.commands[0][0]
-    if shutil.which(tool) is None:
-        hint = {"nsrr": "install it once: gem install --user-install nsrr irb",
-                "wget": "install wget", "unzip": "install unzip"}.get(tool, "")
-        echo(f"error: `{tool}` is not on PATH. {hint}")
-        return 3
     if plan.cwd:
         plan.cwd.mkdir(parents=True, exist_ok=True)
     elif plan.dest:
@@ -391,7 +897,7 @@ def run_download(plan: DownloadPlan, *, echo=print) -> int:
                               stdout=None, stderr=None)
         if done.returncode:
             echo(f"error: `{argv[0]}` exited {done.returncode}")
-            return done.returncode
+            return 1
     for line in plan.after:
         echo(f"note: {line}")
     return 0

@@ -3,11 +3,11 @@
 Input:
     --raw-dir    Directory containing the five per-set subdirectories
                  {Z,O,N,F,S}/, each with 100 plain-text .TXT clips.
-                 (Run ``python -m neuroatlas.entrypoints.fetch --dataset bonn --download`` first.)
+                 (Run ``neuroatlas data download bonn`` first.)
 
 Output:
     --output     Destination HDF5 file (default:
-                 ${EEG_DATA_ROOT}/.../bonn_cache/hdf5/bonn_173hz_segments.h5)
+                 ${EEG_CACHE_ROOT}/prepared/bonn/bonn_173hz_segments.h5)
 
 The output is a flat pre-segmented HDF5 with:
     /signals            (N, 1, 4097)  float32   native 173.61 Hz
@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_RAW_ROOT = (
-    "${REPO_ROOT}/bonn_cache/raw"
+    "${EEG_DATA_ROOT}/bonn/raw"
 )
 _DEFAULT_OUTPUT = (
-    "${REPO_ROOT}/bonn_cache/"
-    "hdf5/bonn_173hz_segments.h5"
+    "${EEG_CACHE_ROOT}/prepared/bonn/"
+    "bonn_173hz_segments.h5"
 )
 
 

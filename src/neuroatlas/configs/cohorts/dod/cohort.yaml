@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: dod
-name: Dod
+name: Dreem Open Datasets (DOD-H, DOD-O)
 domain: sleep
 paper_dataset: true
 
@@ -23,7 +23,15 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  kind: manual
+  kind: zenodo
+  ref: "15900394"
+  files: [dodh.zip, dodo.zip]               # both unpack to dodh/ and dodo/ (+ __MACOSX, skipped)
+  upstream: https://github.com/Dreem-Organization/dreem-learning-open
+  size_gb: 58.1                             # Zenodo API: 21.9 + 36.2 GB (2026-10-02)
+  expect: {glob: "*.h5", count: 81}         # 25 DOD-H + 56 DOD-O records
+  note: >
+    The upstream README: DOD-O has 56 files but the paper's cohort is 55; record
+    5d8e93a5-d26a-436d-bc2c-e9527dc92cbf has no consensus scoring.
 
 signal:
   notch_freq: 50.0
@@ -45,7 +53,11 @@ splits:
   n_folds: 5
 
 runtime_defaults:
-  montage: dod_eeg_5                        # the 5-channel DOD derivation; lived only in dod_fm_probe.sh
+  # No `montage` key: dod_fm_probe.sh passed `--montage dod_eeg_5` as
+  # channel_specs, which the runner always replaced with channel_maps/dod.yaml
+  # channels_used -- 15 channels, not the 5 the name says. No code ever read the
+  # name; the channels come from the channel map. (As a runtime default it
+  # crashed the datamodule.)
   batch_size: 32
   data_root: "${EEG_DATA_ROOT}/data/DOD"
   label_mode: sleep_stage

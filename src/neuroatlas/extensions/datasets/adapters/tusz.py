@@ -3,8 +3,9 @@
 Supports two split modes:
 
 - ``"official"`` — uses three per-split HDF5 caches (train / dev / eval).
-- ``"kfold"``    — uses one merged all-splits HDF5 with patient-level
-  StratifiedKFold cross-validation.
+- ``"kfold"``    — uses one merged all-splits HDF5; each patient takes its
+  role from the paper's frozen folds (``configs/cohorts/tusz/folds.json``),
+  or, with ``folds_manifest=None``, from patient-level StratifiedKFold.
 """
 
 from __future__ import annotations
@@ -156,6 +157,8 @@ class TUSZDataModule(BenchmarkDataModule):
         balance: str = "weighted_sampler",
         corpus_version: str = "v2.0.3",
         overlap_threshold: float = 0.0,
+        folds_manifest: Optional[str] = "tusz",
+        strict_folds: bool = True,
         **kwargs: Any,
     ) -> None:
         n_channels = 18 if montage == "bipolar" else 19
@@ -171,12 +174,17 @@ class TUSZDataModule(BenchmarkDataModule):
             "label_mode": label_mode,
             "n_channels": n_channels,
         }
+        if split_mode == "kfold":
+            meta["folds_manifest"] = folds_manifest
         super().__init__(name="tusz", metadata=meta)
 
         self._cache_root = Path(cache_root)
         self._split_mode = split_mode
         self._fold = fold
         self._n_folds = n_folds
+        self._folds_manifest = folds_manifest
+        self._strict_folds = bool(strict_folds)
+        self._manifest_roles: Optional[Dict[str, str]] = None
         self._window_s = window_s
         self._stride_s = stride_s
         self._montage = montage
@@ -225,9 +233,40 @@ class TUSZDataModule(BenchmarkDataModule):
 
         h5_path = self._h5_path("all", schema_tag)
         with _h5py.File(h5_path, "r") as h5:
-            subject_ids = [str(s) for s in h5["subject_ids"][:]]
+            subject_ids = [s.decode() if isinstance(s, bytes) else str(s)
+                           for s in h5["subject_ids"][:]]
             samplewise_label_exists = "samplewise_label" in h5
             offsets = h5["recording_offsets"][:]
+
+        if self._folds_manifest is not None:
+            # The paper's folds (configs/cohorts/tusz/folds.json), not a
+            # re-derivation: see adapters/tusz_edf.py.
+            from neuroatlas.benchmarking_helpers.registry.fold_manifest import (
+                fold_source_label,
+                recording_splits_from_manifest,
+            )
+
+            train_recs, val_recs, test_recs, split = recording_splits_from_manifest(
+                self._folds_manifest, self._fold, self._n_folds, subject_ids,
+                strict=self._strict_folds,
+            )
+            self.metadata["fold_source"] = fold_source_label(split)
+            self._manifest_roles = {}
+            for name, recs in (("train", train_recs), ("val", val_recs), ("test", test_recs)):
+                for r in recs:
+                    self._manifest_roles[subject_ids[r]] = name
+            common = dict(
+                h5_path=h5_path,
+                window_s=self._window_s,
+                stride_s=self._stride_s,
+                label_mode=self._label_mode,
+                normalize=self._normalize,
+                montage=self._montage,
+            )
+            self._train_ds = DatasetCls(recording_indices=train_recs, **common)
+            self._val_ds = DatasetCls(recording_indices=val_recs, **common)
+            self._test_ds = DatasetCls(recording_indices=test_recs, **common)
+            return
 
         # Determine per-recording seizure presence
         n_rec = len(subject_ids)
@@ -316,8 +355,40 @@ class TUSZDataModule(BenchmarkDataModule):
 
     # -- Global embedding cache (embed once, split by fold) ------------------
 
+    #: k-fold mode embeds every recording once and assigns folds when
+    #: probing, for seizure detection as for the linear probe.
+    global_cache_for_seizure_detection = True
+
+    def cache_context(self, purpose: str = "default") -> Dict[str, Any]:
+        """What the embedding-cache key hashes.
+
+        The global (k-fold) cache holds every window of every recording, so
+        nothing about the fold belongs in its key; it used to inherit the
+        whole metadata, fold included, so each fold looked for its own
+        "global" cache and fold 1 found nothing. In ``official`` mode the
+        corpus's own train/dev/eval files are the splits whatever the fold,
+        so the fold is not part of the per-split key either.
+        """
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import _FOLD_KEYS
+
+        context = dict(self.metadata)
+        if purpose == "global_embeddings":
+            for key in _FOLD_KEYS:
+                context.pop(key, None)
+            context["epoch_seconds"] = float(self._window_s)
+            context["stride_s"] = float(self._window_s)
+            context["global_layout"] = "all_recordings_v1"
+        elif self._split_mode == "official":
+            for key in _FOLD_KEYS:
+                context.pop(key, None)
+        return context
+
     def supports_global_embedding_cache(self) -> bool:
-        return self._split_mode == "kfold"
+        # The global cache holds windows cut at window_s; it can stand in for
+        # the train split only when train windows are cut the same way.
+        stride = self._stride_s
+        return self._split_mode == "kfold" and (
+            stride is None or float(stride) == float(self._window_s))
 
     def full_embedding_dataloader(self) -> _LoaderAdapter:
         """Return a loader over ALL recordings (no fold filtering).
@@ -361,10 +432,30 @@ class TUSZDataModule(BenchmarkDataModule):
         import h5py as _h5py
         from neuroatlas.extensions.datasets.epilepsy.tusz_preprocessor import CACHE_SCHEMA_TAG
 
-        # Re-derive fold assignments (same deterministic computation).
+        if self._manifest_roles is not None:
+            groups: Dict[str, List[int]] = {"train": [], "val": [], "test": []}
+            for i, meta in enumerate(payload.metadata):
+                role = self._manifest_roles.get(str(meta.get("subject_id", "")))
+                if role is not None:
+                    groups[role].append(i)
+            feats = np.asarray(payload.features)
+            labs = np.asarray(payload.labels)
+            out: Dict[str, EmbeddingPayload] = {}
+            for name, indices in groups.items():
+                idx = np.asarray(indices, dtype=np.int64)
+                out[name] = EmbeddingPayload(
+                    features=feats[idx] if idx.size else np.zeros((0, feats.shape[1]), dtype=feats.dtype),
+                    labels=labs[idx] if idx.size else np.zeros((0,), dtype=labs.dtype),
+                    metadata=[payload.metadata[i] for i in indices],
+                )
+            return out
+
+        # folds_manifest=None: re-derive fold assignments (same deterministic
+        # computation as _init_kfold).
         h5_path = self._h5_path("all", CACHE_SCHEMA_TAG)
         with _h5py.File(h5_path, "r") as h5:
-            subject_ids = [str(s) for s in h5["subject_ids"][:]]
+            subject_ids = [s.decode() if isinstance(s, bytes) else str(s)
+                           for s in h5["subject_ids"][:]]
             offsets = h5["recording_offsets"][:]
         n_rec = len(subject_ids)
         rec_has_seizure = np.zeros(n_rec, dtype=np.int64)

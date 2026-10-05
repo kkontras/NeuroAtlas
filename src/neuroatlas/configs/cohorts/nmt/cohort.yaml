@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: nmt
-name: Nmt
+name: NMT Scalp EEG Dataset
 domain: epilepsy
 paper_dataset: true
 
@@ -27,7 +27,7 @@ cohort:
 
 acquisition:
   kind: manual
-  upstream: "https://dll.seecs.nust.edu.pk/downloads/"
+  upstream: "https://dll.seecs.nust.edu.pk/downloads/"   # not reachable from our network on 2026-10-02
 
 signal:
   montage: unipolar
@@ -107,3 +107,9 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- the paper's text and its NMT numbers
+       disagree. App. D.1.3 gives the official train/eval split (2,232 /
+       185), which is what split_mode=official (the default) does. The
+       published numbers came from the paper's epilepsy probe, which ran
+       5-fold CV over 2,414 recordings (3c6721c configs/folds/nmt.json)."

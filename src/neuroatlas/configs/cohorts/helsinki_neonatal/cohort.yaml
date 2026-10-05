@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: helsinki_neonatal
-name: Helsinki Neonatal
+name: Helsinki neonatal EEG with seizure annotations
 domain: epilepsy
 paper_dataset: true
 
@@ -28,9 +28,12 @@ cohort:
 
 acquisition:
   kind: zenodo
-  size_gb: 2.5                      # the download script (no longer shipped) (ZENODO_RECORD)
-  file: (multiple files; the whole record)                      # the download script (no longer shipped) (ZENODO_RECORD)
-  ref: "4940267"                      # the download script (no longer shipped) (ZENODO_RECORD)
+  ref: "4940267"
+  # No `file`: the record is 85 loose files (79 EDFs + annotations and
+  # clinical sheets), all of which the loader reads from one folder.
+  upstream: https://zenodo.org/records/4940267
+  size_gb: 4.3                              # Zenodo API: 85 files, 4.337 GB (2026-10-02)
+  expect: {glob: "eeg*.edf", count: 79}
 
 signal:
   montage: unipolar
@@ -71,7 +74,7 @@ runtime_defaults:
   normalize: none
   num_workers: 4
   overlap_threshold: 0.0
-  raw_root: "${REPO_ROOT}/helsinki_neonatal_cache/raw"
+  raw_root: "${EEG_DATA_ROOT}/helsinki_neonatal"
   seed: 42
   stride_s: null
   window_s: 10.0

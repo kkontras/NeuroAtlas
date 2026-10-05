@@ -27,6 +27,9 @@ MODEL_SPECS = [
                 expected_sampling_rate=200.0,
                 expected_epoch_seconds=10.0,
                 has_classifier_head=False,
+                # fc_norm(mean of the patch tokens): 200 (the patch size). On the
+                # BCI cohorts the wrapper concatenates CLS and that mean: 400.
+                embedding_dim=200,
                 wrapper_name="labram",
                 status="ready",
                 notes=(

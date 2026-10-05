@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: wsc
-name: Wsc
+name: Wisconsin Sleep Cohort (WSC)
 domain: sleep
 paper_dataset: true
 

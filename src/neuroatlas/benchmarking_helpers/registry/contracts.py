@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import inspect
+import logging
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TypedDict
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TypedDict
+
+logger = logging.getLogger(__name__)
 
 
 class BenchmarkBatch(TypedDict, total=False):
@@ -62,6 +66,28 @@ class BenchmarkDataModule:
     name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     embed_chunk: Optional[Tuple[int, int]] = None
+
+    # The runner offers every datamodule the same runtime keys -- signal_kind
+    # and epoch_seconds from the checkpoint, notch/highpass from the spec's
+    # notch_freq, compute_recording_stats for the models that normalise per
+    # recording, channel_specs from a channel map -- and not each of them
+    # means something for every dataset.  A datamodule that does not take one
+    # as a constructor argument says so here, and `construct_datamodule`
+    # holds it to that: a key declared below is handled as declared, and any
+    # other key the constructor does not take is an error that names it.
+    # Nothing is dropped without a recorded reason.
+
+    #: key -> the one value this datamodule serves. Any other value is an
+    #: error; the matching value is consumed (the constructor never sees it).
+    RUNTIME_KEYS_FIXED: ClassVar[Mapping[str, Any]] = {}
+    #: key -> why it does not apply here. Dropped, logged once at debug level.
+    RUNTIME_KEYS_IGNORED: ClassVar[Mapping[str, str]] = {}
+    #: True when the dataset, not the model, fixes the window length -- a BCI
+    #: trial. ``metadata["epoch_seconds"]`` is then the length of the windows
+    #: the loaders yield, and the runner tells the backbone that length
+    #: (``expected_epoch_seconds``) instead of the model's pretraining window:
+    #: the BCI counterpart of ``--expected-epoch-seconds 10`` on epilepsy.
+    FIXED_WINDOW: ClassVar[bool] = False
 
     def cache_context(self, purpose: str = "default") -> Dict[str, Any]:
         return dict(self.metadata)
@@ -249,6 +275,9 @@ class DatasetSpec:
 
     def create_datamodule(self, config: Dict[str, Any], checkpoint: Optional[CheckpointSpec] = None) -> BenchmarkDataModule:
         runtime = self.build_config(config, checkpoint=checkpoint)
+        if isinstance(self.datamodule_cls, type):
+            return construct_datamodule(self.datamodule_cls, runtime, dataset=self.slug)
+        # A factory picks the class (lazily) and hands it to construct_datamodule.
         return self.datamodule_cls(**runtime)
 
     def expand_runs(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -272,4 +301,83 @@ class TaskSpec:
     slug: str
     description: str
     evaluator: Callable[..., BenchmarkResult]
+
+
+class DatamoduleConfigError(TypeError):
+    """A runtime key the dataset's datamodule neither takes nor declares.
+
+    A ``TypeError`` because that is what the bare constructor call raised
+    before, so callers that caught one keep working.
+    """
+
+
+#: The keys the runner itself adds to a dataset config (`DatasetSpec.build_config`
+#: and `BenchmarkRunner._pair_config`); named in the error so a reader can tell
+#: a key they typed from one the engine offered.
+RUNNER_OFFERED_KEYS = (
+    "signal_kind", "epoch_seconds", "notch", "highpass",
+    "compute_recording_stats", "channel_specs",
+)
+
+_LOGGED_DROPS: set = set()
+
+
+def construct_datamodule(cls: type, config: Mapping[str, Any], *, dataset: str) -> Any:
+    """Construct *cls* from *config*, holding *config* to the class's contract.
+
+    Every key in *config* must be one of:
+
+    * a parameter of ``cls.__init__`` (or ``cls`` takes ``**kwargs``);
+    * in ``cls.RUNTIME_KEYS_FIXED``, with exactly the value declared there;
+    * in ``cls.RUNTIME_KEYS_IGNORED``, which records why it does not apply.
+
+    A fixed key with another value raises ``ValueError``.  Any other key
+    raises :class:`DatamoduleConfigError` naming it -- so a typo in ``--set``
+    and a key the runner offers that this datamodule was never taught about
+    fail the same clear way, instead of as ``__init__() got an unexpected
+    keyword argument`` from deep inside a run.
+    """
+    try:
+        params = inspect.signature(cls).parameters
+    except (TypeError, ValueError):  # nothing to introspect: pass through
+        return cls(**config)
+    variadic = (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+    named = {name for name, p in params.items() if p.kind not in variadic}
+    takes_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    fixed = getattr(cls, "RUNTIME_KEYS_FIXED", None) or {}
+    ignored = getattr(cls, "RUNTIME_KEYS_IGNORED", None) or {}
+
+    kwargs: Dict[str, Any] = {}
+    unknown: List[str] = []
+    for key, value in config.items():
+        if key in named:
+            kwargs[key] = value
+        elif key in fixed:
+            if value != fixed[key]:
+                raise ValueError(
+                    f"{dataset}: {key}={value!r} is not available; "
+                    f"{cls.__name__} serves only {key}={fixed[key]!r}."
+                )
+        elif key in ignored:
+            if (cls, key) not in _LOGGED_DROPS:
+                _LOGGED_DROPS.add((cls, key))
+                logger.debug("%s: %s does not take %s (dropped): %s",
+                             dataset, cls.__name__, key, ignored[key])
+        elif takes_kwargs:
+            kwargs[key] = value
+        else:
+            unknown.append(key)
+    if unknown:
+        offered = [k for k in unknown if k in RUNNER_OFFERED_KEYS]
+        raise DatamoduleConfigError(
+            f"{dataset}: {cls.__name__} does not take "
+            f"{', '.join(repr(k) for k in unknown)}"
+            + (f" ({', '.join(offered)} offered by the runner)" if offered else "")
+            + f". It takes: {', '.join(sorted(named)) or 'nothing'}"
+            + (f"; fixed: {', '.join(sorted(fixed))}" if fixed else "")
+            + (f"; ignored: {', '.join(sorted(ignored))}" if ignored else "")
+            + ". Other keys come from the dataset's manifest runtime_defaults, "
+            "the task preset, or --set."
+        )
+    return cls(**kwargs)
 

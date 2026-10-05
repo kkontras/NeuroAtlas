@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: ucddb
-name: Ucddb
+name: St. Vincent's University Hospital / UCD Sleep Apnea Database (UCDDB)
 domain: sleep
 paper_dataset: true
 
@@ -25,6 +25,8 @@ acquisition:
   kind: physionet
   ref: ucddb
   version: 1.0.0
+  size_gb: 1.3                        # the project page's total uncompressed size
+  expect: {glob: "ucddb*.rec", count: 25}   # 25 subjects, one .rec each
 
 signal:
   notch_freq: 50.0
@@ -48,7 +50,10 @@ splits:
   n_folds: 5
 
 runtime_defaults:
-  montage: ucddb_eeg_2                      # the 2-channel UCDDB derivation; lived only in ucddb_fm_probe.sh
+  # No `montage` key: ucddb_fm_probe.sh passed `--montage ucddb_eeg_2` as
+  # channel_specs, which the runner always replaced with channel_maps/ucddb.yaml
+  # channels_used (C3A2, C4A1). No code ever read the name; the channels come
+  # from the channel map. (As a runtime default it crashed the datamodule.)
   age_csv: "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0/SubjectDetails.csv"
   age_xls: "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0/SubjectDetails.xls"
   batch_size: 32

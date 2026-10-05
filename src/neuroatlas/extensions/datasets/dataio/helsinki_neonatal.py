@@ -23,11 +23,15 @@ from pathlib import Path as _Path
 
 from neuroatlas.extensions.datasets._recording_stats import (
     compute_recording_stats,
+    load_cached_recording_stats,
     load_recording_stats,
     save_recording_stats,
 )
 
-_HELSINKI_STATS_CACHE_ROOT = _Path("artifacts/recording_stats/helsinki_neonatal")
+# Per-recording stats live in <cache root>/recording_stats/helsinki_neonatal/
+# (_paths.recording_stats_dir); they used to go to
+# artifacts/recording_stats/helsinki_neonatal under the current directory.
+_STATS_READER = "helsinki_neonatal"
 from neuroatlas.extensions.datasets.epilepsy._common import (
     BIPOLAR_NAMES,
     CANONICAL_19,
@@ -319,13 +323,13 @@ class HelsinkiNeonatalEdfDataset(Dataset):
         # Populate recording amplitude stats aligned to the emitted channels.
         # Disk cache by montage so unipolar and bipolar variants both persist.
         if rec_index not in self._rec_stats_cache:
-            disk_path = _HELSINKI_STATS_CACHE_ROOT / f"{rec.recording_id}_{self._montage}.npz"
+            stats_file = f"{rec.recording_id}_{self._montage}.npz"
             fingerprint = {
                 "target_fs": int(TARGET_FS),
                 "n_samples": int(signals.shape[1]),
                 "montage": self._montage,
             }
-            stats = load_recording_stats(disk_path, fingerprint)
+            stats, disk_path = load_cached_recording_stats(_STATS_READER, stats_file, fingerprint)
             if stats is None:
                 src = signals  # (19, T)
                 if self._montage == "bipolar":

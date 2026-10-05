@@ -13,7 +13,7 @@ from .core_sleep_model import Sleep_CoRe, SleepEnc
 from .base import BenchmarkBackbone
 from ._preproc import _ESAT_DATASETS, resample_poly_with_fallback, snap_to_epoch_length
 from neuroatlas.benchmarking_helpers import CheckpointSpec
-from neuroatlas._paths import models_dir
+from neuroatlas.benchmarking_helpers.runtime.sequential_epochs import rows_per_labelled_epoch
 
 _LOG = logging.getLogger(__name__)
 
@@ -132,7 +132,11 @@ def _resolve_feature_tensor(output, embedding_key: str):
     )
 
 
-_STFT_NORM_PATH = models_dir("shhs", "stft_norm_eeg.npz")
+# The per-frequency mean/std of the log STFT on SHHS that CoRe-Sleep and
+# SleepTransformer were trained with (2.5 KB). It ships with the package: it
+# used to be read from <models root>/shhs/, where nothing put it, so a run
+# with the weights in place failed on it after extraction had started.
+_STFT_NORM_PATH = Path(__file__).with_name("data") / "stft_norm_eeg.npz"
 
 
 class CoreSleepBackbone(BenchmarkBackbone):
@@ -233,20 +237,29 @@ class CoreSleepBackbone(BenchmarkBackbone):
         return T / epoch_seconds
 
     def _forward(self, batch):
-        """Run the model, returning ``(output, eeg_only)``.
+        """Run the bimodal model the way the paper's embeddings were made.
 
-        ``eeg_only`` is True when the EOG branch was skipped, which changes
-        which prediction head and feature tensor are valid downstream.
+        CoRe-Sleep is an EEG+EOG model; the benchmark supplies EEG only, and
+        the paper ran it with an all-zero EOG spectrogram through the full
+        bimodal forward, reading the fused ``combined`` features and head
+        (EEGBenchmarks @ fe49e60, which wrote the published Sleep-EDF cache).
+        That is reproduced here: over the 457,947 Sleep-EDF rows the fresh
+        embeddings differ from the paper's by 1e-6 on average (correlation
+        1.0). The model's EEG-only path (``skip_view="eog"``, EOG branch never
+        built, ``features["eeg"]``) gives different embeddings (correlation
+        0.56 with the paper's) and is not what the paper reports.
         """
-        eeg_only = False
         raw_batch = batch.get("raw_batch")
         if isinstance(raw_batch, dict) and "data" in raw_batch:
             model_inputs = raw_batch["data"]
         else:
             signals = batch["signals"]
             if "stft_eeg" in signals:
-                model_inputs = signals
-                eeg_only = "stft_eog" not in signals
+                stft_eeg = signals["stft_eeg"]
+                stft_eog = signals.get("stft_eog")
+                if stft_eog is None:
+                    stft_eog = torch.zeros_like(stft_eeg)
+                model_inputs = {"stft_eeg": stft_eeg, "stft_eog": stft_eog}
             elif "eeg" in signals:
                 eeg = signals["eeg"].to(dtype=torch.float32)
                 meta = batch.get("meta") or [{}]
@@ -271,11 +284,9 @@ class CoreSleepBackbone(BenchmarkBackbone):
                     src_fs = self._resolve_src_fs(meta, T, self.epoch_seconds)
                     stft_eeg = self._raw_to_stft(eeg, src_fs=src_fs, channel_idx=ch_idx, meta=meta, log_norm=self._stft_log_norm)
 
-                # CoRe-Sleep is bimodal but supports true unimodal inference via
-                # skip_view: the EOG branch is never built, rather than being fed
-                # zeros and then fused into the EEG representation.
-                model_inputs = {"stft_eeg": stft_eeg}
-                eeg_only = True
+                # The paper's EEG-only protocol: a zero EOG spectrogram through
+                # the bimodal model (see the docstring).
+                model_inputs = {"stft_eeg": stft_eeg, "stft_eog": torch.zeros_like(stft_eeg)}
             else:
                 raise KeyError(
                     "CoreSleep expects batch['signals']['stft_eeg'] or "
@@ -283,47 +294,22 @@ class CoreSleepBackbone(BenchmarkBackbone):
                 )
         model_inputs = self._to_device(model_inputs)
         with torch.inference_mode():
-            if eeg_only:
-                return self.model(model_inputs, skip_view="eog"), True
-            return self.model(model_inputs), False
+            return self.model(model_inputs)
 
     def native_head_logits(self, batch) -> np.ndarray:
-        output, eeg_only = self._forward(batch)
-        # With the EOG branch skipped the fused "combined" head is not produced;
-        # "c" is the EEG-only classifier (enc_0.fc).
-        preds = output["preds"]
-        head = "c" if eeg_only else "combined"
-        if head not in preds:
-            raise KeyError(
-                f"CoRe-Sleep produced no {head!r} prediction head "
-                f"(eeg_only={eeg_only}); available: {sorted(preds)}"
-            )
-        logits = preds[head]
-        if eeg_only and logits.ndim > 2:
-            # The bimodal path collapses the (outer, inner, mod, ch) axes inside
-            # forward_common, which never runs when the EOG branch is skipped —
-            # so drop them here to keep the (B, [seq,] n_classes) convention.
-            logits = logits.reshape(logits.shape[0], -1, logits.shape[-1])
-            if logits.shape[1] == 1:
-                logits = logits[:, 0, :]
-        return logits.detach().cpu().numpy()
+        """The fused head's logits, one row per labelled epoch (``(B * W, 5)``
+        for a window batch with every epoch labelled)."""
+        output = self._forward(batch)
+        logits = output["preds"]["combined"]
+        return rows_per_labelled_epoch(logits, batch).detach().cpu().numpy()
 
     def extract_embeddings(self, batch) -> np.ndarray:
-        output, eeg_only = self._forward(batch)
-        # embedding_key is "combined", which only exists when both modalities ran.
-        key = "eeg" if eeg_only else self.spec.embedding_key
-        features = _resolve_feature_tensor(output, key)
-
-        target = batch.get("_seq_target_idx")
-        if target is not None and target != "all":
-            eeg = batch["signals"].get("eeg") or batch["signals"].get("stft_eeg")
-            B, W = eeg.shape[0], eeg.shape[1]
-            idx = int(target) % W
-            features = features.view(B, W, -1)[:, idx, :]
-
-        if features.ndim > 2:
-            features = features.reshape(features.shape[0], -1)
-        return features.detach().cpu().numpy()
+        """``combined`` features, one row per labelled epoch: ``(B * W, 128)``
+        for a batch of ``B`` windows of ``W`` epochs, the same rows as the
+        batch's labels and meta."""
+        output = self._forward(batch)
+        features = _resolve_feature_tensor(output, self.spec.embedding_key)
+        return rows_per_labelled_epoch(features, batch).detach().cpu().numpy()
 
     def metadata(self) -> dict:
         return {

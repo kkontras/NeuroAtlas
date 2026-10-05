@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: siena
-name: Siena
+name: Siena Scalp EEG Database
 domain: epilepsy
 paper_dataset: true
 
@@ -26,10 +26,15 @@ cohort:
 
 acquisition:
   kind: zenodo
-  size_gb: 4.5                      # the download script (no longer shipped),18
-  file: BIDS_Siena.zip                      # the download script (no longer shipped),18
-  ref: 10640762
+  ref: "10640762"
+  file: BIDS_Siena.zip                      # the record's only file
   upstream: "https://physionet.org/content/siena-scalp-eeg/1.0.0/"
+  note: >
+    Zenodo record 10640762 is the SzCORE BIDS conversion of the PhysioNet
+    release, which is what the loader reads.
+  size_gb: 4.5                              # Zenodo API: 4.489 GB (2026-10-02)
+  checksum: md5:3145f577a6caa35a84f89f4c6ce0f9d7   # Zenodo API, the zip
+  expect: {glob: "*_eeg.edf", count: 41}    # 41 EDFs in the zip
 
 signal:
   montage: bipolar
@@ -71,14 +76,14 @@ runtime_defaults:
   backend: bids
   balance: weighted_sampler
   batch_size: 64
-  bids_root: "${REPO_ROOT}/siena_cache/raw/BIDS_Siena"
-  cache_root: "${REPO_ROOT}/siena_cache/hdf5"
+  bids_root: "${EEG_DATA_ROOT}/siena/BIDS_Siena"
+  cache_root: "${EEG_CACHE_ROOT}/prepared/siena"
   fold: 0
   label_mode: binary
   montage: bipolar
   n_folds: 5
   normalize: none
-  num_workers: 4
+  # num_workers: not pinned; see chbmit/cohort.yaml.
   overlap_threshold: 0.0
   window_s: 10.0
 
@@ -101,3 +106,11 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- the published Siena numbers were not drawn
+       on these folds. The paper's epilepsy probe saw subject id 'raw' for
+       every window (a path-parsing bug in its embeddings), fell back to
+       grouping by recording, and split Siena's 40 recordings, not its 14
+       patients: in fold 0, 5 of the 6 patients with a test recording also
+       had recordings in train. These folds are patient-level, as the paper
+       states (App. B.1), so they do not reproduce its Siena numbers."

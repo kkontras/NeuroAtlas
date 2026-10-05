@@ -257,7 +257,19 @@ def scan_isruc_subjects(
         else:
             raise ValueError(f"Unknown ISRUC subgroup {sg!r}; expected one of {ISRUC_SUBGROUPS}.")
 
-    # Enrich from detail tables when available.
+    # Every subgroup that has recordings needs its detail table: without it the
+    # recordings would be cached with age/sex/diagnosis = null.
+    present = sorted({r.subgroup for r in records})
+    absent = [sg for sg in present if not (Path(data_root) / detail_table_name(sg)).exists()]
+    if absent:
+        raise FileNotFoundError(
+            "ISRUC detail table(s) not found: "
+            + ", ".join(str(Path(data_root) / detail_table_name(sg)) for sg in absent)
+            + ". They ship with the ISRUC-Sleep download and are the only source "
+            "of age, sex and diagnosis; place them in data_root."
+        )
+
+    # Enrich from detail tables.
     if details:
         records = [
             replace(
@@ -377,24 +389,41 @@ def _parse_detail_age(val) -> Optional[float]:
     return None
 
 
+def detail_table_name(subgroup: str) -> str:
+    return f"Details_subgroup_{subgroup}_Submission.xlsx"
+
+
 def _load_detail_tables(data_root: str) -> Dict[str, _DetailRow]:
     """Load demographics from the authoritative detail-table xlsx files.
 
-    Returns a dict keyed by ``recording_id`` (e.g. ``"I_001_rec1"``).
-    Falls back to an empty dict if the files are missing or unreadable.
+    Returns a dict keyed by ``recording_id`` (e.g. ``"I_001_rec1"``). A
+    subgroup whose table is absent contributes nothing (``scan_isruc_subjects``
+    refuses that for a subgroup it has recordings of); a table that is present
+    but unreadable raises. It used to be logged and skipped, which left age,
+    sex and diagnosis null on every recording of that subgroup -- in the
+    embedding cache too, where brain age and the pathology probe then read
+    them (F-069).
     """
     result: Dict[str, _DetailRow] = {}
     root = Path(data_root)
 
     for sg in ISRUC_SUBGROUPS:
-        path = root / f"Details_subgroup_{sg}_Submission.xlsx"
+        path = root / detail_table_name(sg)
         if not path.exists():
             continue
         try:
             df = pd.read_excel(path, header=None, skiprows=2, engine="openpyxl")
+        except ImportError as exc:
+            raise RuntimeError(
+                f"cannot read the ISRUC detail table {path}: .xlsx needs the "
+                f"'openpyxl' package (pip install openpyxl). It is the only source "
+                f"of age, sex and diagnosis. ({exc})"
+            ) from exc
         except Exception as exc:
-            logger.warning("Failed to read detail table %s: %s", path, exc)
-            continue
+            raise RuntimeError(
+                f"cannot read the ISRUC detail table {path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
         has_medication = df.shape[1] >= 18
         has_eeg_alt = df.shape[1] >= 19

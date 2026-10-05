@@ -2,14 +2,20 @@
 
     all_fm                  an alias from model_groups.yaml
     eeg_fm                  a group name (the paper's taxonomy)
-    reve                    a model family: every ready checkpoint of it
+    baseline                the untrained baselines (= all_random): the group
+                            `list models` shows for them
+    reve                    a model family: its ready *trained* checkpoints
     reve_pretrained         one checkpoint
     all_fm,chronos_t5_base  any mix, comma-separated
 
 Only *ready* checkpoints are selected by an alias, a group or a family;
 naming a planned checkpoint by id is an error that says it is planned.
-Duplicates collapse, order is kept, and an unknown name fails with the
-closest matches before any work starts.
+An untrained (random-init) baseline is selected only by name, by
+``all_random`` / ``baseline`` or by ``all``: ``neuroatlas run -m reve`` is
+REVE, not REVE and its random-weight control. (The original verbs keep the
+runner's meaning of a family name -- see :func:`expand_models`.) Duplicates
+collapse, order is kept, and an unknown name fails with the closest matches
+before any work starts.
 """
 from __future__ import annotations
 
@@ -62,12 +68,17 @@ def alias_members(alias: str, specs=None) -> List[str]:
 
 
 def expand_models(expr: str | Sequence[str]) -> List[str]:
-    """What ``--models`` hands the runner: aliases and groups become checkpoint
-    ids; a family or an id stays exactly as typed, after checking it exists.
+    """What the original verbs' ``--models`` hands the runner: aliases and
+    groups become checkpoint ids; a family or an id stays exactly as typed,
+    after checking it exists.
 
-    The runner matches a family itself, and per-model overrides
+    The runner matches a family itself -- every checkpoint of it, the
+    random-init control included, which is what the paper's launchers rely
+    on when they pass a list of families -- and per-model overrides
     (``--checkpoint``, ``--expected-epoch-seconds``) are keyed by the name the
-    user typed, so keeping it keeps those working unchanged.
+    user typed, so keeping it keeps those working unchanged. The new
+    commands (run, check, submit) resolve with :func:`resolve_models` and
+    hand the verbs ids, so there a family means its trained checkpoints.
     """
     names = [n.strip() for n in (expr.split(",") if isinstance(expr, str) else expr) if n.strip()]
     groups, aliases = model_groups()["groups"], model_groups()["aliases"]
@@ -103,7 +114,11 @@ def resolve_models(expr: str | Sequence[str]) -> List[str]:
             picked = [s.identifier for s in specs
                       if s.status == "ready" and s.model_family in fams and not is_baseline(s)]
         elif key in families:
-            picked = [s.identifier for s in families[key] if s.status == "ready"]
+            ready = [s for s in families[key] if s.status == "ready"]
+            # a family means its trained checkpoints; its random-init control
+            # only when it has nothing else
+            picked = [s.identifier for s in ready if not is_baseline(s)] or \
+                [s.identifier for s in ready]
             if not picked:
                 raise SelectionError(f"{name}: no ready checkpoint (all are "
                                      f"{', '.join(sorted({s.status for s in families[key]}))})")

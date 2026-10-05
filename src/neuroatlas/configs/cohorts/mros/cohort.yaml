@@ -9,7 +9,7 @@
 schema_version: 1
 
 slug: mros
-name: Mros Raw Brain Age
+name: MrOS Sleep Study
 domain: sleep
 paper_dataset: true
 description: >
@@ -84,3 +84,10 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
+  known_issues:
+    - "Needs an author decision -- two pre-restructure protocols disagree on
+       MrOS sleep-staging folds. This reader's age-binned folds are the
+       brain-age protocol (05fd2a8 datasets/mros); the c-tuned staging probes
+       (artifacts/probes_perC_mros) used 3c6721c configs/folds/mros_bp_2ch.json,
+       a subject round-robin (seed 42). The two share about a fifth of each
+       test fold."
