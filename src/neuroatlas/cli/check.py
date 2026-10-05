@@ -13,7 +13,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from neuroatlas.cli import Parser
+from neuroatlas.cli import MODELS_HELP, Parser
 from neuroatlas.cli._table import add_format_arg, render
 
 _FORWARD = re.compile(r"^\(([\d, ]*)\) (finite|constant|(\d+) non-finite)$")
@@ -22,8 +22,7 @@ _FORWARD = re.compile(r"^\(([\d, ]*)\) (finite|constant|(\d+) non-finite)$")
 def build_parser() -> Parser:
     p = Parser(prog="neuroatlas check", description=__doc__)
     p.add_argument("benchmark")
-    p.add_argument("-m", "--models", required=True,
-                   help="An alias (all_fm ...), group, family or checkpoint ids.")
+    p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="single", metavar="single|full|SLUGS",
                    help="Which datasets (default: single).")
     p.add_argument("--variant", default="default")
@@ -85,6 +84,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         total = sum(p.seconds or 0 for p in pairs)
         print(f"pairs: {len(pairs)}   forward passes: {ok}   errors: {errors}   "
               f"skipped: {skipped}   n/a: {counts.get('n/a', 0)}   time: {total:.1f}s")
+        from neuroatlas import catalog
+
+        left_out = catalog.load(args.benchmark).left_out_note(args.models)
+        if left_out:
+            print(left_out)
     if nothing:
         print(f"nothing was checked: no pair could be pushed through ({skipped} skipped for "
               f"missing data or weights; the ↳ lines say what to fetch)", file=sys.stderr)

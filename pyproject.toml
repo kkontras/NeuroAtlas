@@ -116,16 +116,15 @@ include = ["neuroatlas*"]
 exclude = ["*.__pycache__"]
 
 # The shipped tables (cohort manifests, channel maps, folds, task presets) and
-# the vendored DeepSOZ checkpoint with the upstream licences. Everything else
-# a run needs -- weights, caches, corpora -- is the user's, never shipped.
+# the licences of the vendored code. Everything else a run needs -- weights,
+# caches, corpora -- is the user's, never shipped. DeepSOZ-HEM's code and
+# checkpoint (GPL-3.0) are not shipped either: `models download` fetches them.
 [tool.setuptools.package-data]
 neuroatlas = [
     "configs/**/*.yaml",
     "configs/**/*.json",
     "configs/**/*.md",
     "extensions/models/backbones/third_party/*/LICENSE*",
-    "extensions/models/backbones/third_party/*/*.txt",
-    "extensions/models/backbones/third_party/*/*.tar",
     "extensions/models/backbones/data/*.npz",
     "extensions/datasets/dataio/moabb_vendored/LICENSE*",
 ]

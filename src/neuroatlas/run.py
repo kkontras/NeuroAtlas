@@ -171,11 +171,11 @@ def plan(benchmark: str, models: str, suite: str = "single", variant: str = "def
          folds: Optional[str] = None, per_model: bool = False) -> List[DatasetPlan]:
     """``per_model`` puts each model's results in <dataset>/<model>/: cluster
     jobs, one per (dataset, model), never write the same results.json."""
-    from neuroatlas import catalog, data, selectors
+    from neuroatlas import catalog, data
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
     bench = catalog.load(benchmark)
-    ids = selectors.resolve_models(models)
+    ids = bench.select_models(models)
     by_id = {s.identifier: s for s in checkpoint_registry()}
     specs = [by_id[i] for i in ids]
     steps = bench.steps(suite, variant)

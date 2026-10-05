@@ -1,6 +1,5 @@
-"""Read what runs wrote and turn it into tables: one row per (dataset,
-variant, model) with the headline metric's mean and spread over folds, and a
-leaderboard.
+"""Read what runs wrote and turn it into a table: one row per (dataset,
+variant, model) with the headline metric's mean and spread over folds.
 
 Every results.json under ``<output_root>/<benchmark>/`` counts -- a local
 ``run`` writes ``<dataset>/results.json``, a cluster job
@@ -10,9 +9,8 @@ recorded twice (same dataset, variant, model, fold, task) is counted once, the
 newest copy. Variants are never merged: a per_patch result and a default one
 of the same model and fold are two results, not a duplicate.
 
-"n/a" is never a number: a model the channel map rules out, a model missing
-from some dataset of a suite, a spread over one fold. It is reported, and
-never ranked as zero.
+"n/a" is never a number: a model the channel map rules out, a spread over
+one fold. It is reported as n/a, never as zero.
 """
 from __future__ import annotations
 
@@ -200,13 +198,16 @@ class Summary:
 
 
 def _mean_std(values: List[float]) -> Tuple[Optional[float], Optional[float]]:
+    """Mean and population standard deviation (numpy's default, ddof=0) over
+    the folds: the convention of every ± the paper prints (its probes and
+    table scripts call np.std), so a reproduced row matches the paper's."""
     vals = [v for v in values if v is not None and not math.isnan(v)]
     if not vals:
         return None, None
     mean = sum(vals) / len(vals)
     if len(vals) < 2:
         return mean, None
-    return mean, math.sqrt(sum((v - mean) ** 2 for v in vals) / (len(vals) - 1))
+    return mean, math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
 
 
 def _fold_key(fold: str):
@@ -255,9 +256,15 @@ def summarize(records: List[Record], headline: str, secondary: Sequence[str] = (
 
 def benchmark_summary(benchmark: str, paths: Optional[Sequence[str]] = None,
                       output_root: Optional[Path] = None,
-                      variant: Optional[str] = None) -> Tuple[List[Summary], int]:
+                      variant: Optional[str] = None,
+                      left_out: Optional[List[str]] = None) -> Tuple[List[Summary], int]:
     """Summaries of every variant's results, or of *variant*'s only (a name
-    the benchmark does not define is a CatalogError, a usage error)."""
+    the benchmark does not define is a CatalogError, a usage error).
+
+    Results of a model whose family the benchmark leaves out
+    (``excluded_models``: written by the verbs, or before the benchmark left
+    it out) are not the benchmark's and are not summarised; *left_out*, if
+    given, receives their checkpoint ids."""
     from neuroatlas import catalog
 
     bench = catalog.load(benchmark)
@@ -270,118 +277,15 @@ def benchmark_summary(benchmark: str, paths: Optional[Sequence[str]] = None,
         records = [r for r in records if r.dataset in known]
     if variant is not None:
         records = [r for r in records if r.variant == variant]
+    excluded = bench.excluded_families()
+    if excluded and records:
+        from neuroatlas import selectors
+
+        family = {s.identifier: s.model_family for s in selectors._registry()}
+        out = sorted({r.model for r in records if family.get(r.model) in excluded})
+        records = [r for r in records if r.model not in out]
+        if left_out is not None:
+            left_out.extend(out)
     m = bench.metrics
     return summarize(records, m.headline, m.secondary, m.dummy_for, m.higher_is_better), dropped
 
-
-# --------------------------------------------------------------------------
-# leaderboard
-# --------------------------------------------------------------------------
-
-def _ranks(values: Dict[str, float], higher_is_better: bool) -> Dict[str, float]:
-    """Average ranks (1 = best), ties sharing the mean of their positions."""
-    order = sorted(values.items(), key=lambda kv: -kv[1] if higher_is_better else kv[1])
-    ranks: Dict[str, float] = {}
-    i = 0
-    while i < len(order):
-        j = i
-        while j + 1 < len(order) and order[j + 1][1] == order[i][1]:
-            j += 1
-        for k in range(i, j + 1):
-            ranks[order[k][0]] = (i + j) / 2 + 1
-        i = j + 1
-    return ranks
-
-
-
-
-@dataclass
-class BoardRow:
-    model: str
-    mean_rank: Optional[float]
-    normalized: Optional[float]
-    n_benchmarks: int
-    missing: List[str] = field(default_factory=list)
-    # "benchmark/dataset (k/n folds)" wherever the model was ranked on fewer
-    # folds than the dataset's protocol has
-    partial: List[str] = field(default_factory=list)
-
-
-def leaderboard(benchmarks: Optional[Sequence[str]] = None, suite: str = "full",
-                paths: Optional[Sequence[str]] = None,
-                output_root: Optional[Path] = None,
-                details: Optional[Dict[str, Any]] = None,
-                variant: str = DEFAULT_VARIANT,
-                ) -> Tuple[List[BoardRow], Dict[str, Dict[str, float]]]:
-    """Rank within each dataset, average within a benchmark, then across.
-
-    Only *variant*'s results are ranked: the default variant (the paper's
-    leaderboard) unless told otherwise. Another variant ranks the benchmarks
-    that define it; naming a benchmark that does not is a CatalogError.
-
-    A model is ranked only on benchmarks where it has a result for every
-    dataset of the suite; elsewhere it is listed as missing, not ranked low.
-    A result on fewer folds than the protocol has is ranked, and marked
-    (``BoardRow.partial``).
-    Returns (global rows, {benchmark: {model: mean rank}}). ``details``, if
-    given, receives ``incomplete``: {benchmark: [suite datasets without any
-    result]} for every benchmark that has results but could not be ranked.
-    """
-    from neuroatlas import catalog
-
-    per_bench: Dict[str, Dict[str, float]] = {}
-    per_bench_norm: Dict[str, Dict[str, float]] = {}
-    partial: Dict[str, List[str]] = {}
-    incomplete: Dict[str, List[str]] = {}
-    seen_models: set = set()
-    if benchmarks:
-        names = list(benchmarks)
-        for name in names:
-            catalog.load(name).variant(variant)        # a variant it lacks: CatalogError
-    else:
-        names = [b.name for b in catalog.catalog().values()
-                 if b.datasets and variant in b.variant_names()]
-        if not names:
-            raise catalog.CatalogError(f"no benchmark has a variant {variant!r}")
-    for name in names:
-        bench = catalog.load(name)
-        wanted = [e.slug for e in bench.suite(suite)]
-        summaries, _ = benchmark_summary(name, paths, output_root, variant=variant)
-        by_ds: Dict[str, Dict[str, Summary]] = {}
-        for s in summaries:
-            if s.dataset in wanted and s.mean is not None:
-                by_ds.setdefault(s.dataset, {})[s.model] = s
-                seen_models.add(s.model)
-        if not by_ds:
-            continue
-        complete = set.intersection(*(set(v) for v in by_ds.values())) if len(by_ds) == len(wanted) else set()
-        if not complete:
-            incomplete[name] = [d for d in wanted if d not in by_ds]
-            continue
-        rank_sum: Dict[str, List[float]] = {m: [] for m in complete}
-        norm: Dict[str, List[float]] = {m: [] for m in complete}
-        for ds, models in by_ds.items():
-            ranks = _ranks({m: models[m].mean for m in complete}, bench.metrics.higher_is_better)
-            for m in complete:
-                rank_sum[m].append(ranks[m])
-                if models[m].normalized is not None:
-                    norm[m].append(models[m].normalized)
-                s = models[m]
-                if s.n_expected and s.n_folds < s.n_expected:
-                    partial.setdefault(m, []).append(
-                        f"{name}/{ds} ({s.n_folds}/{s.n_expected} folds)")
-        per_bench[name] = {m: sum(v) / len(v) for m, v in rank_sum.items()}
-        per_bench_norm[name] = {m: sum(v) / len(v) for m, v in norm.items() if v}
-
-    rows = []
-    for model in sorted(seen_models):
-        ranks = [r[model] for r in per_bench.values() if model in r]
-        norms = [n[model] for n in per_bench_norm.values() if model in n]
-        missing = [b for b in per_bench if model not in per_bench[b]]
-        rows.append(BoardRow(model, sum(ranks) / len(ranks) if ranks and not missing else None,
-                             sum(norms) / len(norms) if norms and not missing else None,
-                             len(ranks), missing, partial.get(model, [])))
-    rows.sort(key=lambda r: (r.mean_rank is None, r.mean_rank if r.mean_rank is not None else 0))
-    if details is not None:
-        details["incomplete"] = incomplete
-    return rows, per_bench

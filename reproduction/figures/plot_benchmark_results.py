@@ -1697,7 +1697,7 @@ def _plot_sk_sleep_violin(
             vp = ax.violinplot([vals], positions=[pi], widths=0.7,
                                showmeans=False, showmedians=False,
                                showextrema=False)
-            for body in vp["b${COMPUTE_HOST}s"]:
+            for body in vp["bodies"]:
                 body.set_facecolor(face)
                 body.set_edgecolor("black")
                 body.set_linewidth(0.6)

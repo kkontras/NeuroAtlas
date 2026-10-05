@@ -530,11 +530,11 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
     writes it anyway); a pair the channel map rules out -- ``skip`` (n/a) or
     no entry for the family (invalid) -- or a dataset whose map does not
     load, never gets a job."""
-    from neuroatlas import catalog, data, models as model_state, run as runmod, selectors
+    from neuroatlas import catalog, data, models as model_state, run as runmod
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
     bench = catalog.load(benchmark)
-    ids = selectors.resolve_models(models)
+    ids = bench.select_models(models)
     by_id = {s.identifier: s for s in checkpoint_registry()}
     env = {k: os.environ[k] for k in _PASS_ENV if os.environ.get(k)}
     python = sys.executable

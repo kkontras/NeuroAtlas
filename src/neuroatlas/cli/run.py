@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
-from neuroatlas.cli import Parser, UsageError
+from neuroatlas.cli import MODELS_HELP, Parser, UsageError
 from neuroatlas.cli._table import add_format_arg, render
 
 FIXED_SPLIT = "fixed split"
@@ -20,8 +20,7 @@ def build_parser() -> Parser:
                     "where the cache already has it), then `probe` over its folds. "
                     "Results go to <output root>/<benchmark>/<dataset>/.")
     p.add_argument("benchmark")
-    p.add_argument("-m", "--models", required=True,
-                   help="An alias (all_fm, all_ts, ...), group, family or checkpoint ids.")
+    p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="single", metavar="single|full|SLUGS",
                    help="The one-dataset quick suite (default), every dataset, or a comma list.")
     p.add_argument("--variant", default="default", help="A benchmark variant (see `neuroatlas show`).")
@@ -176,7 +175,7 @@ def plan_notes(p, refused_partial: bool) -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
-    from neuroatlas import run as runmod, selectors
+    from neuroatlas import catalog, run as runmod
 
     args = build_parser().parse_args(argv)
     if args.checkpoint_override and not args.cache_root:
@@ -184,7 +183,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                          "by checkpoint id, so the old cache would be read as if it came from "
                          "the new weights")
     output_root = Path(args.output_root).expanduser().resolve() if args.output_root else None
-    selected = selectors.resolve_models(args.models)
+    bench = catalog.load(args.benchmark)
+    selected = bench.select_models(args.models)
+    left_out = bench.left_out_note(args.models)
     overrides = _overrides(args.checkpoint_override, selected)
     plans = runmod.plan(args.benchmark, args.models, args.dataset, args.variant,
                         debug=args.debug, folds=args.folds, per_model=args.per_model_output,
@@ -215,6 +216,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                extra=["models", "fold_ids", "not_applicable", "n_invalid", "invalid", "output",
                       "embed_command", "probe_command"],
                labels={"n_not_applicable": "n/a", "n_invalid": "invalid"})
+    if left_out and args.format == "table":
+        print(f"\n{left_out}")
     if args.dry_run:
         if args.format == "table":
             if any(r["folds"] == FIXED_SPLIT for r in rows):

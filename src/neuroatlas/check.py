@@ -153,7 +153,7 @@ def check(benchmark: str, models: str, suite: str = "single",
           variant: str = "default", num_workers: Optional[int] = None) -> List[PairCheck]:
     """``num_workers``: loader workers for the one batch (default 0: read in
     this process, which is fastest for a single batch)."""
-    from neuroatlas import catalog, data, selectors
+    from neuroatlas import catalog, data
     from neuroatlas import models as model_state
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
@@ -161,7 +161,7 @@ def check(benchmark: str, models: str, suite: str = "single",
     if bench.derived_from:
         bench = catalog.load(bench.derived_from)
     by_id = {s.identifier: s for s in checkpoint_registry()}
-    specs = [by_id[i] for i in selectors.resolve_models(models)]
+    specs = [by_id[i] for i in bench.select_models(models)]
     out: List[PairCheck] = []
     for step in bench.steps(suite, variant):
         if step.verb != "embed":

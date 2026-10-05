@@ -76,7 +76,7 @@ def compute_recording_stats_streaming(
 ) -> Dict[str, Any]:
     """Streaming equivalent of ``compute_recording_stats``.
 
-    ``blocks_iter_factory`` is called t${HPC_CLUSTER} — once per pass — and must
+    ``blocks_iter_factory`` is called twice — once per pass — and must
     return a fresh iterator over per-block ``(C, T_block)`` float arrays
     each time. Caller is responsible for caching/loading.
 

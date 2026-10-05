@@ -72,19 +72,23 @@ def list_benchmarks(args) -> None:
             "variants": list(bench.variants),
             "datasets": [e.slug for e in bench.datasets],
             "planned_datasets": [p["name"] for p in bench.planned],
+            "excluded_models": [{"families": list(x.families), "reason": x.reason}
+                                for x in bench.excluded_models],
         })
         listed = [e.slug for e in bench.datasets] + [f"{p['name']} (planned)" for p in bench.planned]
+        left_out = [f"models left out: {', '.join(x.families)}"
+                    + (f" -- {x.reason}" if args.verbose else "") for x in bench.excluded_models]
         if args.verbose and args.format == "table":
             # one line per dataset: its name, how it is obtained, its own task or note
             notes[len(rows) - 1] = [_dataset_line(e) for e in bench.datasets] + [
-                f"{p['name']}: planned -- {p['reason']}" for p in bench.planned]
+                f"{p['name']}: planned -- {p['reason']}" for p in bench.planned] + left_out
         elif listed:
-            notes[len(rows) - 1] = [", ".join(listed)]
+            notes[len(rows) - 1] = [", ".join(listed), *left_out]
     if not _done(args, rows, len(every), "benchmarks"):
         return
     render(rows, ["benchmark", "domain", "task", "headline", "dummy", "single",
                   "n_full", "planned", "variants"], args.format, notes,
-           extra=["datasets", "planned_datasets"])
+           extra=["datasets", "planned_datasets", "excluded_models"])
     if args.format == "table":
         print(f"\n{_count(args, len(rows), len(every), 'benchmarks', '')}. "
               + ("" if args.verbose else "-v adds each dataset's task and notes. ")
@@ -157,7 +161,14 @@ def list_models(args) -> None:
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
     specs = checkpoint_registry()
-    if args.selector:
+    if args.benchmark:
+        from neuroatlas import catalog
+
+        # what the benchmark evaluates: the selection (default: every ready
+        # checkpoint) without the families the benchmark leaves out
+        wanted = set(catalog.load(args.benchmark).select_models(args.selector or "all"))
+        specs = [s for s in specs if s.identifier in wanted]
+    elif args.selector:
         wanted = set(selectors.resolve_models(args.selector))
         specs = [s for s in specs if s.identifier in wanted]
     elif not args.all:
@@ -182,7 +193,8 @@ def list_models(args) -> None:
     render(rows, columns + (["source"] if args.verbose else []), args.format,
            extra=[] if args.verbose else ["source"], formats={"window_s": "{:.3g}"})
     if args.format == "table":
-        print(f"\n{_count(args, len(rows), total, 'checkpoints', '')}. `ready` means the "
+        scope = f"the {args.benchmark} benchmark evaluates" if args.benchmark else ""
+        print(f"\n{_count(args, len(rows), total, 'checkpoints', scope)}. `ready` means the "
               f"model's code is in place, not that its weights are on this machine "
               f"(`neuroatlas models status`)." + ("" if args.verbose else
                                                    " -v adds where each comes from."))
@@ -284,6 +296,10 @@ def build_parser() -> Parser:
                            help="Only these: an alias, group, family or ids (e.g. all_fm, "
                                 "baseline, reve).")
             p.add_argument("--all", action="store_true", help="Include planned checkpoints.")
+            p.add_argument("--benchmark", metavar="NAME", default=None,
+                           help="Only the checkpoints this benchmark evaluates: the selector "
+                                "(default: every ready one) without the model families the "
+                                "benchmark leaves out.")
         if name == "datasets":
             p.add_argument("--all", action="store_true",
                            help="Include registered datasets the paper does not evaluate.")

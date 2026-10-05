@@ -7,6 +7,7 @@
     reve                    a model family: its ready *trained* checkpoints
     reve_pretrained         one checkpoint
     all_fm,chronos_t5_base  any mix, comma-separated
+    all,-sleepyco           ``-name`` removes what the terms before it selected
 
 Only *ready* checkpoints are selected by an alias, a group or a family;
 naming a planned checkpoint by id is an error that says it is planned.
@@ -16,18 +17,26 @@ REVE, not REVE and its random-weight control. (The original verbs keep the
 runner's meaning of a family name -- see :func:`expand_models`.) Duplicates
 collapse, order is kept, and an unknown name fails with the closest matches
 before any work starts.
+
+A benchmark can leave model families out (``excluded_models`` in its
+catalog file; :meth:`neuroatlas.catalog.Benchmark.select_models`): there an
+alias or a group skips them and naming one is an error that says why.
 """
 from __future__ import annotations
 
 import difflib
 from functools import lru_cache
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from neuroatlas import _paths
 
 
 class SelectionError(ValueError):
     pass
+
+
+class NotInBenchmark(SelectionError):
+    """A model named explicitly that the benchmark leaves out."""
 
 
 @lru_cache(maxsize=1)
@@ -67,6 +76,37 @@ def alias_members(alias: str, specs=None) -> List[str]:
     return [s.identifier for s in ready]
 
 
+def _names(expr: str | Sequence[str]) -> List[str]:
+    return [n.strip() for n in (expr.split(",") if isinstance(expr, str) else expr) if n.strip()]
+
+
+def _removal(name: str) -> str | None:
+    """The name a ``-name`` term removes, or None for a term that adds."""
+    if not name.startswith("-"):
+        return None
+    key = name[1:].strip()
+    if not key:
+        raise SelectionError("`-` needs a name after it, e.g. `all,-reve`")
+    return key
+
+
+def _removed_ids(key: str, specs) -> List[str]:
+    """Every checkpoint id ``-key`` removes: what an alias or a group selects,
+    *every* checkpoint of a family (its random-init control too: ``all,-reve``
+    is no REVE at all), or the one id."""
+    key = key.lower()
+    groups, aliases = model_groups()["groups"], model_groups()["aliases"]
+    if key in aliases or key in groups:
+        return resolve_models([key])
+    family = [s.identifier for s in specs if s.model_family == key]
+    if family:
+        return family
+    if any(s.identifier == key for s in specs):
+        return [key]
+    resolve_models([key])                        # raises: unknown, with the closest names
+    return []
+
+
 def expand_models(expr: str | Sequence[str]) -> List[str]:
     """What the original verbs' ``--models`` hands the runner: aliases and
     groups become checkpoint ids; a family or an id stays exactly as typed,
@@ -79,21 +119,53 @@ def expand_models(expr: str | Sequence[str]) -> List[str]:
     user typed, so keeping it keeps those working unchanged. The new
     commands (run, check, submit) resolve with :func:`resolve_models` and
     hand the verbs ids, so there a family means its trained checkpoints.
+
+    A ``-name`` term removes what came before it (see :func:`resolve_models`);
+    a family kept as typed that loses a checkpoint to it is spelled out as
+    its remaining checkpoints.
     """
-    names = [n.strip() for n in (expr.split(",") if isinstance(expr, str) else expr) if n.strip()]
+    names = _names(expr)
     groups, aliases = model_groups()["groups"], model_groups()["aliases"]
+    specs = _registry()
     out: List[str] = []
     for name in names:
+        removed = _removal(name)
+        if removed is not None:
+            drop = set(_removed_ids(removed, specs))
+            kept: List[str] = []
+            for entry in out:
+                members = [s.identifier for s in specs if s.model_family == entry.lower()]
+                if members and drop.intersection(members):
+                    kept.extend(m for m in members if m not in drop and m not in kept)
+                elif entry.lower() not in drop and entry not in kept:
+                    kept.append(entry)
+            out = kept
+            continue
         picked = resolve_models([name])          # validates; raises on unknown / planned
         if name.lower() not in aliases and name.lower() not in groups:
             picked = [name]
         out.extend(p for p in picked if p not in out)
+    if names and not out:
+        raise SelectionError(f"{','.join(names)!r} selects no model: its `-` terms remove "
+                             f"everything before them")
     return out
 
 
-def resolve_models(expr: str | Sequence[str]) -> List[str]:
-    """Checkpoint ids for a selector expression. Raises SelectionError."""
-    names = [n.strip() for n in (expr.split(",") if isinstance(expr, str) else expr) if n.strip()]
+def resolve_models(expr: str | Sequence[str], *,
+                   exclude: Optional[Mapping[str, str]] = None, scope: str = "") -> List[str]:
+    """Checkpoint ids for a selector expression. Raises SelectionError.
+
+    Terms are read left to right; ``-name`` removes what the terms before it
+    selected (``all,-sleepyco``, ``all_fm,-reve``): an alias's or a group's
+    members, every checkpoint of a family, or one id.
+
+    *exclude* -- ``{family: reason}``, the model families a benchmark does not
+    evaluate (its ``excluded_models``), *scope* naming it ("the epilepsy
+    benchmark"). An alias or a group leaves those families out; naming one
+    of them, as a family or a checkpoint id, is a SelectionError that says
+    why.
+    """
+    names = _names(expr)
     if not names:
         raise SelectionError("no models selected")
     specs = _registry()
@@ -103,10 +175,19 @@ def resolve_models(expr: str | Sequence[str]) -> List[str]:
         families.setdefault(s.model_family, []).append(s)
     aliases = model_groups()["aliases"]
     groups = model_groups()["groups"]
+    exclude = {f.lower(): why for f, why in (exclude or {}).items()}
 
     out: List[str] = []
+    took_away = False
     for name in names:
+        removed = _removal(name)
+        if removed is not None:
+            drop = set(_removed_ids(removed, specs))
+            took_away = took_away or any(i in drop for i in out)
+            out = [i for i in out if i not in drop]
+            continue
         key = name.lower()
+        named = False                        # a family or an id, not a set of them
         if key in aliases:
             picked = alias_members(key, specs)
         elif key in groups:
@@ -114,17 +195,19 @@ def resolve_models(expr: str | Sequence[str]) -> List[str]:
             picked = [s.identifier for s in specs
                       if s.status == "ready" and s.model_family in fams and not is_baseline(s)]
         elif key in families:
+            named = True
             ready = [s for s in families[key] if s.status == "ready"]
             # a family means its trained checkpoints; its random-init control
             # only when it has nothing else
             picked = [s.identifier for s in ready if not is_baseline(s)] or \
                 [s.identifier for s in ready]
-            if not picked:
+            if not picked and key not in exclude:
                 raise SelectionError(f"{name}: no ready checkpoint (all are "
                                      f"{', '.join(sorted({s.status for s in families[key]}))})")
         elif key in by_id:
+            named = True
             spec = by_id[key]
-            if spec.status != "ready":
+            if spec.status != "ready" and spec.model_family not in exclude:
                 raise SelectionError(f"{name} is {spec.status}, not ready: {spec.notes or 'no note'}")
             picked = [spec.identifier]
         else:
@@ -133,5 +216,16 @@ def resolve_models(expr: str | Sequence[str]) -> List[str]:
             hint = f" Did you mean {', '.join(close)}?" if close else ""
             raise SelectionError(f"unknown model {name!r}.{hint} "
                                  f"See `neuroatlas list models` and `neuroatlas list aliases`.")
+        if exclude:
+            family = key if key in families else by_id[key].model_family if key in by_id else None
+            if named and family in exclude:
+                raise NotInBenchmark(f"{name} is not part of {scope or 'this benchmark'} "
+                                     f"({family}: {exclude[family]})")
+            kept = [p for p in picked if by_id[p].model_family not in exclude]
+            took_away = took_away or len(kept) < len(picked)
+            picked = kept
         out.extend(p for p in picked if p not in out)
+    if not out and took_away:
+        where = f" in {scope}" if scope else ""
+        raise SelectionError(f"{','.join(names)!r} selects no model{where}")
     return out

@@ -85,9 +85,6 @@ COMMANDS = {
     "results": Command("neuroatlas.cli.results_cmd",
                        "Summarise a benchmark's results: mean, spread, normalised score.",
                        report=_always),
-    "leaderboard": Command("neuroatlas.cli.leaderboard_cmd",
-                           "Rank models across datasets and benchmarks.",
-                           report=_always),
     "fetch": Command("neuroatlas.entrypoints.fetch",
                      "Obtain a dataset's raw corpus, or say exactly how to.",
                      downloads=lambda argv: "--download" in argv),
@@ -103,7 +100,18 @@ COMMANDS = {
                          "Reconstruct hypnograms and sleep-architecture features."),
 }
 
+#: Names that are no longer commands, with the command a user who types one
+#: wants instead: the did-you-mean of the unknown-command error, for names
+#: too unlike any command for difflib to find it.
+REMOVED = {"leaderboard": "results"}
+
 USAGE = "usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]"
+
+#: The -m / --models help of the commands that take a benchmark.
+MODELS_HELP = ("An alias (all_fm, all_ts, ...), group, family or checkpoint ids, "
+               "comma-separated; `-name` removes one (all,-reve). A family the benchmark "
+               "leaves out (`neuroatlas show <benchmark>`) is skipped by an alias and refused "
+               "by name.")
 
 # (flags, help) of the options every command takes, before or after its name.
 GLOBAL_OPTIONS = [
@@ -239,8 +247,7 @@ def command_parser(name: str) -> argparse.ArgumentParser:
     # thin aliases (submit_cmd, results_cmd, ...) re-export a main
     owner = importlib.import_module(module.main.__module__)
     builder = {"submit_main": "build_submit_parser", "status_main": "build_status_parser",
-               "results_main": "build_results_parser",
-               "leaderboard_main": "build_board_parser"}[module.main.__name__]
+               "results_main": "build_results_parser"}[module.main.__name__]
     return getattr(owner, builder)()
 
 
@@ -404,7 +411,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     name, rest = argv[0], argv[1:]
     command = COMMANDS.get(name)
     if command is None:
-        close = difflib.get_close_matches(name, COMMANDS, n=1)
+        close = difflib.get_close_matches(name, COMMANDS, n=1) or (
+            [REMOVED[name]] if name in REMOVED else [])
         hint = f" -- did you mean `{close[0]}`?" if close else ""
         raise _usage_error(f"unknown command {name!r}{hint}\n\n{USAGE}")
     rest = _take_global_options(rest, state)

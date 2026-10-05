@@ -8,10 +8,9 @@ as the command does.
     api.check("sleep_stage", "biot_pretrained")                  # = check
     api.run_benchmark("sleep_stage", "biot_pretrained", debug=True)
     api.results("sleep_stage")                                   # = results
-    api.leaderboard(suite="single")["global"]                    # = leaderboard
 
 Every table has exactly the columns of the command's ``--format json``
-(``dataset``, ``model``, ``n_benchmarks``, ``not_applicable``, ``note``, ...),
+(``dataset``, ``model``, ``not_applicable``, ``note``, ...),
 and a missing number is ``None`` (NaN once pandas makes a float column of it),
 never "n/a".
 
@@ -27,7 +26,6 @@ from __future__ import annotations
 
 import contextlib as _contextlib
 import os as _os
-from dataclasses import asdict as _asdict
 from pathlib import Path as _Path
 from typing import Any as _Any, Dict as _Dict, List as _List, Optional as _Optional, \
     Sequence as _Sequence
@@ -35,7 +33,7 @@ from typing import Any as _Any, Dict as _Dict, List as _List, Optional as _Optio
 from neuroatlas import config as _config
 
 __all__ = ["benchmarks", "models", "data_status", "plan", "check", "run_benchmark",
-           "results", "leaderboard"]
+           "results"]
 
 _config.apply_to_environ()
 
@@ -81,7 +79,9 @@ def benchmarks():
                     "task": b.task, "headline": b.metrics.headline,
                     "higher_is_better": b.metrics.higher_is_better,
                     "single": b.single, "datasets": [e.slug for e in b.datasets],
-                    "planned_datasets": [p["name"] for p in b.planned]}
+                    "planned_datasets": [p["name"] for p in b.planned],
+                    "excluded_models": [{"families": list(x.families), "reason": x.reason}
+                                        for x in b.excluded_models]}
                    for b in catalog.catalog().values()])
 
 
@@ -201,25 +201,3 @@ def results(benchmark: str, paths: _Optional[_Sequence[str]] = None,
     return _frame(rows, ["benchmark", "metric", "dataset", "variant", "model", "status",
                          "mean", "std"])
 
-
-def leaderboard(benchmarks: _Optional[_Sequence[str]] = None, suite: str = "full",
-                paths: _Optional[_Sequence[str]] = None,
-                output_root: _Optional[str] = None,
-                variant: str = "default") -> _Dict[str, _Any]:
-    """{"global": ranking table (as `leaderboard --format json`),
-    "per_benchmark": model x benchmark mean ranks}. Ranks *variant*'s results
-    (default: the default variant, as the command)."""
-    import pandas as pd
-
-    from neuroatlas import results as res
-
-    rows, per_bench = res.leaderboard(benchmarks, suite, paths,
-                                      _Path(output_root) if output_root else None,
-                                      variant=variant)
-    table = []
-    for r in rows:
-        row = {**_asdict(r), "suite": suite, "variant": variant}
-        row["partial_folds"] = row.pop("partial")
-        table.append(row)
-    return {"global": _frame(table, ["model", "mean_rank", "normalized", "n_benchmarks"]),
-            "per_benchmark": pd.DataFrame(per_bench)}

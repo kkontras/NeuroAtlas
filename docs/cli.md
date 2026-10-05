@@ -32,7 +32,6 @@ usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]
 | [`submit`](#submit) | Write cluster jobs (HTCondor or SLURM) for a whole benchmark. |
 | [`status`](#status) | How each job of a `submit` is doing. |
 | [`results`](#results) | Summarise a benchmark's results: mean, spread, normalised score. |
-| [`leaderboard`](#leaderboard) | Rank models across datasets and benchmarks. |
 | [`fetch`](#fetch) | Obtain a dataset's raw corpus, or say exactly how to. |
 | [`prepare`](#prepare) | Build a dataset's optional cache (no benchmark needs one). |
 | [`embed`](#embed) | Extract frozen-backbone embeddings for a dataset. |
@@ -213,7 +212,7 @@ options:
 
 ```
 usage: neuroatlas list models [-h] [--grep TEXT] [-v] [--format {table,csv,md,json}]
-                              [--all]
+                              [--all] [--benchmark NAME]
                               [selector]
 
 Checkpoints: family, group, input rate and window, embedding size.
@@ -231,6 +230,9 @@ options:
                         table's ↳ lines as a `note` column; json uses null for a
                         missing value.
   --all                 Include planned checkpoints.
+  --benchmark NAME      Only the checkpoints this benchmark evaluates: the selector
+                        (default: every ready one) without the model families the
+                        benchmark leaves out.
 ```
 
 
@@ -460,7 +462,10 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
-                        An alias (all_fm ...), group, family or checkpoint ids.
+                        An alias (all_fm, all_ts, ...), group, family or checkpoint
+                        ids, comma-separated; `-name` removes one (all,-reve). A
+                        family the benchmark leaves out (`neuroatlas show
+                        <benchmark>`) is skipped by an alias and refused by name.
   --dataset single|full|SLUGS
                         Which datasets (default: single).
   --variant VARIANT
@@ -499,7 +504,9 @@ options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
                         An alias (all_fm, all_ts, ...), group, family or checkpoint
-                        ids.
+                        ids, comma-separated; `-name` removes one (all,-reve). A
+                        family the benchmark leaves out (`neuroatlas show
+                        <benchmark>`) is skipped by an alias and refused by name.
   --dataset single|full|SLUGS
                         The one-dataset quick suite (default), every dataset, or a
                         comma list.
@@ -572,6 +579,10 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
+                        An alias (all_fm, all_ts, ...), group, family or checkpoint
+                        ids, comma-separated; `-name` removes one (all,-reve). A
+                        family the benchmark leaves out (`neuroatlas show
+                        <benchmark>`) is skipped by an alias and refused by name.
   --dataset single|full|SLUGS
                         Default: full -- this is for the whole suite.
   --variant VARIANT
@@ -673,47 +684,6 @@ options:
                         The results root to read (default: the configured output
                         root).
   -v, --verbose         Show why failed folds failed: the message each one recorded.
-  --format {table,csv,md,json}
-                        Output format (default: table). csv, md and json carry the
-                        table's ↳ lines as a `note` column; json uses null for a
-                        missing value.
-```
-
-
-## leaderboard
-
-Rank models across datasets and benchmarks.
-
-```
-usage: neuroatlas leaderboard [-h] [--suite {single,full}] [--benchmarks BENCHMARKS]
-                              [--variant VARIANT] [--output-root OUTPUT_ROOT] [-v]
-                              [--format {table,csv,md,json}]
-                              [paths ...]
-
-Rank models within each dataset, average the ranks within a benchmark, then across
-benchmarks. A model missing from some dataset of a suite is listed, not ranked; a
-result on fewer folds than the protocol has is ranked and marked. Only the default
-variant's results are ranked, unless --variant names another.
-
-positional arguments:
-  paths                 results.json files, globs or folders. Default: everything
-                        under the output root.
-
-options:
-  -h, --help            show this help message and exit
-  --suite {single,full}
-                        Rank on every dataset of each benchmark (full, the paper's
-                        leaderboard; the default) or on its one quick dataset
-                        (single).
-  --benchmarks BENCHMARKS
-                        Comma list; default every benchmark.
-  --variant VARIANT     Rank this variant's results (default: the default variant, the
-                        paper's protocol). Another variant ranks the benchmarks that
-                        have it.
-  --output-root OUTPUT_ROOT
-                        The results root to read (default: the configured output
-                        root).
-  -v, --verbose         Add the per-benchmark ranks.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's ↳ lines as a `note` column; json uses null for a

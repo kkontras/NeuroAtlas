@@ -95,6 +95,76 @@ def _stratified_clip_splits(
 
 
 # ---------------------------------------------------------------------------
+# The paper's actual folds (split_mode="paper_segments")
+# ---------------------------------------------------------------------------
+
+#: ``clip`` -- the default: folds over the 500 clips, a clip's windows always together.
+#: ``paper_segments`` -- the folds the published Bonn numbers were drawn on (App. D.1.3:
+#: "stratified 5-fold cross-validation at the segment level"), frozen in
+#: ``configs/cohorts/bonn/folds_paper_segments.json``: the 1,000 10-s segments were assigned
+#: independently, so the two halves of one 23.6-s clip can sit in train and test. Offered only
+#: to reproduce the published numbers; defined for 10 s / 10 s windows and S vs rest only.
+SPLIT_MODES = ("clip", "paper_segments")
+_SEGMENT_SETS = ("Z", "O", "N", "F", "S")    # bonn_preprocessor.SET_ORDER: class code = position
+
+
+def paper_segments_manifest_path() -> Path:
+    from neuroatlas._paths import configs_dir
+
+    return configs_dir("cohorts", "bonn", "folds_paper_segments.json")
+
+
+def _segment_key(segment_id: str, class_codes: np.ndarray) -> Tuple[int, int]:
+    """'Z037:1' -> (clip index, segment): clip Z037 is the 37th clip of set Z in the
+    canonical order (sets Z,O,N,F,S; files sorted), segment 1 its [10, 20) s window."""
+    stem, seg = segment_id.split(":")
+    code, ordinal = _SEGMENT_SETS.index(stem[0]), int(stem[1:]) - 1
+    clips_of_set = np.flatnonzero(np.asarray(class_codes) == code)
+    if not 0 <= ordinal < len(clips_of_set):
+        raise ValueError(f"segment {segment_id!r}: set {stem[0]} has {len(clips_of_set)} clips")
+    return int(clips_of_set[ordinal]), int(seg)
+
+
+def _paper_segment_roles(
+    class_codes: np.ndarray,
+    fold: int,
+    n_folds: int,
+    manifest_path: Optional[Path] = None,
+) -> Tuple[Dict[Tuple[int, int], str], str]:
+    """{(clip index, segment): "train"|"val"|"test"} of the paper's fold, and the manifest path."""
+    import json
+
+    path = Path(manifest_path) if manifest_path is not None else paper_segments_manifest_path()
+    manifest = json.loads(path.read_text())
+    if int(manifest["n_folds"]) != int(n_folds):
+        raise ValueError(
+            f"split_mode=paper_segments is the paper's {manifest['n_folds']}-fold split; "
+            f"n_folds={n_folds} has no paper counterpart")
+    folds = manifest["folds"][str(int(fold) % int(n_folds))]
+    roles: Dict[Tuple[int, int], str] = {}
+    for role in ("train", "val", "test"):
+        for sid in folds[role]:
+            roles[_segment_key(sid, class_codes)] = role
+    if len(roles) != sum(len(folds[r]) for r in ("train", "val", "test")):
+        raise ValueError(f"{path}: a segment is listed twice in fold {fold}")
+    return roles, str(path)
+
+
+def _check_canonical_clip_names(raw_dir: str) -> None:
+    """The manifest names clips <set><NNN>; make sure this copy sorts them as NNN = 1..100."""
+    from neuroatlas.extensions.datasets.epilepsy import bonn_preprocessor as bp
+
+    for code, letter in enumerate(_SEGMENT_SETS):
+        files = bp._list_clip_files(bp._find_set_directory(Path(raw_dir), letter))
+        stems = [f.stem.upper() for f in files]
+        want = [f"{letter}{i + 1:03d}" for i in range(len(files))]
+        if stems != want:
+            raise ValueError(
+                f"split_mode=paper_segments: set {letter} files are not named {want[0]}..{want[-1]} "
+                f"in sorted order (found {stems[:3]}...), so the paper's segment ids cannot be mapped")
+
+
+# ---------------------------------------------------------------------------
 # DataModule
 # ---------------------------------------------------------------------------
 
@@ -120,6 +190,8 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         balance: ``"weighted_sampler"`` (rebalances class frequency in
             training) or ``"none"``.
         seed: RNG seed for the StratifiedKFold split (default 42).
+        split_mode: ``"clip"`` (default) or ``"paper_segments"`` (the paper's
+            segment-level folds; see ``SPLIT_MODES``).
     """
 
     def __init__(
@@ -138,8 +210,19 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         balance: str = "weighted_sampler",
         seed: int = 42,
         signal_kind: str = "raw",
+        split_mode: str = "clip",
         **kwargs: Any,
     ) -> None:
+        if split_mode not in SPLIT_MODES:
+            raise ValueError(f"split_mode must be one of {SPLIT_MODES}, got {split_mode!r}")
+        if split_mode == "paper_segments":
+            if label_mode != "binary_s_vs_rest":
+                raise ValueError("split_mode=paper_segments is the paper's S-vs-rest split; "
+                                 f"label_mode={label_mode!r} has no paper folds")
+            if window_s is None or float(window_s) != 10.0 or (
+                    stride_s is not None and float(stride_s) != float(window_s)):
+                raise ValueError("split_mode=paper_segments is defined on the paper's 10 s / 10 s "
+                                 f"segments; got window_s={window_s!r} stride_s={stride_s!r}")
         metadata = {
             "canonical_label_space": label_mode,
             "epoch_seconds": float(window_s) if window_s is not None else 23.593,
@@ -214,9 +297,27 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
             )
 
         self._allowed_clips = list(allowed)
-        self._train_clips, self._val_clips, self._test_clips = _stratified_clip_splits(
-            self._class_codes, allowed, fold, n_folds, seed=seed,
-        )
+        self._split_mode = split_mode
+        self._segment_roles: Optional[Dict[Tuple[int, int], str]] = None
+        if split_mode == "paper_segments":
+            if self._raw_dir is not None:
+                _check_canonical_clip_names(self._raw_dir)
+            self._segment_roles, source = _paper_segment_roles(self._class_codes, fold, n_folds)
+            # A clip is listed under every role one of its segments has; the
+            # segment-level assignment itself is applied in split_global_embedding_payload.
+            by_role: Dict[str, set] = {"train": set(), "val": set(), "test": set()}
+            for (clip, _seg), role in self._segment_roles.items():
+                by_role[role].add(clip)
+            self._train_clips, self._val_clips, self._test_clips = (
+                sorted(by_role["train"]), sorted(by_role["val"]), sorted(by_role["test"]))
+            # Under keys the embedding caches treat as fold bookkeeping (never in the
+            # global cache key): which folds produced a result is recorded with it.
+            self.metadata["fold_source"] = source
+            self.metadata["fold_stats"] = {"split_mode": split_mode}
+        else:
+            self._train_clips, self._val_clips, self._test_clips = _stratified_clip_splits(
+                self._class_codes, allowed, fold, n_folds, seed=seed,
+            )
         # The names the global-cache mixin reads: a Bonn "recording" is a clip.
         self._train_recs, self._val_recs, self._test_recs = (
             self._train_clips, self._val_clips, self._test_clips)
@@ -234,6 +335,12 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     # ------------------------------------------------------------------
 
     def _get_dataset(self, split: str) -> BonnSegmentDataset:
+        if self._segment_roles is not None:
+            # A per-split reader takes whole clips; the paper's folds split clips.
+            raise RuntimeError(
+                "split_mode=paper_segments assigns the two segments of a clip separately, which "
+                "only the global embedding cache can express (seizure_detection with window_s=10, "
+                "stride_s=10 uses it); per-split loaders are not available in this mode")
         if split not in self._datasets:
             clip_indices = {
                 "train": self._train_clips,
@@ -276,6 +383,44 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
     def _subject_of(self, clip_index: int) -> str:
         # The public corpus names no subjects; the clip is the unit.
         return str(int(clip_index))
+
+    def split_global_embedding_payload(self, payload) -> Dict[str, Any]:
+        if self._segment_roles is None:
+            return super().split_global_embedding_payload(payload)
+        # split_mode=paper_segments: the role belongs to the (clip, segment), not the clip.
+        from neuroatlas.benchmarking_helpers import EmbeddingPayload
+
+        metadata = payload.metadata
+        features = payload.features
+        labels = np.asarray(payload.labels)
+        window = float(self._window_s)
+        groups: Dict[str, List[int]] = {"train": [], "val": [], "test": []}
+        for i, m in enumerate(metadata):
+            role = self._segment_roles.get(
+                (int(m["clip_idx"]), int(round(float(m["window_start_s"]) / window))))
+            if role is not None:
+                groups[role].append(i)
+        n_assigned = sum(len(v) for v in groups.values())
+        if n_assigned != len(self._segment_roles):
+            raise RuntimeError(
+                f"split_mode=paper_segments: {len(self._segment_roles)} segments in the paper's fold, "
+                f"{n_assigned} found in the embedding cache")
+        out: Dict[str, Any] = {}
+        for name, idx in groups.items():
+            idx.sort(key=lambda i: (int(metadata[i]["clip_idx"]), float(metadata[i]["window_start_s"])))
+            arr = np.asarray(idx, dtype=np.int64)
+            items = []
+            for i in idx:
+                m = dict(metadata[i])
+                m["split"] = name
+                items.append(m)
+            out[name] = EmbeddingPayload(
+                features=np.asarray(features[arr]) if arr.size else
+                np.zeros((0,) + tuple(features.shape[1:]), dtype=features.dtype),
+                labels=labels[arr] if arr.size else np.zeros((0,), dtype=labels.dtype),
+                metadata=items,
+            )
+        return out
 
     # ------------------------------------------------------------------
     # Loader construction

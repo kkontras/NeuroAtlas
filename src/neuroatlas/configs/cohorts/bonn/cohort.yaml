@@ -84,6 +84,10 @@ splits:
                                             # so its numbers are not comparable
                                             # with the subject-independent ones.
   n_folds: 5
+  note: >
+    split_mode=paper_segments swaps these clip-level folds for the
+    segment-level ones the published numbers came from
+    (folds_paper_segments.json in this directory).
 
 pipeline:
   # How `prepare` builds this cohort's optional fast-path cache.
@@ -114,6 +118,10 @@ runtime_defaults:
   normalize: none
   num_workers: 0
   seed: 42
+  # clip: folds over the 500 clips, a clip's windows together (the default).
+  # paper_segments: the segment-level folds the published numbers were drawn on
+  # (folds_paper_segments.json; needs window_s=10, stride_s=10).
+  split_mode: clip
   stride_s: null
   window_s: null
 
@@ -125,6 +133,11 @@ runtime_options:
     values:
       - binary_s_vs_rest
     enforced_by: dataio.bonn._label_mode_spec
+  split_mode:
+    values:
+      - clip
+      - paper_segments
+    enforced_by: adapters.bonn.SPLIT_MODES
 
 spec:
   # The datamodule this cohort constructs. A dotted path, resolved on
@@ -152,6 +165,11 @@ provenance:
     - "Needs an author decision -- the paper split Bonn finer than this. App.
        D.1.3 and its epilepsy probe both used stratified 5-fold CV over the
        1,000 10-s segments (two per 23.6-s clip), so a clip's two segments
-       could fall in train and test; these folds keep a clip's segments
-       together. The paper's exact segment assignment is not recoverable
-       here (its 3c6721c manifest records no ids)."
+       could fall in train and test (770 of the 1,000 test segments had the
+       other half of their clip in train or val); these folds keep a clip's
+       segments together. The paper's exact segment assignment IS recoverable
+       (the probe's seeded StratifiedKFold over the clip-major segment order):
+       --set split_mode=paper_segments reproduces it, frozen in
+       folds_paper_segments.json and checked by re-probing the paper's own
+       CBraMod embedding to its saved predictions (<= 2.6e-10). Evidence:
+       fixwork/R1_siena_bonn/REPORT.md."

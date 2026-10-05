@@ -28,9 +28,18 @@
 #                   diagnosis and brain age.
 #   selection       AUPRC for binary seizure detection, MAE for brain age.
 #
-# --models is omitted, meaning every checkpoint in the registry. Add
-# --models eeg_fm | ts_fm | supervised for one of the paper's three groups
+# --models all is every checkpoint in the registry. Use --models eeg_fm |
+# ts_fm | supervised for one of the paper's three groups
 # (src/neuroatlas/configs/model_groups.yaml).
+#
+# Except on epilepsy: the sleep-staging sequence models SleepTransformer,
+# SleePyCo and CoRe-Sleep (families sleep_transformer, sleepyco, core_sleep,
+# their _seq1 checkpoints included) are not part of the epilepsy benchmark
+# (src/neuroatlas/configs/benchmarks/epilepsy.yaml, excluded_models; the
+# authors' decision of 2026-10-05), so its lines remove them by name. Their
+# wrappers refuse its 10 s windows. The paper's epilepsy results (Fig. 2b and
+# 8, Tables 3 and 4, App. D.1.3) do show CoRe-Sleep and SleepTransformer;
+# this file does not rerun those cells.
 #
 # Protocols follow the paper's Appendix C; see src/neuroatlas/configs/tasks/ for the defaults.
 #
@@ -108,16 +117,16 @@ python -m neuroatlas.entrypoints.fetch --dataset weibo2014
 # Epilepsy: 10 s windows, no overlap (C.1). --expected-epoch-seconds tells
 # each backbone the window it is handed, so one pretrained on 30 s epochs
 # (BIOT) does not reject a 10 s one; every epilepsy launcher set it.
-python -m neuroatlas.entrypoints.embed --models all --dataset bonn --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset chbmit --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset epilepsiae --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset helsinki_neonatal --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset nmt --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset sz1 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset sz2 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset tuab --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all --dataset tusz --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset bonn --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset chbmit --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset epilepsiae --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset helsinki_neonatal --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset nmt --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz1 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz2 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tuab --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tusz --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
 
 # Sleep and brain age: 30 s epochs (C.2, C.3). Cohorts whose readers are
 # built on fixed 30 s scoring epochs take no window arguments -- passing
@@ -223,16 +232,16 @@ python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --set co
 # ==========================================================================
 
 # --- Epilepsy: seizure detection, AUPRC-selected C (C.1) ------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bonn --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset chbmit --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset epilepsiae --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset helsinki_neonatal --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset nmt --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset sz1 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset sz2 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset tuab --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all --dataset tusz --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset bonn --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset chbmit --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset epilepsiae --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset helsinki_neonatal --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset nmt --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz1 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz2 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tuab --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tusz --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
 
 # --- Sleep axis 1: epoch-wise staging, unweighted loss (C.2) --------------
 python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task sleep_staging --set window_s=30 --set stride_s=30

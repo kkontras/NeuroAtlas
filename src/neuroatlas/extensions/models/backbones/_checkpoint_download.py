@@ -2,10 +2,11 @@
 
 Each source type knows how to bring one checkpoint to its ``checkpoint_path``:
 a file of a Hugging Face repository, a folder of one, a file committed to a
-GitHub repository, a GitHub release asset, one member of a Google Drive zip,
-or one file inside a public Docker image. Where the upstream file's SHA-256 is
-recorded below it is checked before the file is put in place, so a changed or
-truncated upstream file fails loudly instead of loading.
+GitHub repository, files committed to one at a pinned commit, a GitHub release
+asset, one member of a Google Drive zip, or one file inside a public Docker
+image. Where the upstream file's SHA-256 is recorded below it is checked before
+the file is put in place, so a changed or truncated upstream file fails loudly
+instead of loading.
 
 :func:`missing_files` says what a folder checkpoint still lacks, so a folder
 that holds only a config is not mistaken for the weights.
@@ -93,6 +94,79 @@ DRIVE_ZIP_MEMBERS: Dict[str, Tuple[str, str]] = {
 }
 
 
+@dataclass(frozen=True)
+class CommitFiles:
+    """A checkpoint folder made of files committed to a public GitHub repository,
+    fetched from raw.githubusercontent.com at one pinned commit, each checked
+    against its recorded SHA-256 before it is put in place.
+
+    For upstream code and weights whose licence keeps them out of this MIT
+    package: the copy a user runs comes from upstream, not from us.
+    ``files``: (path in the repository, name in the local folder, SHA-256).
+    """
+    repo: str
+    commit: str
+    files: Tuple[Tuple[str, str, str], ...]
+    licence: str
+
+    def url(self, repo_path: str) -> str:
+        return f"https://raw.githubusercontent.com/{self.repo}/{self.commit}/{repo_path}"
+
+    def sha256(self, name: str) -> str:
+        return next(sha for _, local, sha in self.files if local == name)
+
+
+# source_reference (the browsable tree at the commit) -> what to fetch.
+GITHUB_COMMIT_FILES: Dict[str, CommitFiles] = {
+    # DeepSOZ-HEM (Shama et al. 2023; SzCORE 2025 #4): the model code the
+    # wrapper imports and the fold-4 checkpoint. GPL-3.0, so neither ships with
+    # neuroatlas (MIT); until 2026-10-05 both were vendored under
+    # backbones/third_party/deepsoz_hem/, byte-identical to these files
+    # (SHA-256 compared that day). a7c13bd is upstream's latest commit
+    # (2025-02-23); the checkpoint is a plain git blob there, not Git LFS.
+    "https://github.com/amruth-sn/deepsoz-hem/tree/a7c13bdbb6d86e016f929ba108370cc614e9882c": CommitFiles(
+        repo="amruth-sn/deepsoz-hem",
+        commit="a7c13bdbb6d86e016f929ba108370cc614e9882c",
+        files=(
+            ("deepsoz-hem/src/deepsoz/baselines.py", "baselines.py",
+             "07cec7b6418ee5f69ba8c1e3ef429148cc50e04a7bca302dc8080d9ee09c40e8"),
+            ("deepsoz-hem/src/deepsoz/deepsoz_fold4.pth_4.tar", "deepsoz_fold4.pth_4.tar",
+             "db1ffaeebbe87865a3a8e5148ee7953b6118c689eaec8733405f7a1cad9263d4"),
+            ("LICENSE", "LICENSE",
+             "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"),
+        ),
+        licence="GPL-3.0",
+    ),
+}
+
+
+def commit_files_note(reference: str) -> Optional[str]:
+    """The licence line `models status` shows for a :data:`GITHUB_COMMIT_FILES` checkpoint."""
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        return None
+    return (f"{pinned.licence}: code and weights are not part of neuroatlas; `models download` "
+            f"fetches them from github.com/{pinned.repo} at commit {pinned.commit[:7]}")
+
+
+def check_commit_files(folder, reference: str, names, identifier: str) -> None:
+    """Refuse files in *folder* that are not the pinned upstream bytes.
+
+    The wrapper runs the downloaded code, so it checks before importing it.
+    """
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        raise FileNotFoundError(f"No files are recorded for {reference}, so {folder} cannot be checked.")
+    for name in names:
+        path = Path(folder) / name
+        got, want = _sha256(path), pinned.sha256(name)
+        if got != want:
+            raise FileNotFoundError(
+                f"{path} has SHA-256 {got}, not that of {name} in {pinned.repo} at commit "
+                f"{pinned.commit[:7]} ({want}). Delete it and run "
+                f"`neuroatlas models download {identifier}`.")
+
+
 def hub_repo(reference: str) -> str:
     """``org/repo`` from either that or the browser URL of the repository."""
     for prefix in ("https://huggingface.co/", "http://huggingface.co/", "huggingface.co/"):
@@ -106,10 +180,13 @@ def missing_files(checkpoint_path, source_type: str, source_reference: str) -> L
     """What a checkpoint still lacks on disk, as paths; [] when it is complete.
 
     A single-file checkpoint lacks itself when absent. A folder checkpoint
-    (see :data:`HUB_FOLDERS`) lacks each required file, and each required
-    file of its companion folders.
+    (see :data:`HUB_FOLDERS`, :data:`GITHUB_COMMIT_FILES`) lacks each required
+    file, and each required file of its companion folders.
     """
     path = Path(checkpoint_path) if checkpoint_path else Path("")
+    pinned = GITHUB_COMMIT_FILES.get(source_reference or "") if source_type == "github_commit_files" else None
+    if pinned is not None and str(path) not in ("", "."):
+        return [str(path / name) for _, name, _ in pinned.files if not (path / name).is_file()]
     folder = HUB_FOLDERS.get(hub_repo(source_reference or "")) if source_type == "huggingface" else None
     if folder is None:
         return [] if str(path) not in ("", ".") and path.exists() else [str(path)]
@@ -209,11 +286,13 @@ def downloads_off() -> bool:
     return "1" in (os.environ.get("NEUROATLAS_OFFLINE"), os.environ.get("EEGBENCH_OFFLINE"))
 
 
-def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str) -> Path:
+def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
+                      identifier: Optional[str] = None) -> Path:
     """Return a valid local path to the checkpoint, downloading if needed.
 
     Raises FileNotFoundError, saying what to do, when the checkpoint is absent
     and cannot be fetched (downloads off, a manual source, or a failure).
+    *identifier*, when given, is named in the download command the error gives.
     """
     path = Path(checkpoint_path) if checkpoint_path else Path("")
     lacking = missing_files(path, source_type, source_reference)
@@ -223,9 +302,10 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str) 
     if downloads_off():
         detail = (f" (missing {', '.join(Path(p).name for p in lacking)})"
                   if path.is_dir() else "")
+        command = f"neuroatlas models download {identifier}" if identifier else "neuroatlas models download"
         raise FileNotFoundError(
             f"Checkpoint not found at {path}{detail}, and downloads are off. "
-            f"Fetch it with `neuroatlas models download`, or pass --online."
+            f"Fetch it with `{command}`, or pass --online."
         )
 
     logger.info("Checkpoint not found at %s — attempting auto-download (source_type=%s)", path, source_type)
@@ -235,6 +315,7 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str) 
         "huggingface": _download_huggingface,
         "github_release": _download_github,
         "github_release_asset": _download_release_asset,
+        "github_commit_files": _download_github_commit_files,
         "google_drive_zip": _download_google_drive_zip,
         "docker_image": _download_docker_image_file,
         "figshare_private_share": _download_figshare_private_share,
@@ -564,6 +645,40 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
                 f"GitHub token failed ({inner}). Download the asset by hand and place it "
                 f"at {local_path}."
             ) from exc
+
+
+def _download_github_commit_files(local_path: Path, reference: str) -> Path:
+    """Fetch the files :data:`GITHUB_COMMIT_FILES` pins for *reference* into the
+    folder *local_path*, from raw.githubusercontent.com at the pinned commit.
+
+    Only the files the folder lacks are fetched. Each lands as ``<name>.partial``,
+    is checked against its SHA-256, and only then takes its name; a mismatch
+    removes it and raises, so nothing unverified is ever put in place.
+    """
+    import urllib.request
+
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        raise FileNotFoundError(f"No files are recorded for {reference}.")
+    local_path.mkdir(parents=True, exist_ok=True)
+    for repo_path, name, sha256 in pinned.files:
+        target = local_path / name
+        if target.is_file():
+            continue
+        url = pinned.url(repo_path)
+        partial = target.with_name(name + ".partial")
+        logger.info("Downloading %s", url)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, open(partial, "wb") as handle:
+                shutil.copyfileobj(response, handle)
+            _verify(partial, sha256, url)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        partial.replace(target)
+    logger.info("Fetched %s from %s at %s (%s)", ", ".join(n for _, n, _ in pinned.files),
+                pinned.repo, pinned.commit[:7], pinned.licence)
+    return local_path
 
 
 def _download_google_drive_zip(local_path: Path, drive_url: str) -> Path:

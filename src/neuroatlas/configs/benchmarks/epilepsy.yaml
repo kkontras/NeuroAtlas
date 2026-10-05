@@ -17,6 +17,14 @@ datasets: [bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tu
 single: siena
 planned:
   - {name: aub_med, reason: "readable here, but the paper reports no result for it"}
+# Model families this benchmark does not evaluate (the authors' decision,
+# 2026-10-05). `-m all`, a group or an alias leaves them out; naming one is
+# refused. Their checkpoints include the ℓ=1 (`_seq1`) variants.
+excluded_models:
+  - families: [sleep_transformer, sleepyco, core_sleep]
+    reason: >
+      sleep-staging sequence models, built on sequences of 30 s sleep epochs;
+      their wrappers refuse the benchmark's 10 s windows
 metrics:
   headline: auroc
   higher_is_better: true

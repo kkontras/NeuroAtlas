@@ -8,11 +8,12 @@ import matplotlib.gridspec as gridspec
 import seaborn as sns
 import pandas as pd
 import numpy as np
+import os
 from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore")
 
-OUT = Path("${EEG_DATA_ROOT}/EEGBenchmarks/artifacts/plots/summary")
+OUT = Path(os.path.expandvars("${EEG_DATA_ROOT}/EEGBenchmarks/artifacts/plots/summary"))
 OUT.mkdir(parents=True, exist_ok=True)
 
 sns.set_theme(style="whitegrid", font_scale=1.1)

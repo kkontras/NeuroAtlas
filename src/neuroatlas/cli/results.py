@@ -1,8 +1,8 @@
-"""``neuroatlas results <benchmark>`` and ``neuroatlas leaderboard``.
+"""``neuroatlas results <benchmark>``.
 
-Both print one schema in every format: a missing number is n/a in a table
-and null in JSON, every JSON row names its benchmark (and metric), and the
-lines a table prints under a row are its ``note``.
+One schema in every format: a missing number is n/a in a table and null in
+JSON, every JSON row names its benchmark and metric, and the lines a table
+prints under a row are its ``note``.
 """
 from __future__ import annotations
 
@@ -85,9 +85,12 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         raise UsageError("--all-metrics compares every metric with the paper's, so it needs "
                          "--reference; without it the table already shows every metric")
     bench = catalog.load(args.benchmark)
+    left_out: List[str] = []
     summaries, dropped = res.benchmark_summary(bench.name, args.paths or None, args.output_root,
-                                               variant=args.variant)
+                                               variant=args.variant, left_out=left_out)
     m = bench.metrics
+    left_out_line = (f"not shown: results of {', '.join(left_out)}, which the {bench.name} "
+                     f"benchmark leaves out (`neuroatlas show {bench.name}`)") if left_out else None
     if not summaries:
         where = ", ".join(args.paths) if args.paths else str(
             (args.output_root or res._paths.output_dir()) / bench.name)
@@ -95,7 +98,7 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         again = f"neuroatlas run {bench.name} ..." + (
             f" --variant {args.variant}" if args.variant and args.variant != "default" else "")
         raise SystemExit(f"error: no results for {bench.name}{which} in {where}. "
-                         f"Run `{again}` first.")
+                         f"Run `{again}` first." + (f"\n{left_out_line}" if left_out_line else ""))
     # the variant column: always in machine formats, in the table once a
     # variant other than the default has results
     show_variant = any(s.variant != res.DEFAULT_VARIANT for s in summaries)
@@ -150,8 +153,8 @@ def results_main(argv: Optional[List[str]] = None) -> None:
              *([] if has_dummy else ["normalized"]), "failures", "errors"]
     if args.format == "table":
         print(f"{bench.name}" + (f" ({args.variant} variant)" if args.variant else "")
-              + f": {m.headline}{direction}, mean ± std over the folds that "
-              f"succeeded; folds = succeeded/protocol"
+              + f": {m.headline}{direction}, mean ± std (population, as in the paper) "
+              f"over the folds that succeeded; folds = succeeded/protocol"
               + ("; normalized: 0 = dummy, 1 = perfect" if has_dummy else ""))
     render(rows, columns, args.format,
            notes if args.verbose or args.format != "table" else None, extra=extra)
@@ -161,90 +164,11 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         if dropped:
             print(f"{dropped} result(s) recorded more than once (same dataset, variant, model, "
                   f"fold and task); counted the newest copy of each")
+        if left_out_line:
+            print(left_out_line)
         if failed and not args.verbose:
             print(f"{failed} row(s) have failed folds; -v says why")
         if short:
             print(f"{short} row(s) ran on fewer folds than the protocol has (e.g. --debug): "
                   f"their mean is not comparable with a full run")
 
-
-def build_board_parser() -> Parser:
-    p = Parser(
-        prog="neuroatlas leaderboard",
-        description="Rank models within each dataset, average the ranks within a benchmark, "
-                    "then across benchmarks. A model missing from some dataset of a suite is "
-                    "listed, not ranked; a result on fewer folds than the protocol has is "
-                    "ranked and marked. Only the default variant's results are ranked, "
-                    "unless --variant names another.")
-    p.add_argument("paths", nargs="*", help="results.json files, globs or folders. Default: "
-                                            "everything under the output root.")
-    p.add_argument("--suite", choices=["single", "full"], default="full",
-                   help="Rank on every dataset of each benchmark (full, the paper's "
-                        "leaderboard; the default) or on its one quick dataset (single).")
-    p.add_argument("--benchmarks", default=None, help="Comma list; default every benchmark.")
-    p.add_argument("--variant", default="default",
-                   help="Rank this variant's results (default: the default variant, the "
-                        "paper's protocol). Another variant ranks the benchmarks that have it.")
-    p.add_argument("--output-root", type=Path, default=None,
-                   help="The results root to read (default: the configured output root).")
-    p.add_argument("-v", "--verbose", action="store_true", help="Add the per-benchmark ranks.")
-    add_format_arg(p)
-    return p
-
-
-def leaderboard_main(argv: Optional[List[str]] = None) -> None:
-    from neuroatlas import catalog, results as res
-
-    args = build_board_parser().parse_args(argv)
-    names = [b.strip() for b in args.benchmarks.split(",") if b.strip()] if args.benchmarks else None
-    for name in names or []:
-        catalog.load(name)                         # an unknown name: exit 2 with a suggestion
-    details: Dict = {}
-    rows, per_bench = res.leaderboard(names, args.suite, args.paths or None, args.output_root,
-                                      details=details, variant=args.variant)
-    if not rows:
-        if args.variant != "default":
-            raise SystemExit(f"error: no {args.variant} results to rank. Run a benchmark with "
-                             f"--variant {args.variant} first.")
-        raise SystemExit("error: no results to rank. Run a benchmark first.")
-    if not per_bench:
-        lines = [f"error: nothing to rank: no benchmark has a result on every dataset of its "
-                 f"{args.suite} suite."]
-        for bench, gaps in details.get("incomplete", {}).items():
-            total = len(catalog.load(bench).suite(args.suite))
-            lines.append(f"  {bench}: no result yet on {len(gaps)} of {total} datasets "
-                         f"({', '.join(gaps)})")
-        if args.suite == "full":
-            lines.append("`neuroatlas leaderboard --suite single` ranks on each benchmark's "
-                         "quick dataset; `neuroatlas results <benchmark>` shows what there is.")
-        raise SystemExit("\n".join(lines))
-
-    table, notes = [], {}
-    for i, r in enumerate(rows):
-        row = {"model": r.model, "mean_rank": r.mean_rank, "normalized": r.normalized,
-               "n_benchmarks": r.n_benchmarks, "suite": args.suite, "variant": args.variant,
-               "benchmarks": [b for b in per_bench if r.model in per_bench[b]],
-               "missing": r.missing, "partial_folds": r.partial,
-               "ranks": {b: per_bench[b].get(r.model) for b in per_bench}}
-        for b in per_bench:
-            row[b] = per_bench[b].get(r.model)
-        table.append(row)
-        lines = []
-        if r.missing:
-            lines.append(f"not ranked: missing from {', '.join(r.missing)}")
-        if r.partial:
-            lines.append(f"ranked on fewer folds than the protocol: {', '.join(r.partial)}")
-        if lines:
-            notes[i] = lines
-    if args.format == "table":
-        print(f"global ranking ({args.suite} suite over {', '.join(per_bench)}"
-              + (f"; {args.variant} variant" if args.variant != "default" else "")
-              + "); mean_rank 1 = best everywhere")
-    render(table, ["model", "mean_rank", "normalized", "n_benchmarks",
-                   *(per_bench if args.verbose else [])],
-           args.format, notes, extra=["suite", "variant", "benchmarks", "missing",
-                                      "partial_folds", "ranks"])
-    skipped = {b: g for b, g in details.get("incomplete", {}).items()}
-    if args.format == "table" and skipped:
-        print(f"not ranked (a {args.suite}-suite dataset has no result yet): "
-              + "; ".join(f"{b} ({', '.join(g)})" for b, g in skipped.items()))

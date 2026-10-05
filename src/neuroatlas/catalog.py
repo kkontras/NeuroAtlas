@@ -4,10 +4,12 @@ A benchmark names a protocol the paper ran -- which datasets, which task,
 which ``embed`` and ``probe`` arguments, how it is scored -- and expands into
 the exact verb invocations that run it. Each invocation has the same
 arguments as a line of ``run/default_runs.sh`` (which spells the verb
-``python -m neuroatlas.entrypoints.<verb> --models all``; `neuroatlas <verb>`
-runs the same code); the catalog adds no protocol of its own, it gives the
-paper's a name you can type. ``tests/test_benchmark_catalog.py`` holds the
-two to the same set of commands.
+``python -m neuroatlas.entrypoints.<verb> --models all``, or, for a benchmark
+that leaves model families out, ``--models all,-<family>,...``:
+:meth:`Benchmark.models_arg`; `neuroatlas <verb>` runs the same code); the
+catalog adds no protocol of its own, it gives the paper's a name you can
+type. ``tests/test_benchmark_catalog.py`` holds the two to the same set of
+commands, --models included.
 
     bench = load("sleep_stage")
     for step in bench.steps(suite="single"):
@@ -69,6 +71,13 @@ class Variant:
 
 
 @dataclass(frozen=True)
+class ModelExclusion:
+    """Model families a benchmark does not evaluate, and why."""
+    families: Tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
 class Step:
     """One verb invocation: ``neuroatlas <verb> <argv>``."""
     verb: str                        # prepare | embed | probe | hypnogram
@@ -116,6 +125,7 @@ class Benchmark:
     metrics: Metrics
     variants: Dict[str, Variant] = field(default_factory=dict)
     derived_from: Optional[str] = None
+    excluded_models: Tuple[ModelExclusion, ...] = ()
 
     # -- suites ---------------------------------------------------------------
     def suite(self, which: str = "full") -> List[DatasetEntry]:
@@ -154,6 +164,86 @@ class Benchmark:
 
     def variant_names(self) -> List[str]:
         return [DEFAULT_VARIANT, *self.variants]
+
+    # -- models ---------------------------------------------------------------
+    def excluded_families(self) -> Dict[str, str]:
+        """``{family: reason}`` for the model families this benchmark does not
+        evaluate: its ``excluded_models``, and those of the benchmark it is
+        derived from."""
+        out: Dict[str, str] = {}
+        if self.derived_from:
+            out.update(load(self.derived_from).excluded_families())
+        for exclusion in self.excluded_models:
+            out.update({f: exclusion.reason for f in exclusion.families})
+        return out
+
+    def select_models(self, expr) -> List[str]:
+        """The checkpoint ids *expr* (``-m``) selects for this benchmark:
+        ``selectors.resolve_models``, with the families the benchmark leaves
+        out dropped from an alias or a group, and refused (SelectionError, a
+        usage error) when named."""
+        from neuroatlas import selectors
+
+        excluded = self.excluded_families()
+        if excluded:
+            known = {s.model_family for s in selectors._registry()}
+            unknown = sorted(set(excluded) - known)
+            if unknown:
+                raise CatalogError(f"{self.name}: excluded_models names "
+                                   f"{', '.join(unknown)}, which no checkpoint has as its family")
+        try:
+            return selectors.resolve_models(expr, exclude=excluded,
+                                            scope=f"the {self.name} benchmark")
+        except selectors.NotInBenchmark as exc:
+            raise selectors.NotInBenchmark(
+                f"{exc}. `neuroatlas list models --benchmark {self.name}` lists the "
+                f"checkpoints it evaluates.") from None
+
+    def left_out(self, expr) -> List[str]:
+        """The checkpoint ids *expr* selects outside this benchmark that the
+        benchmark leaves out (an alias or a group taking an excluded family)."""
+        from neuroatlas import selectors
+
+        if not self.excluded_families():
+            return []
+        kept = set(self.select_models(expr))
+        return [i for i in selectors.resolve_models(expr) if i not in kept]
+
+    def left_out_note(self, expr) -> Optional[str]:
+        """The line that says which checkpoints of *expr* this benchmark left
+        out, and why; None when it left out none."""
+        from neuroatlas import selectors
+
+        ids = self.left_out(expr)
+        if not ids:
+            return None
+        excluded = self.excluded_families()
+        by_id = {s.identifier: s for s in selectors._registry()}
+        why: Dict[str, List[str]] = {}
+        for i in ids:
+            family = by_id[i].model_family
+            why.setdefault(excluded[family], [])
+            if family not in why[excluded[family]]:
+                why[excluded[family]].append(family)
+        reasons = "; ".join(f"{', '.join(fams)}: {reason}" for reason, fams in why.items())
+        return (f"left out, not part of the {self.name} benchmark ({reasons}): "
+                f"{', '.join(ids)}")
+
+    def models_arg(self, expr: str = "all") -> str:
+        """*expr* as the verbs' ``--models`` must spell it for this benchmark:
+        the verbs know no benchmark, so each left-out family that *expr*
+        would otherwise select is removed by name (``all`` on epilepsy:
+        ``all,-sleep_transformer,-sleepyco,-core_sleep``). Raises as
+        :meth:`select_models` does."""
+        from neuroatlas import selectors
+
+        self.select_models(expr)
+        excluded = self.excluded_families()
+        if not excluded:
+            return expr
+        by_id = {s.identifier: s for s in selectors._registry()}
+        taken = {by_id[i].model_family for i in selectors.resolve_models(expr)}
+        return ",".join([expr, *(f"-{f}" for f in excluded if f in taken)])
 
     # -- expansion ------------------------------------------------------------
     def embed_args(self, entry: DatasetEntry, variant: str = DEFAULT_VARIANT) -> Tuple[str, ...]:
@@ -295,6 +385,15 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
                                  tuple(subset) if subset is not None else None)
     planned = tuple({"name": str(p["name"]), "reason": str(p.get("reason", ""))}
                     for p in (data.get("planned") or []))
+    exclusions = []
+    for item in data.get("excluded_models") or []:
+        families = item.get("families") if isinstance(item, dict) else None
+        reason = " ".join(str(item.get("reason") or "").split()) if isinstance(item, dict) else ""
+        if not (isinstance(families, list) and families
+                and all(isinstance(f, str) for f in families) and reason):
+            raise CatalogError(f"{source}: an excluded_models entry is {{families: [family, ...], "
+                               f"reason: why}}, got {item!r}")
+        exclusions.append(ModelExclusion(tuple(families), reason))
     return Benchmark(
         name=data["name"], title=data["title"], domain=data["domain"],
         question=" ".join(str(data["question"]).split()), paper=data.get("paper"),
@@ -303,6 +402,7 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
         probe=_args(data.get("probe"), f"{source} probe"),
         datasets=tuple(entries), single=single, planned=planned, metrics=metrics,
         variants=variants, derived_from=data.get("derived_from"),
+        excluded_models=tuple(exclusions),
     )
 
 

@@ -1,8 +1,8 @@
 # Running NeuroAtlas with the `neuroatlas` command
 
-From an empty machine to a leaderboard: install, set the tool up once, get
-datasets and model weights, check that everything fits, run a benchmark here
-or on a cluster, and read the scores. Every flag is in [cli.md](cli.md),
+From an empty machine to a benchmark's scores: install, set the tool up
+once, get datasets and model weights, check that everything fits, run a
+benchmark here or on a cluster, and read the scores. Every flag is in [cli.md](cli.md),
 which is generated from the code.
 
 Every run answers one question: **benchmark × models × datasets**.
@@ -17,7 +17,7 @@ Every run answers one question: **benchmark × models × datasets**.
 The steps are always the same, and each command says what is missing and
 which command fixes it:
 
-    config init → list → data → models → check → run  (or submit → status) → results / leaderboard
+    config init → list → data → models → check → run  (or submit → status) → results
 
 ## Words you will meet
 
@@ -27,7 +27,7 @@ One word per idea, the same in the tables, the JSON and the Python API.
 |---|---|
 | **benchmark** | One protocol of the paper: what is predicted, on which datasets, how it is scored. 12 of them (`list benchmarks`). |
 | **dataset** | One corpus, by its name (`sleep_edf_expanded`, `chbmit`). The paper's evaluation has 43 (`list datasets`). The column is `dataset` everywhere. |
-| **suite** | Which of a benchmark's datasets a command uses: `single` (its one quick dataset) or `full` (all of them). `run` and `check` default to `single`; `submit`, `show` and `leaderboard` to `full`. |
+| **suite** | Which of a benchmark's datasets a command uses: `single` (its one quick dataset) or `full` (all of them). `run` and `check` default to `single`; `submit` and `show` to `full`. |
 | **variant** | Another cell of the same benchmark (`--variant per_patch`); `show` lists them. Its results are its own rows in `results`, never merged with the default's. |
 | **checkpoint** | One set of weights, e.g. `biot_pretrained`. "Model" means a checkpoint; the column is `model` (`checkpoint` in `list models` and `models status`). |
 | **family** | The architecture behind checkpoints, e.g. `reve`. In `-m` a family means its trained checkpoints, not its untrained baseline. |
@@ -171,11 +171,35 @@ the benchmark expands to. They are equivalent to the lines of
 `run/default_runs.sh`, the record of what the paper ran, spelled
 `neuroatlas <verb>` instead of `python -m neuroatlas.entrypoints.<verb>`.
 Without `-m` they name
-`--models all`, every ready checkpoint (44).
+`--models all`, every ready checkpoint (44) -- on epilepsy
+`--models all,-sleep_transformer,-sleepyco,-core_sleep` (38), see below.
 
 **Selecting models** (`-m`, the same in `run`, `check`, `submit`, `list
 models` and `models`): an alias or group, a family, a checkpoint id, or a
-comma list of them. Unknown and planned names are refused (exit 2).
+comma list of them, read left to right; `-name` removes what the terms
+before it selected (`-m all_fm,-reve`; a family removes every checkpoint of
+it). Unknown and planned names are refused (exit 2).
+
+**Models a benchmark leaves out.** A benchmark can declare model families
+it does not evaluate (`excluded_models` in its catalog file; `show` and
+`list benchmarks` print them). Epilepsy leaves out the sleep-staging
+sequence models SleepTransformer, SleePyCo and CoRe-Sleep (families
+`sleep_transformer`, `sleepyco`, `core_sleep`, their `_seq1` checkpoints
+included): their wrappers take only sequences of 30 s epochs and refuse the
+10 s windows. On epilepsy `run`, `check`, `submit`, `show` and the Python
+API leave them out of `-m all`, `all_supervised` and every other alias or
+group, and say so under the table; naming one, as a family or a checkpoint
+id, is refused (exit 2):
+
+```
+$ neuroatlas run epilepsy -m sleepyco_shhs_fold0 --dry-run
+error: sleepyco_shhs_fold0 is not part of the epilepsy benchmark (sleepyco: sleep-staging sequence models, built on sequences of 30 s sleep epochs; their wrappers refuse the benchmark's 10 s windows). `neuroatlas list models --benchmark epilepsy` lists the checkpoints it evaluates.
+```
+
+`neuroatlas list models --benchmark epilepsy` lists the 38 it evaluates;
+`results epilepsy` does not summarise results of the three (a line names
+the checkpoints it left out). The verbs (`embed`, `probe`) know no benchmark: they run
+what `--models` names, which is why `show` spells the scope out.
 
 ## 4. Get the datasets
 
@@ -304,7 +328,7 @@ neuroatlas models download all_fm
 | state | meaning |
 |---|---|
 | `found` | the weights are on disk |
-| `auto` | not here; `models download` fetches them (GitHub release, Hugging Face, Google Drive, a Docker image); a half-finished download says `incomplete: missing ...` in its note |
+| `auto` | not here; `models download` fetches them (GitHub release, files of a GitHub repository at a pinned commit, Hugging Face, Google Drive, a Docker image); a half-finished download says `incomplete: missing ...` in its note |
 | `hub` | a Hugging Face model read from the hub cache; not cached yet |
 | `hub (cached)` | ... already in the cache |
 | `manual` | fetch by hand; the note says from where and where to put it |
@@ -322,6 +346,13 @@ weights. Some notes worth knowing:
 - Seizure-Transformer: pulled out of the authors' Docker image without
   Docker (it streams up to 3.4 GB of image layers and keeps the 168 MB
   model).
+- DeepSOZ-HEM: its model code and checkpoint are GPL-3.0, so the package
+  does not carry them. `models download deepsoz_hem_pretrained` fetches
+  `baselines.py`, `deepsoz_fold4.pth_4.tar` and upstream's `LICENSE` from
+  github.com/amruth-sn/deepsoz-hem at commit a7c13bd (5.5 MB), each checked
+  against its recorded SHA-256, into `<models root>/foundation/deepsoz_hem/`;
+  the wrapper checks the code and checkpoint again and imports that
+  `baselines.py`. The status note names the licence in every state.
 - CoRe-Sleep and SleepTransformer: release assets of a private repository;
   without a GitHub token that can read it, the download fails.
 
@@ -629,14 +660,13 @@ policy.
 ```bash
 neuroatlas results sleep_stage
 neuroatlas results sleep_stage 'runs/old/**/results.json' --format md
-neuroatlas leaderboard --suite single
 ```
 
 ```
 $ neuroatlas results sleep_stage
-sleep_stage: balanced_accuracy, mean ± std over the folds that succeeded; folds = succeeded/protocol; normalized: 0 = dummy, 1 = perfect
+sleep_stage: balanced_accuracy, mean ± std (population, as in the paper) over the folds that succeeded; folds = succeeded/protocol; normalized: 0 = dummy, 1 = perfect
 dataset             model            mean   std    folds  normalized  cohen_kappa  macro_f1
-sleep_edf_expanded  biot_pretrained  0.656  0.017  5/5    0.571       0.749        0.661
+sleep_edf_expanded  biot_pretrained  0.657  0.014  5/5    0.571       0.749        0.661
 ```
 
 `results` reads every `results.json` under `<output root>/<benchmark>/`
@@ -647,7 +677,8 @@ folders and quoted globs you name. One row per dataset × variant × model; a
 `--variant NAME` shows that variant's rows only:
 
 - `mean`, `std`: the headline metric over the folds that succeeded. `std`
-  is the sample standard deviation (n−1); with one fold it is n/a.
+  is the population standard deviation (n, numpy's default), the convention
+  of every ± in the paper; with one fold it is n/a.
 - `folds`: succeeded / the protocol's folds, e.g. `5/5`, or `1/5` after
   `--debug`. A footer says when a mean covers fewer folds than the protocol
   and is not comparable with a full run.
@@ -666,24 +697,12 @@ model and fold are two results, not a duplicate. The same embeddings probed
 on two machines can differ by about 1e-3 (BIOT × Sleep-EDF fold 0: 0.6624
 and 0.6619), so the newest copy is not always the same number.
 
-`leaderboard` ranks models within each dataset (1 = best, ties share the
-mean rank), averages the ranks within a benchmark, then across benchmarks
-(`mean_rank`), and averages the normalized scores the same way. A model is
-ranked on a benchmark only if it has a result on every dataset of the suite;
-otherwise it is listed as not ranked, with what it misses. A result on
-fewer folds than the protocol is ranked and marked. The default suite is
-`full`; with nothing complete, `leaderboard` exits 1, names the missing
-datasets, and suggests `--suite single`. `-v` adds the per-benchmark ranks;
-`--benchmarks a,b` restricts it. It ranks the default variant's results;
-`--variant per_patch` ranks that variant instead, on the benchmarks that
-have it.
-
 `results --reference` would put the paper's numbers beside yours, from
 `configs/reference/<benchmark>.csv`; no benchmark ships that table yet, so
 it exits 1 saying so.
 
-Exit status: 0 with something to show; 1 when there are no results (or,
-for `leaderboard`, nothing complete to rank); 2 for a usage error.
+Exit status: 0 with something to show; 1 when there are no results; 2 for
+a usage error.
 
 ## 10. From Python
 
@@ -697,29 +716,25 @@ api.plan("sleep_stage", "all_fm", datasets="full")      # = run --dry-run
 api.check("sleep_stage", "biot_pretrained")             # = check
 api.run_benchmark("sleep_stage", "biot_pretrained", debug=True)
 api.results("sleep_stage")                              # = results
-api.leaderboard(suite="single")["global"]               # = leaderboard --suite single
 ```
 
-Each returns a pandas DataFrame (`leaderboard`: a dict of the global table
-and the per-benchmark ranks). Importing `neuroatlas.api` applies the same
+Each returns a pandas DataFrame. Importing `neuroatlas.api` applies the same
 settings file and does not import torch. It exports the roots and
 `MNE_DATA` from that file; a variable you set afterwards in the same
 session (`os.environ["MNE_DATA"] = ...`) is yours, and wins as it would on
 the command line.
 
 The columns are those of the command's `--format json` (`dataset`,
-`model`, `not_applicable`, `n_benchmarks`, `note`, ...): `models()` has
+`model`, `not_applicable`, `note`, ...): `models()` has
 `models status -v`'s `checkpoint`, `source`, `state`, `path` and `note`,
 and `data_status()` has `data status`'s fields, `download` and `map`
 (`yes`/`no`) among them.
-Missing numbers are `None` (NaN in a float column). `results()` and
-`leaderboard()` take `variant=` as the commands take `--variant`.
+Missing numbers are `None` (NaN in a float column). `results()` takes
+`variant=` as the command takes `--variant`.
 
 `run_benchmark(...)` returns the results of this run's datasets, models and
 variant only, and takes `debug=`, `limit_batches=`, `cache_root=`,
-`output_root=` and `online=` (not `num_workers`). `api.leaderboard()`
-defaults to `suite="full"`, like the command, so with partial results ask
-for `suite="single"`.
+`output_root=` and `online=` (not `num_workers`).
 
 The offline rule holds in Python too: no API function downloads. `check()`
 and `run_benchmark()` run with downloads switched off
@@ -741,7 +756,7 @@ Everything the tool writes, by default under `$NEUROATLAS_HOME`
 | raw datasets | `<data root>/...`, one folder each; `data status -v` shows each. Zenodo cohorts under `<data root>/<dataset>/`. |
 | MOABB raw data | the MOABB folder (`config show`; [MOABB](#moabb-the-14-bci-datasets)): one subfolder per dataset under moabb 1.2.0 (e.g. `MNE-bnci-data/...`), `NEMAR/<id>/` under moabb 1.6+ |
 | prepared files | `<cache root>/prepared/<Name>/...` (optional: epilepsy fast paths, BCI pickles) |
-| weights | `<models root>/foundation/...`, `<models root>/shhs/...` (CoRe-Sleep, SleepTransformer, SleePyCo; the STFT normalisation CoRe-Sleep and SleepTransformer read ships with the package), `<models root>/supervised/...` (Seizure-Transformer) |
+| weights | `<models root>/foundation/...` (DeepSOZ-HEM's code and checkpoint in `foundation/deepsoz_hem/`), `<models root>/shhs/...` (CoRe-Sleep, SleepTransformer, SleePyCo; the STFT normalisation CoRe-Sleep and SleepTransformer read ships with the package), `<models root>/supervised/...` (Seizure-Transformer) |
 | hub models | Chronos, MOMENT, Moirai: `<models root>/foundation/huggingface_cache`; the other Hugging Face models (CBraMod, a hub-cached REVE): the Hugging Face cache, `$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `~/.cache/huggingface/hub` |
 | embeddings | `<cache root>/<dataset>/<checkpoint>/all/<key>/` (`features.npy`, `labels.npy`, `items.json`, `metadata.json`); per fold and split for some cohorts ([What is reused](#what-is-reused)) |
 | `--limit-batches` | `<cache root>/_limited/...` and `<output root>/_limited/<benchmark>/<dataset>/` |
@@ -768,8 +783,6 @@ What does not work, or not as the rest of this guide would suggest, as of
 - Moirai cannot share the main environment (`requirements-tsfm.txt`).
 - CoRe-Sleep and SleepTransformer weights are release assets of a private
   repository: `models download` needs a GitHub token that can read it.
-- DeepSOZ's vendored code and checkpoint are GPL-3.0 inside an MIT package;
-  whether they can stay is not decided.
 
 **Data**
 
@@ -794,8 +807,10 @@ What does not work, or not as the rest of this guide would suggest, as of
   the published split came from is unknown).
 - CoRe-Sleep runs the paper's path (an all-zero EOG through the bimodal
   model); its EEG-only path is not offered.
-- SleePyCo, CoRe-Sleep and SleepTransformer take only 30 s epochs, so they
-  error on the 10 s epilepsy windows the epilepsy maps pass them.
+- SleePyCo, CoRe-Sleep and SleepTransformer are not part of the epilepsy
+  benchmark (they take only 30 s epochs). The paper's epilepsy results do
+  show CoRe-Sleep and SleepTransformer (Figures 2b and 8, Tables 3 and 4,
+  App. D.1.3); those cells cannot be rerun with the command.
 - The sleep channel maps have no entry for EEGNetv4, DeepSOZ and
   Seizure-Transformer (some lack more, e.g. HMC's): those pairs are `invalid`.
 - The epilepsy cache key leaves out `normalize`, `label_mode` and

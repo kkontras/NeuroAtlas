@@ -26,8 +26,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = build_parser().parse_args(argv)
     bench = catalog.load(args.benchmark)
     steps = bench.steps(args.dataset, args.variant, prepare=True)
+    # The same arguments as run/default_runs.sh, which writes each verb as
+    # `python -m neuroatlas.entrypoints.<verb> --models all`; without -m the
+    # selection is spelled out here the same way rather than left implicit.
+    # The verbs know no benchmark: a family the benchmark leaves out is
+    # removed by name (`all,-sleepyco`), and naming one is refused before
+    # anything is printed.
+    models = bench.models_arg(args.models or "all") if not bench.derived_from else None
 
-    wrap = lambda text, indent="  ": textwrap.fill(text, 78, initial_indent=indent,
+    wrap =lambda text, indent="  ": textwrap.fill(text, 78, initial_indent=indent,
                                                    subsequent_indent=indent)
     m = bench.metrics
     print(f"{bench.name} -- {bench.title}  ({bench.domain}{', ' + bench.paper if bench.paper else ''})")
@@ -51,11 +58,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         print("variants    default (the headline protocol)")
         for v in bench.variants.values():
             print(f"  {v.name}: {v.description}")
+    for exclusion in bench.excluded_models:
+        print(f"left out    {', '.join(exclusion.families)} (every checkpoint): "
+              f"{exclusion.reason}")
     print()
-    # The same arguments as run/default_runs.sh, which writes each verb as
-    # `python -m neuroatlas.entrypoints.<verb> --models all`; without -m the
-    # selection is spelled out here the same way rather than left implicit.
-    models = args.models or "all"
     print(f"commands ({args.dataset} suite, {args.variant} variant; the arguments of "
           f"run/default_runs.sh):")
     for step in steps:
@@ -73,9 +79,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not args.models and not bench.derived_from:
         from neuroatlas import selectors
 
-        n = len(selectors.resolve_models("all"))
-        print(f"\n  No -m given: `--models all` is every ready checkpoint ({n}). Pass "
-              f"-m to print a selection instead, e.g. -m all_fm (`neuroatlas list aliases`).")
+        n = len(bench.select_models("all"))
+        if bench.excluded_families():
+            print(f"\n  No -m given: `--models {models}` is every ready checkpoint the "
+                  f"benchmark evaluates ({n} of {len(selectors.resolve_models('all'))}). "
+                  f"Pass -m to print a selection instead, e.g. -m all_fm "
+                  f"(`neuroatlas list aliases`).")
+        else:
+            print(f"\n  No -m given: `--models all` is every ready checkpoint ({n}). Pass "
+                  f"-m to print a selection instead, e.g. -m all_fm (`neuroatlas list aliases`).")
 
 
 def _hypnogram_command(step, bench) -> str:

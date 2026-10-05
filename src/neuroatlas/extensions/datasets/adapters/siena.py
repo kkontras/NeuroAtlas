@@ -92,6 +92,63 @@ def _patient_splits_generic(
 
 
 # ---------------------------------------------------------------------------
+# The paper's actual folds (split_mode="paper_recordings")
+# ---------------------------------------------------------------------------
+
+#: ``patient`` -- the default, and what the paper states (App. B.1, C.1): patient-disjoint folds.
+#: ``paper_recordings`` -- the folds the published Siena numbers were actually drawn on, frozen in
+#: ``configs/cohorts/siena/folds_paper_recordings.json``. The paper's probe saw subject id "raw"
+#: for every window, fell back to grouping by recording, and split 40 recordings, so most test
+#: patients also have recordings in train or val. Offered only to reproduce the published numbers.
+SPLIT_MODES = ("patient", "paper_recordings")
+
+
+def paper_recordings_manifest_path() -> Path:
+    from neuroatlas._paths import configs_dir
+
+    return configs_dir("cohorts", "siena", "folds_paper_recordings.json")
+
+
+def _paper_recording_splits(
+    recording_ids: Sequence[str],
+    fold: int,
+    n_folds: int,
+    manifest_path: Optional[Path] = None,
+) -> Tuple[List[int], List[int], List[int], Dict[str, Any]]:
+    """Recording-index splits of the paper's run, from the frozen manifest.
+
+    Recordings the manifest does not list (the BIDS release has one the paper's
+    embeddings lack) get no role, so they are in no split. A manifest recording
+    missing from *recording_ids* is an error: the folds could not be the paper's.
+    """
+    import json
+
+    path = Path(manifest_path) if manifest_path is not None else paper_recordings_manifest_path()
+    manifest = json.loads(path.read_text())
+    if int(manifest["n_folds"]) != int(n_folds):
+        raise ValueError(
+            f"split_mode=paper_recordings is the paper's {manifest['n_folds']}-fold split; "
+            f"n_folds={n_folds} has no paper counterpart")
+    folds = manifest["folds"][str(int(fold) % int(n_folds))]
+    position = {str(r): i for i, r in enumerate(recording_ids)}
+    listed = [r for s in ("train", "val", "test") for r in folds[s]]
+    missing = sorted(r for r in listed if r not in position)
+    if missing:
+        raise FileNotFoundError(
+            f"split_mode=paper_recordings: {len(missing)} recording(s) of the paper's folds are not "
+            f"in this BIDS root (first: {missing[0]}); the paper's split cannot be rebuilt here")
+    excluded = sorted(set(position) - set(listed))
+    splits = [sorted(position[r] for r in folds[s]) for s in ("train", "val", "test")]
+    # Under keys the embedding caches already treat as fold bookkeeping
+    # (epilepsy/_global_cache._FOLD_KEYS): recorded with every result, never
+    # part of the global cache key -- the split does not change which windows exist.
+    info = {"fold_source": str(path),
+            "fold_stats": {"split_mode": "paper_recordings", "excluded_recordings": excluded,
+                           "test_patients": folds.get("test_patients")}}
+    return splits[0], splits[1], splits[2], info
+
+
+# ---------------------------------------------------------------------------
 # DataModule
 # ---------------------------------------------------------------------------
 
@@ -114,6 +171,9 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         normalize: ``"none"`` or ``"per_window_zscore"``.
         balance: ``"weighted_sampler"`` or ``"none"``.
         overlap_threshold: Seizure fraction threshold for binary labels.
+        split_mode: ``"patient"`` (default; patient-disjoint folds, as the
+            paper states) or ``"paper_recordings"`` (the recording-level folds
+            the published numbers were drawn on; see ``SPLIT_MODES``).
     """
 
     def __init__(
@@ -132,8 +192,11 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         balance: str = "weighted_sampler",
         overlap_threshold: float = 0.0,
         signal_kind: str = "raw",
+        split_mode: str = "patient",
         **kwargs,
     ) -> None:
+        if split_mode not in SPLIT_MODES:
+            raise ValueError(f"split_mode must be one of {SPLIT_MODES}, got {split_mode!r}")
         metadata = {
             "canonical_label_space": ["bckg", "seiz"],
             "epoch_seconds": window_s,
@@ -183,11 +246,18 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         self._DatasetCls = SienaBIDSDataset
         self._collate_fn = _collate_siena
 
-        self._train_recs, self._val_recs, self._test_recs = _patient_splits_generic(
-            self._bids_index.subject_ids_per_recording(),
-            self._bids_index.seizure_presence_per_recording(),
-            fold, n_folds,
-        )
+        self._split_mode = split_mode
+        if split_mode == "paper_recordings":
+            (self._train_recs, self._val_recs, self._test_recs,
+             fold_info) = _paper_recording_splits(
+                [r.recording_id for r in self._bids_index.recordings], fold, n_folds)
+            self.metadata.update(fold_info)
+        else:
+            self._train_recs, self._val_recs, self._test_recs = _patient_splits_generic(
+                self._bids_index.subject_ids_per_recording(),
+                self._bids_index.seizure_presence_per_recording(),
+                fold, n_folds,
+            )
 
         self._datasets: Dict[str, Any] = {}
 

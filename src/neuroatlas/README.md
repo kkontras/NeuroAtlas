@@ -20,7 +20,10 @@ extensions that plug into it, and the original verbs.
 - `extensions/`
   Everything cohort- or model-specific, and the default place to add new
   benchmark-facing functionality. Model wrappers under
-  `extensions/models/backbones/` (vendored upstream code in `third_party/`),
+  `extensions/models/backbones/` (vendored upstream code in `third_party/`;
+  DeepSOZ-HEM's GPL-3.0 code and checkpoint are fetched into the models root
+  by `models download`, not vendored -- `_checkpoint_download.GITHUB_COMMIT_FILES`
+  pins them),
   dataset adapters under `extensions/datasets/adapters/`, low-level dataset
   I/O under `extensions/datasets/dataio/` (`moabb_vendored/` holds the two
   MOABB readers moabb 1.2.0 lacks, Dreyer2023 and Kim2025BetaRange, under
@@ -46,7 +49,12 @@ what is currently exposed.
 ## Adding something
 
 1. Add or update the cohort dossier under `src/neuroatlas/configs/cohorts/<slug>/`.
-2. Add or reuse the implementation behind it under `extensions/`.
+2. Add or reuse the implementation behind it under `extensions/`. A new
+   model family joins `-m all` on every benchmark; where it should not run,
+   list it under that benchmark's `excluded_models`
+   (`configs/benchmarks/<name>.yaml`, as epilepsy does for the sleep-staging
+   sequence models), and give that benchmark's lines of `run/default_runs.sh`
+   the same `--models` (`neuroatlas show <name>` prints it).
 3. Update the root README and `docs/user_guide.md` if the public surface
    changed, and regenerate `docs/cli.md` if a parser did
    (`python -m neuroatlas.cli._gendocs`; `--check` says whether it is current).

@@ -46,10 +46,23 @@ Filter scope:
     preprocessor. The wrapper does NOT re-filter; the dataset config must
     supply signals already band-limited to ~1-30 Hz. The amplitude clip is
     treated as a model-specific transform and is applied here.
+
+Upstream code and weights (GPL-3.0, not shipped):
+    The model class (``txlstm_szpool`` in upstream's ``baselines.py``) and
+    the checkpoint come from amruth-sn/deepsoz-hem at commit a7c13bd, which
+    is GPL-3.0; neuroatlas is MIT, so neither is part of the package.
+    ``neuroatlas models download deepsoz_hem_pretrained`` fetches them into
+    ``<models root>/foundation/deepsoz_hem/`` (see
+    ``_checkpoint_download.GITHUB_COMMIT_FILES``); this wrapper checks both
+    against their recorded SHA-256, imports ``baselines.py`` from that file
+    by path, and loads the checkpoint from beside it. Offline, with the
+    folder incomplete, it refuses and names the download command.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -65,10 +78,16 @@ from ._preproc import (
     resample_poly_with_fallback,
     unit_to_uv,
 )
-from .third_party.deepsoz_hem.baselines import txlstm_szpool
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 
 logger = logging.getLogger(__name__)
+
+# The files of the downloaded folder the wrapper reads (it also holds LICENSE).
+_CODE_FILE = "baselines.py"
+_CHECKPOINT_FILE = "deepsoz_fold4.pth_4.tar"
+# The name the downloaded baselines.py is imported under: outside the
+# neuroatlas namespace, since it is not part of the package.
+_UPSTREAM_MODULE = "deepsoz_hem_upstream_baselines"
 
 
 _TARGET_SFREQ = 256.0
@@ -173,13 +192,32 @@ def _build_channel_perm(
     return [name_to_idx.get(n) for n in _PRETRAIN_CHANNEL_ORDER], norm
 
 
+def _upstream_folder(spec: CheckpointSpec) -> Path:
+    """The downloaded folder, its code and checkpoint checked against the pin.
+
+    Fetches what it lacks when downloads are on; offline it raises naming
+    ``neuroatlas models download <identifier>``.
+    """
+    from ._checkpoint_download import check_commit_files, ensure_checkpoint
+
+    folder = ensure_checkpoint(spec.checkpoint_path, spec.source_type, spec.source_reference,
+                               identifier=spec.identifier)
+    check_commit_files(folder, spec.source_reference, (_CODE_FILE, _CHECKPOINT_FILE),
+                       spec.identifier)
+    return Path(folder)
+
+
+def _import_upstream(code: Path):
+    """Upstream's baselines.py, imported from the file itself (not the package)."""
+    module_spec = importlib.util.spec_from_file_location(_UPSTREAM_MODULE, code)
+    module = importlib.util.module_from_spec(module_spec)
+    # registered so the classes it defines resolve by name (pickling, inspect)
+    sys.modules[_UPSTREAM_MODULE] = module
+    module_spec.loader.exec_module(module)
+    return module
+
+
 def _load_checkpoint(path: Path, device: str) -> dict:
-    if not path.exists():
-        raise FileNotFoundError(
-            f"DeepSOZ-HEM checkpoint not found at {path}. The vendored "
-            "third_party/deepsoz_hem/deepsoz_fold4.pth_4.tar should ship with "
-            "the repo; restore it from upstream amruth-sn/deepsoz-hem if missing."
-        )
     return torch.load(str(path), map_location=device, weights_only=True)
 
 
@@ -209,14 +247,18 @@ class DeepSOZHEMBackbone(BenchmarkBackbone):
         self.target_sfreq = _TARGET_SFREQ
         self.target_len = int(round(_TARGET_SFREQ * self.epoch_seconds))
 
+        # Upstream's code and checkpoint, from the models root (GPL-3.0, not
+        # shipped; see the module docstring).
+        folder = _upstream_folder(spec)
+        upstream = _import_upstream(folder / _CODE_FILE)
         # Detector inside `txlstm_szpool` is built with `pretrained=None` —
         # we'll load the full state dict (detector+head) below.
-        self.model = txlstm_szpool(
+        self.model = upstream.txlstm_szpool(
             transformer_dropout=0.25, device=self.device,
             return_attn=False, pretrained=None,
             modelname="txlstm", pooltype="szpool",
         )
-        ckpt_path = Path(spec.checkpoint_path or "")
+        ckpt_path = folder / _CHECKPOINT_FILE
         state_dict = _load_checkpoint(ckpt_path, device="cpu")
         self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()
@@ -437,7 +479,8 @@ class DeepSOZHEMBackbone(BenchmarkBackbone):
             "wrapper_contract": "model_specific_transforms_only",
             "notes": [
                 "DeepSOZ-HEM (Shama et al. MICCAI 2023; SzCORE 2025 #4 hard-example-mining variant). "
-                "Vendored from amruth-sn/deepsoz-hem (GPL-3.0). Pretrained on TUSZ "
+                "Code and weights from amruth-sn/deepsoz-hem @ a7c13bd (GPL-3.0), fetched "
+                "into the models root, not shipped with neuroatlas. Pretrained on TUSZ "
                 "(171 patients, 10-fold) — fold 4 weights. "
                 "CHB-MIT 18-pair bipolar routes through _BIPOLAR_TO_PRETRAIN_SLOT (CZ "
                 "zero-padded); Bonn 1-channel fills FZ slot, 18 zero-padded. "

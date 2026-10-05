@@ -25,8 +25,8 @@ from typing import List, Optional
 from neuroatlas import _paths
 
 # source types ensure_checkpoint can fetch into a local path
-AUTO_SOURCES = {"github_release", "github_release_asset", "huggingface", "google_drive_zip",
-                "docker_image"}
+AUTO_SOURCES = {"github_release", "github_release_asset", "github_commit_files", "huggingface",
+                "google_drive_zip", "docker_image"}
 
 # families that load straight from the hub, with the cache each one uses
 _HUB_CACHE_FAMILIES = {"chronos", "moirai", "moment"}
@@ -199,6 +199,14 @@ def status(spec) -> ModelStatus:
     _weights_status(spec, st)
     if spec.identifier in _NOTES and not st.ready:
         st.notes.append(_NOTES[spec.identifier])
+    if spec.source_type == "github_commit_files":
+        # code and weights under a licence the package does not ship (DeepSOZ:
+        # GPL-3.0): named whatever the state, since what runs is that code
+        from neuroatlas.extensions.models.backbones._checkpoint_download import commit_files_note
+
+        note = commit_files_note(spec.source_reference)
+        if note:
+            st.notes.append(note)
     package = missing_package(spec.model_family)
     if package:
         st.weights, st.state = st.state, "package missing"

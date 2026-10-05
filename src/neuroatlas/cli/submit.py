@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from neuroatlas.cli import Parser
+from neuroatlas.cli import MODELS_HELP, Parser
 from neuroatlas.cli._table import add_format_arg, render
 
 # options whose value is a raw submit-file line: it may itself start with "-"
@@ -67,7 +67,7 @@ def build_submit_parser() -> argparse.ArgumentParser:
                     "dataset's channel map rules out, gets no job: it is listed as skipped "
                     "with the reason.")
     p.add_argument("benchmark")
-    p.add_argument("-m", "--models", required=True)
+    p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="full", metavar="single|full|SLUGS",
                    help="Default: full -- this is for the whole suite.")
     p.add_argument("--variant", default="default")
@@ -210,6 +210,11 @@ def submit_main(argv: Optional[List[str]] = None) -> None:
                       + (f" -- {s['detail']}" if s.get("detail") else ""))
     for bad in planned.get("invalid", []):
         print(f"  {bad['dataset']}: no jobs -- {bad['error']}")
+    from neuroatlas import catalog
+
+    left_out = catalog.load(args.benchmark).left_out_note(args.models)
+    if left_out:
+        print(f"  {left_out}")
     if capability and args.gpus:
         where = "requirement" if args.backend == "condor" else "hint (SLURM: not enforced)"
         print(f"  GPUs: compute capability >= {capability} ({how}); written as a {where}")

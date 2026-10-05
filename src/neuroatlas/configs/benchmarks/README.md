@@ -27,7 +27,12 @@ rules.
     single                          the one-dataset quick suite; one of `datasets`
     planned                         cohorts the paper names that nothing here runs yet,
                                     each {name, reason}
-    metrics.headline                the number a leaderboard ranks on
+    excluded_models                 model families the benchmark does not evaluate,
+                                    each {families: [...], reason}: an alias or group
+                                    leaves them out, naming one is refused (exit 2),
+                                    and `show` spells `--models all,-<family>,...`
+                                    for the verbs
+    metrics.headline                the number `results` summarises over folds
     metrics.higher_is_better        false for errors such as MAE (default true)
     metrics.dummy                   what a trivial predictor scores; a number,
                                     {slug: number}, or omitted when it depends on

@@ -1,10 +1,287 @@
 # NeuroAtlas
 
-A benchmark for evaluating EEG foundation models: **43 datasets** in the
-evaluation (`neuroatlas list datasets`), covering clinical EEG (epilepsy and
-sleep medicine), brain-computer interfaces, and a newly introduced
-**brain-age estimation** task. This repository is the benchmark harness: the
-`neuroatlas` command and its Python API.
+A benchmark for EEG foundation models across clinical EEG (epilepsy, sleep
+medicine, brain-age estimation) and brain-computer interfaces: 42 datasets
+(`neuroatlas list datasets` shows 43 entries, because DREAMER appears once
+per label), 44 model checkpoints, frozen-backbone probing with clinical
+metrics. This repository is the benchmark harness: the `neuroatlas` command
+and its Python API. Paper: [arXiv:2605.14698](https://arxiv.org/abs/2605.14698).
+
+- [Install](#install)
+- [The commands](#the-commands)
+- [Test it by hand](#test-it-by-hand): one pass through every command, with
+  the output to expect
+- [What is in the benchmark](#why-neuroatlas): domains, datasets, models,
+  tasks
+- [docs/user_guide.md](docs/user_guide.md): every step in detail, with real
+  output; [docs/cli.md](docs/cli.md): every command and flag (generated from
+  the code)
+
+## Install
+
+Python 3.10 or newer; 3.11 is what the paper used and what is tested.
+Install from a clone. The distribution is named `neuroatlas-bench` (a built
+wheel is `neuroatlas_bench-<version>-py3-none-any.whl`); the command and the
+import stay `neuroatlas`. It is not on PyPI yet. The PyPI name `neuroatlas`
+belongs to an unrelated project: do not install it. The GitHub repository
+is not public yet (2026-10-05); until it is, cloning needs access from the
+authors.
+
+```bash
+git clone https://github.com/kkontras/NeuroAtlas.git && cd NeuroAtlas
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip
+
+pip install torch torchvision torchaudio   # first; see the note below
+pip install -r requirements-fm.txt         # the paper's exact versions
+pip install -e ".[fm]"                     # the neuroatlas command
+pip check                                  # No broken requirements found.
+```
+
+In a fresh venv this took 4 min for torch, 2 min for `requirements-fm.txt`
+and seconds for the rest; the venv is 6.5 GB.
+
+**PyTorch.** `pip install torch` currently gives a CUDA 13 build (2.14.1+cu130
+on 2026-10-02), with kernels for GPUs of compute capability 7.5 and newer
+only (Turing onwards). `nvidia-smi` must report CUDA 13.0 or higher. For an
+older GPU or driver, install a CUDA 12 build from pytorch.org instead.
+
+**Optional extras**, after the block above:
+
+```bash
+pip install -e ".[ts]"                       # Chronos
+pip install --no-deps "momentfm==0.1.4"      # MOMENT
+pip install -e ".[fm,bci]"                   # the 14 MOABB BCI datasets: see below
+pip install --no-deps "moabb==1.2.0"
+```
+
+- `momentfm` declares old pins of transformers, numpy and huggingface-hub;
+  installed with `--no-deps` it runs with this stack. From then on
+  `pip check` lists those three pins, and later installs print a pip
+  "dependency conflicts" error about them. Both are expected.
+- The BCI datasets stay on the paper's numpy 1.26.4. The `bci` extra holds
+  MOABB's dependencies that fit this stack; MOABB itself goes in with
+  `--no-deps`, as 1.2.0, the last release on numpy<2. `pip check` then also
+  reports its declared caps (scikit-learn<1.6, urllib3<2, seaborn<0.13),
+  which are harmless: BNCI2014_001 and BNCI2014_004 trials and labels come
+  out bit-identical to moabb 1.7.2's. Dreyer2023 and Kim2025BetaRange,
+  newer than moabb 1.2.0, ship inside the package.
+- Moirai needs its own environment (Python 3.10, torch 2.4.1):
+  `requirements-tsfm.txt` has the recipe.
+
+`neuroatlas models status` says `package missing`, with the install line,
+for a model whose package is not installed.
+
+## The commands
+
+Everything goes through one command, `neuroatlas <command>`; `neuroatlas
+<command> --help` shows its options, and `-v`, `--log FILE` and `--online`
+work with every command.
+
+| Command | What it does |
+|---|---|
+| `config init / show / set / unset / path` | Where data, caches, results and weights live (`~/.neuroatlas/config.yaml`). |
+| `list benchmarks / datasets / models / aliases / tasks` | What exists. |
+| `show <benchmark>` | Explain a benchmark and print the `embed` and `probe` commands it runs. |
+| `data status / download / prepare` | Is each dataset here; download the ones that can be downloaded; build an optional cache. |
+| `models status / download` | Are a selection's weights here; download them. |
+| `check <benchmark> -m MODELS` | Push one real batch through each dataset × model pair, then stop. Run it before any long job. |
+| `run <benchmark> -m MODELS` | Run a benchmark on this machine: extract embeddings where missing, probe every fold, write `results.json`. |
+| `submit <benchmark> -m MODELS --out DIR` | Write HTCondor or SLURM jobs for a whole benchmark (one per dataset × model). |
+| `status --out DIR` | How each submitted job is doing. |
+| `results <benchmark>` | Mean ± std over the folds, folds done / expected, normalised score. |
+| `fetch`, `prepare`, `embed`, `probe`, `hypnogram` | The verbs underneath `run`, for running one step by hand. |
+
+Model selections (`-m`): a checkpoint id (`biot_pretrained`), a family
+(`biot`), a comma list, or an alias: `all_fm` (12 EEG foundation models),
+`all_ts` (10 time-series foundation models), `all_supervised` (20 supervised
+baselines), `all_random` (2 untrained baselines), `all`. Dataset selections
+(`--dataset`): `single` (the benchmark's one quick dataset, the default for
+`run` and `check`), `full`, or a comma list of dataset names.
+
+Downloads are off by default for every command except `data download`,
+`models download` and `fetch`; `--online` allows them for one command.
+
+## Test it by hand
+
+One pass through every command, on open data, with the output to expect.
+The outputs and timings below are from a fresh install on 2026-10-05 (RTX
+4500 Ada, 28 cores shared with other jobs); your numbers should agree to
+about 1e-3.
+
+**What you need:** Linux, an NVIDIA GPU (compute capability 7.5 or newer
+with the default PyTorch build; a CPU works for `check` but extraction is
+slow), about 25 GB of disk (6.5 GB for the environment, 8.1 GB Sleep-EDF,
+4.7 GB Siena, 2.1 GB of MOABB data, about 3 GB of embeddings), and about 2
+hours, most of it the Sleep-EDF download and its embedding extraction.
+
+**1. Install** (see [Install](#install) for the details), then:
+
+```bash
+neuroatlas --version            # neuroatlas 0.1.0
+neuroatlas --help               # the command list above
+```
+
+**2. Tell it where things go.** Pick four folders; they are created as
+needed.
+
+```bash
+neuroatlas config init --data-root ~/eeg/data --cache-root ~/eeg/cache \
+    --output-root ~/eeg/results --models-root ~/eeg/models
+neuroatlas config show
+```
+
+`config init` prints `wrote ~/.neuroatlas/config.yaml` and the four roots.
+If you already have a dataset somewhere else, point at it instead of
+downloading it, e.g. `neuroatlas config set sleep_edf_expanded.data_root
+/path/to/sleep-edf`; a misspelt key is refused with a suggestion (exit 2).
+
+**3. Look around.**
+
+```bash
+neuroatlas list benchmarks      # 12 benchmarks, their datasets and headline metric
+neuroatlas list models          # 44 checkpoints and their families
+neuroatlas show sleep_stage     # what the benchmark measures, and the commands `run` executes
+```
+
+**4. Get data.**
+
+```bash
+neuroatlas data status sleep_stage epilepsy bci_motor_imagery
+neuroatlas data download sleep_edf_expanded --mirror aws   # 8.1 GB; 18 min from PhysioNet's AWS copy
+neuroatlas data download siena                              # 4.7 GB from Zenodo
+neuroatlas data download bnci2014_001                       # MOABB; needs the BCI install lines
+neuroatlas data status sleep_edf_expanded siena bnci2014_001
+```
+
+The last command should report `found (197/197 files)` for Sleep-EDF and
+`found` for the other two. `data status` shows, for every dataset, where it
+looked and how `data download` would get it (automatic, with a token, or
+instructions for the manual and credentialed ones).
+
+**5. Get weights.**
+
+```bash
+neuroatlas models status all_fm
+neuroatlas models download biot_pretrained,cbramod_pretrained,deepsoz_hem_pretrained
+```
+
+`models status` gives one line per checkpoint: `found`, `auto` (downloads
+on request), `hub (cached)`, `manual` (with instructions) or `package
+missing` (with the install line). DeepSOZ is GPL-3.0 and is fetched from its
+upstream repository, never shipped with the package.
+
+**6. Check before running.** Each pair pushes one real batch through the
+model and stops; this takes seconds per pair.
+
+```bash
+neuroatlas check sleep_stage -m biot_pretrained
+neuroatlas check epilepsy --dataset siena -m cbramod_pretrained
+neuroatlas check bci_motor_imagery --dataset bnci2014_001 -m biot_pretrained,cbramod_pretrained
+```
+
+The last one ends like this:
+
+```
+dataset       model               data                 weights       channel_map  forward           time
+bnci2014_001  biot_pretrained     found (18/18 files)  found         none         (64, 256) finite  29.1s
+bnci2014_001  cbramod_pretrained  found (18/18 files)  hub (cached)  none         (64, 200) finite  19.8s
+pairs: 2   forward passes: 2   errors: 0   skipped: 0   n/a: 0   time: 48.9s
+```
+
+A pair that cannot run says why on its own line (`↳ ...`): missing data or
+weights with the command that fetches them, a model that is not part of
+the benchmark, or a channel map that rules it out (`n/a`).
+
+**7. A one-fold run** (`--debug` = fold 0 only), and a plan without running:
+
+```bash
+neuroatlas run bci_motor_imagery --dataset bnci2014_001 -m biot_pretrained --debug   # ~1 min
+neuroatlas run epilepsy --dataset siena -m cbramod_pretrained --dry-run
+```
+
+Every `run` ends with a line like `runs this time: ok 1   failed 0   n/a 0`
+and the folder its results went to.
+
+**8. Full runs.** Embeddings are extracted once per dataset × model and
+reused by every fold and by every benchmark that reads the same windows.
+
+```bash
+neuroatlas run sleep_stage -m biot_pretrained                    # ~40 min: extraction on the GPU, then 5 probe folds
+neuroatlas run brain_age -m biot_pretrained                      # ~1 min: reuses the sleep embeddings
+neuroatlas run sleep_hypnogram -m biot_pretrained                # ~20 s: from the staging results
+neuroatlas run epilepsy --dataset siena -m cbramod_pretrained    # ~4 min
+```
+
+**9. Read the results.**
+
+```bash
+neuroatlas results sleep_stage
+neuroatlas results brain_age
+neuroatlas results epilepsy
+```
+
+What the fresh install gave (`std` is the population standard deviation
+over the folds, the convention of every ± in the paper):
+
+| Benchmark | Dataset | Model | Metric | Result | Reference |
+|---|---|---|---|---|---|
+| `sleep_stage` | Sleep-EDF | BIOT | balanced accuracy | 0.657 ± 0.014 (5/5 folds) | 0.657 (the authors' run) |
+| `brain_age` | Sleep-EDF SC | BIOT | MAE, years | 11.984 ± 1.690 (5/5) | 11.98 ± 1.69 (paper's brain-age table) |
+| `epilepsy` | Siena | CBraMod | AUROC | 0.851 ± 0.021 (5/5) | see note |
+
+Siena's published numbers were drawn on folds of recordings, not patients
+(see the Siena entry under `provenance.known_issues` in
+`configs/cohorts/siena/cohort.yaml`); `run` uses the patient-level folds
+the paper describes, so its Siena numbers are not the published ones.
+
+**10. Reproduce a paper number with a supervised baseline.** The
+CoRe-Sleep weights are a release asset of this (private) repository, so the
+download needs a GitHub token that can read it:
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)          # or put a token in ~/.neuroatlas/github_token
+neuroatlas models download core_sleep_shhs_fold0
+neuroatlas run brain_age -m core_sleep_shhs_fold0       # a few minutes: extracts CoRe-Sleep on Sleep-EDF
+neuroatlas results brain_age                            # core_sleep_shhs_fold0  10.392 ± 1.074; paper 10.39 ± 1.07
+```
+
+**11. Cluster jobs.** `submit` writes the job files and prints the command
+that submits them; it submits nothing itself.
+
+```bash
+neuroatlas submit sleep_stage -m all_fm --out runs/sleep_fm               # HTCondor; --backend slurm for SLURM
+condor_submit runs/sleep_fm/jobs.job                                      # the line submit printed
+neuroatlas status --out runs/sleep_fm                                     # done / running / idle / held / failed per job
+neuroatlas results sleep_stage                                            # once jobs are done
+```
+
+`submit` skips, and lists, the pairs that cannot run here (missing data or
+weights, a channel map that rules the model out); `--force` writes the
+data- and weights-blocked ones anyway. `--time`, `--memory`, `--gpus` and
+`--extra` set the job resources.
+
+**12. From Python.** The same verbs, returning the CLI's JSON rows:
+
+```python
+from neuroatlas import api
+
+api.benchmarks()                       # = neuroatlas list benchmarks
+api.data_status("sleep_stage")         # = neuroatlas data status sleep_stage
+api.check("sleep_stage", models="biot_pretrained")
+api.results("sleep_stage")             # = neuroatlas results sleep_stage
+```
+
+**13. The steps underneath.** `neuroatlas show <benchmark>` prints the
+`embed` and `probe` commands `run` executes (the lines of
+`run/default_runs.sh`, the record of every experiment in the paper); you
+can run them yourself, e.g. to probe existing embeddings with other
+settings.
+
+**If something goes wrong,** rerun the command with `-v --log run.log` and
+send the command and `run.log`. Exit codes: 0 done, 1 something failed, 2
+the command was refused (a bad option, missing data or weights, a model the
+benchmark does not include).
 
 ## Why NeuroAtlas
 
@@ -60,6 +337,11 @@ event-level metrics beside it. Seven are continuously labelled (a label per
 patient-level, except Bonn, which ships no subject identifiers (its folds
 are over clips). AUB-Med is planned: readable, but the paper reports no
 result for it.
+
+The sleep-staging sequence models SleepTransformer, SleePyCo and CoRe-Sleep
+are not part of the epilepsy benchmark: `-m all` (or `all_supervised`) leaves
+them out there, and naming one is refused. The paper's epilepsy figures and
+tables do show CoRe-Sleep and SleepTransformer; those cells are not rerun.
 
 | Continuously labelled | Recording-level |
 |---|---|
@@ -128,7 +410,7 @@ also an alias for `-m`.
 (`all_supervised`, 20 checkpoints): `core_sleep`, `deepsoz_hem`, `eegnetv4`
 (12 checkpoints, one per training dataset), `seizure_transformer`,
 `sleep_transformer`, `sleepyco`. A brain-age CNN (`brain_age_cnn`) is
-planned.
+planned. The last three are not part of the epilepsy benchmark.
 
 **Untrained baselines** (`all_random`): `cbramod_random_init` and
 `reve_random_init`, the same architectures with random weights.
@@ -142,97 +424,6 @@ regression with nested cross-validation), `patient_classification` (sleep
 diagnosis), `arousal_detection` and `respiratory_event_detection` (sleep
 events). The registry also has `attention_probe`, `attention_probe_patient`,
 `lstm_probe` and `native_head_eval`, which no benchmark uses.
-
-## Install
-
-Python 3.10 or newer; 3.11 is what the paper used and what is tested.
-Install from a clone. The distribution is named `neuroatlas-bench` (a built
-wheel is `neuroatlas_bench-<version>-py3-none-any.whl`); the command and the
-import stay `neuroatlas`. It is not on PyPI yet. The PyPI name `neuroatlas`
-belongs to an unrelated project: do not install it. The GitHub repository
-is not public yet (2026-10-05); until it is, cloning needs access from the
-authors.
-
-```bash
-git clone https://github.com/kkontras/NeuroAtlas.git && cd NeuroAtlas
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip
-
-pip install torch torchvision torchaudio   # first; see the note below
-pip install -r requirements-fm.txt         # the paper's exact versions
-pip install -e ".[fm]"                     # the neuroatlas command
-pip check                                  # No broken requirements found.
-```
-
-In a fresh venv this took 4 min for torch, 2 min for `requirements-fm.txt`
-and seconds for the rest; the venv is 6.5 GB.
-
-**PyTorch.** `pip install torch` currently gives a CUDA 13 build (2.14.1+cu130
-on 2026-10-02), with kernels for GPUs of compute capability 7.5 and newer
-only (Turing onwards). `nvidia-smi` must report CUDA 13.0 or higher. For an
-older GPU or driver, install a CUDA 12 build from pytorch.org instead.
-
-**Optional extras**, after the block above:
-
-```bash
-pip install -e ".[ts]"                       # Chronos
-pip install --no-deps "momentfm==0.1.4"      # MOMENT
-pip install -e ".[fm,bci]"                   # the 14 MOABB BCI datasets: see below
-pip install --no-deps "moabb==1.2.0"
-```
-
-- `momentfm` declares old pins of transformers, numpy and huggingface-hub;
-  installed with `--no-deps` it runs with this stack. From then on
-  `pip check` lists those three pins, and later installs print a pip
-  "dependency conflicts" error about them. Both are expected.
-- The BCI datasets stay on the paper's numpy 1.26.4. The `bci` extra holds
-  MOABB's dependencies that fit this stack; MOABB itself goes in with
-  `--no-deps`, as 1.2.0, the last release on numpy<2. `pip check` then also
-  reports its declared caps (scikit-learn<1.6, urllib3<2, seaborn<0.13),
-  which are harmless: BNCI2014_001 and BNCI2014_004 trials and labels come
-  out bit-identical to moabb 1.7.2's. Dreyer2023 and Kim2025BetaRange,
-  newer than moabb 1.2.0, ship inside the package.
-- Moirai needs its own environment (Python 3.10, torch 2.4.1):
-  `requirements-tsfm.txt` has the recipe.
-
-`neuroatlas models status` says `package missing`, with the install line,
-for a model whose package is not installed.
-
-## Quickstart
-
-On an open dataset, Sleep-EDF Expanded (8.1 GB), with one model:
-
-```bash
-neuroatlas config init --data-root /data/eeg
-neuroatlas data download sleep_edf_expanded --mirror aws   # PhysioNet's copy on AWS
-neuroatlas data status sleep_stage
-neuroatlas models download biot_pretrained
-neuroatlas check sleep_stage -m biot_pretrained      # one real batch through the model
-neuroatlas run sleep_stage -m biot_pretrained        # embed, then probe 5 folds
-neuroatlas results sleep_stage
-```
-
-Measured on 2026-10-02, on a machine with an RTX 4500 Ada and 28 cores that
-other jobs were also using: the download took 18 min from the AWS copy (at
-the ~100 KB/s the tester saw from physionet.org, 8 GB takes about a day);
-`check` 10 s; extracting the embeddings 29 min (17 min on an idle GPU, in
-the tester's run); the five probe folds, CPU work, 60 min. BIOT scored
-0.656 ± 0.017 balanced accuracy over the 5 folds, against 0.657 ± 0.016 in
-the authors' run.
-
-`neuroatlas show sleep_stage` explains the benchmark and prints the `embed`
-and `probe` commands `run` executes; they are equivalent to the lines of
-`run/default_runs.sh`, the record of every experiment in the paper. The five
-verbs underneath -- `fetch`, `prepare`, `embed`, `probe`, `hypnogram` --
-remain available as `neuroatlas <verb>`.
-
-For a whole suite on a cluster, `neuroatlas submit <benchmark> -m all_fm
---out runs/x` writes one HTCondor or SLURM job per dataset × model, and
-`neuroatlas status --out runs/x` tracks them; `neuroatlas leaderboard` ranks
-across benchmarks. From Python, `neuroatlas.api` has the same verbs.
-
-- [docs/user_guide.md](docs/user_guide.md) -- every step, with real output
-- [docs/cli.md](docs/cli.md) -- every command and flag (generated from the code)
 
 ## Repository layout
 
@@ -289,18 +480,35 @@ Hugging Face cache.
 - CoRe-Sleep on Sleep-EDF, extracted afresh, gives the paper's numbers:
   sleep staging κ 0.8197 (published 0.8196), macro-F1 0.7690 (0.7689),
   balanced accuracy 0.7621; brain-age MAE per fold 11.73, 8.61, 11.20,
-  10.42, 10.00.
+  10.42, 10.00, which `results` prints as 10.392 ± 1.074 (the paper's
+  table: 10.39 ± 1.07).
 
 ## License
 
-MIT; see `LICENSE`. Three vendored components keep their upstream
-licences. In `src/neuroatlas/extensions/models/backbones/third_party/`:
-DeepSOZ (`deepsoz_hem/LICENSE`, GPL-3.0, with its checkpoint; whether it
-can stay inside an MIT package is not settled) and Seizure-Transformer
-(`seizure_transformer/LICENSE.upstream`, MIT). In
-`src/neuroatlas/extensions/datasets/dataio/moabb_vendored/`: MOABB's
-Dreyer2023 and Kim2025BetaRange readers (`LICENSE.moabb`, BSD-3-Clause).
+MIT; see `LICENSE`. Two vendored components keep their upstream licences:
+Seizure-Transformer's architecture, in
+`src/neuroatlas/extensions/models/backbones/third_party/seizure_transformer/`
+(`LICENSE.upstream`, MIT), and MOABB's Dreyer2023 and Kim2025BetaRange
+readers, in `src/neuroatlas/extensions/datasets/dataio/moabb_vendored/`
+(`LICENSE.moabb`, BSD-3-Clause).
+
+DeepSOZ-HEM's code and checkpoint are GPL-3.0 and are not part of the
+package. `neuroatlas models download deepsoz_hem_pretrained` fetches them,
+with their licence, from upstream (github.com/amruth-sn/deepsoz-hem, commit
+a7c13bd) into the models root, each file checked against its recorded
+SHA-256; the wrapper runs that copy.
 
 ## Citation
 
-Citation block to follow.
+```bibtex
+@article{kontras2026neuroatlas,
+  title   = {NeuroAtlas: Benchmarking Foundation Models for Clinical EEG and Brain-Computer Interfaces},
+  author  = {Kontras, Konstantinos and Osselaer, Trui and Mouslech, Stylianos G. and
+             Karaiskou, Angeliki-Ilektra and Gagliardi, Guido and Strypsteen, Thomas and
+             Badiei, Mohammad Hossein and Rani, Anku and Vanmarcke, Maarten and
+             Bhagubai, Miguel and Ekbote, Chanakya and Hwang, Jaedong and
+             Chatzichristos, Christos and Liang, Paul Pu and De Vos, Maarten},
+  journal = {arXiv preprint arXiv:2605.14698},
+  year    = {2026}
+}
+```
