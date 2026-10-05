@@ -82,6 +82,7 @@ work with every command.
 | Command | What it does |
 |---|---|
 | `config init / show / set / unset / path` | Where data, caches, results and weights live (`~/.neuroatlas/config.yaml`). |
+| `config token hf / github / nsrr` | Save a Hugging Face, GitHub or NSRR token: asked for without being shown, stored `chmod 600`. |
 | `list benchmarks / datasets / models / aliases / tasks` | What exists. |
 | `show <benchmark>` | Explain a benchmark and print the `embed` and `probe` commands it runs. |
 | `data status / download / prepare` | Is each dataset here; download the ones that can be downloaded; build an optional cache. |
@@ -123,6 +124,9 @@ neuroatlas config show               # every setting, and where its value came f
 neuroatlas config path               # where config.yaml is
 neuroatlas config set sleep_edf_expanded.data_root /path/to/existing/sleep-edf   # use a copy you already have
 neuroatlas config unset sleep_edf_expanded.data_root
+neuroatlas config token hf          # Hugging Face token, asked for without being shown: gated weights (REVE)
+neuroatlas config token github      # GitHub token: the CoRe-Sleep and SleepTransformer weights (private release assets)
+neuroatlas config token nsrr        # NSRR token: the NSRR sleep cohorts (CFS, MESA, MrOS, ...)
 ```
 
 **What exists**
@@ -359,7 +363,7 @@ CoRe-Sleep weights are a release asset of this (private) repository, so the
 download needs a GitHub token that can read it:
 
 ```bash
-export GITHUB_TOKEN=$(gh auth token)          # or put a token in ~/.neuroatlas/github_token
+neuroatlas config token github                # paste a GitHub token that can read this repository
 neuroatlas models download core_sleep_shhs_fold0
 neuroatlas run brain_age -m core_sleep_shhs_fold0       # a few minutes: extracts CoRe-Sleep on Sleep-EDF
 neuroatlas results brain_age                            # core_sleep_shhs_fold0  10.392 ± 1.074; paper 10.39 ± 1.07
