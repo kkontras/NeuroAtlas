@@ -52,7 +52,7 @@ _state = {"verbose": False}
 _COLORS = {"error": "\033[1;31m", "warning": "\033[1;33m", "note": "\033[2m",
            "skipped": "\033[33m", "n/a": "\033[2m", FIX: "\033[1m"}
 _RESET = "\033[0m"
-ANSI = re.compile(r"\033\[[0-9;]*m")
+ANSI = re.compile(r"\r?\x1b\[[0-9;?]*[A-Za-z]")   # colours, and the clear-line code
 
 _PREFIX = re.compile(r"^\s*(?:neuroatlas(?: [\w-]+)?: )?(error|warning|note|skipped|n/a):\s*",
                      re.IGNORECASE)
@@ -198,7 +198,9 @@ def lines(kind: str, text: str, fix: Optional[str] = None) -> List[str]:
 def say(kind: str, text: str, fix: Optional[str] = None, *, file=None) -> None:
     """Print one message to stderr (or *file*)."""
     stream = file if file is not None else sys.stderr
-    print(format(kind, text, fix, color=use_color(stream)), file=stream, flush=True)
+    escapes = use_color(stream)     # a terminal that takes escape codes (not NO_COLOR)
+    print((CLEAR_LINE if escapes else "") + format(kind, text, fix, color=escapes),
+          file=stream, flush=True)
 
 
 def error(text: str, fix: Optional[str] = None, *, file=None) -> None:
@@ -244,16 +246,26 @@ def plural(n: int, one: str, many: Optional[str] = None) -> str:
 _PY_WARNING = re.compile(r"^(?P<path>.*?):(?P<line>\d+): (?P<category>\w+): (?P<message>.*)$", re.S)
 
 
+# Return to the start of the line and erase it (a terminal only).
+CLEAR_LINE = "\r\x1b[K"
+
+
 class LogFormatter(logging.Formatter):
     """Log records in the same words: ``error: ...``, ``warning: ...``; INFO
     and DEBUG lines (shown with -v, kept in --log) as they are. A Python
     warning reads ``warning: <message> (<Category>, <file>:<line>)``."""
 
-    def __init__(self, color: bool = False):
+    def __init__(self, color: bool = False, clear_line: bool = False):
         super().__init__("%(message)s")
         self.color = color
+        # On a terminal, start each record on a clean line: a live progress
+        # line ("probing (1m 05s)") may be on screen without a newline.
+        self.clear = CLEAR_LINE if clear_line else ""
 
     def format(self, record: logging.LogRecord) -> str:
+        return self.clear + self._format(record)
+
+    def _format(self, record: logging.LogRecord) -> str:
         text = super().format(record)
         if record.name == "py.warnings":
             match = _PY_WARNING.match(text.strip())

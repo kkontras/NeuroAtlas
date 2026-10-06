@@ -129,6 +129,61 @@ class _ChannelMapDataloaderWrapper:
         return len(self._loader)
 
 
+class _Ticker:
+    """Shows that a run is alive while it works. On a terminal: one line,
+    "<label>: probing (1m 05s)", rewritten every few seconds and cleared when
+    the run ends (its result line follows). Elsewhere (a log, a cluster job):
+    one "<label>: probing" line at the start."""
+
+    def __init__(self, label: str, every: float = 2.0, *, verb: str = "probing",
+                 stream=None, start_line_off_tty: bool = True):
+        import sys
+        import threading
+
+        self.label, self.every, self.verb = label, every, verb
+        self.stream = stream if stream is not None else sys.stdout
+        # the terminal itself, not a --log tee: the live line is for the screen
+        self.stream = getattr(self.stream, "_stream", self.stream)
+        self.start_line_off_tty = start_line_off_tty
+        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        try:
+            from neuroatlas.cli._msg import use_color
+            escapes = use_color(self.stream)
+        except Exception:                                   # pragma: no cover
+            escapes = False
+        # erase the line with an escape code where allowed, else with spaces
+        self._clear = "\r\x1b[K" if escapes else "\r" + " " * (len(label) + 40) + "\r"
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._tick, daemon=True) if self.tty else None
+
+    def _text(self, seconds: float) -> str:
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{self.label}: {self.verb} ({minutes}m {secs:02d}s)"
+
+    def _tick(self):
+        started = time.monotonic()
+        while not self._stop.wait(self.every):
+            self.stream.write(self._clear + self._text(time.monotonic() - started))
+            self.stream.flush()
+
+    def __enter__(self):
+        if self.tty:
+            self.stream.write(self._text(0))
+            self.stream.flush()
+            self._thread.start()
+        elif self.start_line_off_tty:
+            print(f"{self.label}: {self.verb}", file=self.stream, flush=True)
+        return self
+
+    def __exit__(self, *exc):
+        if self.tty:
+            self._stop.set()
+            self._thread.join()
+            self.stream.write(self._clear)
+            self.stream.flush()
+        return False
+
+
 # The metric a progress line shows for a fold, first one present.
 _PROGRESS_METRICS = ("event_sens_fa_auc", "auroc", "balanced_accuracy", "mae", "pearson_r")
 
@@ -553,13 +608,24 @@ class BenchmarkRunner:
         runs = list(self._dataset_runs())
         probing = not (self.extract_only or self.embed_chunk is not None)
         total, done = len(runs) * len(specs), 0
+        if probing and total:
+            datasets = sorted({name for name, _ in runs})
+            print(f"probing {len(specs)} model(s) on {', '.join(datasets)}: {total} run(s), "
+                  f"one line each as it finishes", flush=True)
         for dataset_name, dataset_config in runs:
             for spec in specs:
                 pair = (dataset_name, spec.identifier)
                 if self.extract_only and pair in extracted_for_every_fold:
                     continue
                 started = time.monotonic()
-                result = self._run_one(dataset_name, dataset_config, spec)
+                if probing:
+                    fold = dataset_config.get("fold")
+                    label = (f"[{done + 1}/{total}] {dataset_name} {spec.identifier}"
+                             + ("" if fold is None else f" fold {fold}"))
+                    with _Ticker(label):
+                        result = self._run_one(dataset_name, dataset_config, spec)
+                else:
+                    result = self._run_one(dataset_name, dataset_config, spec)
                 results.append(result)
                 if self.extract_only and _serves_every_fold(result):
                     extracted_for_every_fold.add(pair)
