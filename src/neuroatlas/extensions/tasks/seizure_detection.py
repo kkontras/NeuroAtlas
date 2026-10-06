@@ -483,6 +483,37 @@ def _layout(cache_paths: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def save_predictions(probe_dir: Path, *, test_y, test_proba, test_meta: list, window_s: float,
+                     threshold, dataset_name: str, checkpoint_id: str, fold) -> Path:
+    """Write one fold's test predictions next to its probe outputs, so any
+    metric (the event Sens@FA AUC, a new one, a fixed one) can be recomputed
+    later without probing again: ``<probe dir>/predictions.npz`` with the
+    window labels and scores, each window's recording and start time, the
+    tuned decision threshold, and what produced them."""
+    probe_dir = Path(probe_dir)
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    meta = list(test_meta or [])
+
+    def column(*keys, default=""):
+        return np.asarray([next((m[k] for k in keys if k in m), default) for m in meta])
+
+    path = probe_dir / "predictions.npz"
+    np.savez_compressed(
+        path,
+        y_true=np.asarray(test_y),
+        y_score=np.asarray(test_proba, dtype=np.float64),
+        recording_id=column("recording_id", "recording_idx").astype(str),
+        subject_id=column("subject_id", "subject").astype(str),
+        window_start_s=column("window_start_s", default=np.nan).astype(np.float64),
+        window_s=np.float64(window_s),
+        threshold=np.float64(np.nan if threshold is None else threshold),
+        dataset=np.asarray(dataset_name),
+        checkpoint_id=np.asarray(checkpoint_id),
+        fold=np.asarray(str(fold)),
+    )
+    return path
+
+
 def evaluate_seizure_detection(
     *,
     dataset_name: str,
@@ -605,6 +636,12 @@ def evaluate_seizure_detection(
         max_iter=settings["max_iter"],
         seed=(seeds[0] if seeds else 0),
     )
+
+    cache_paths["predictions"] = str(save_predictions(
+        probe_dir, test_y=test_y, test_proba=probe_result["test_proba"], test_meta=test_meta,
+        window_s=window_s, threshold=probe_result.get("tuned_threshold"),
+        dataset_name=dataset_name, checkpoint_id=checkpoint_spec.identifier,
+        fold=dict(getattr(datamodule, "metadata", {}) or {}).get("fold")))
 
     # Translate to the metrics schema expected by the BenchmarkRunner
     metrics: Dict[str, Any] = {
