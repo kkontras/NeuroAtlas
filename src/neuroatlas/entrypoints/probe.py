@@ -195,7 +195,9 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser.add_argument("--max-iter", type=int, default=10_000)
     parser.add_argument("--class-weight", choices=["balanced"], default=None)
     parser.add_argument("--selection-metric", default="macro_f1",
-                        help="Metric used to pick the best seed.")
+                        help="Validation metric that picks the probe's C (and seed). Seizure "
+                             "detection: auprc (the paper's), auroc, or event_sens_fa_auc "
+                             "(the event-level Sens@FA AUC on the validation fold).")
     parser.add_argument("--tune-c", default=None,
                         help="Comma-separated C values for the regularisation sweep.")
     parser.add_argument("--aggregation", default=None,
@@ -409,6 +411,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     from neuroatlas.benchmarking_helpers import BenchmarkRunner, seed_everything
 
+    _refuse_unsupported_probe_settings(config)
     seed_everything(config.get("benchmark", {}).get("seed", args.seed))
     runner = BenchmarkRunner(config)
     # Imported here, not at module scope: linear_probe pulls in torch, and
@@ -431,6 +434,25 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if report_results("probe", results, f"results: {runner.output_root}"):
         sys.exit(1)
+
+
+def _refuse_unsupported_probe_settings(config) -> None:
+    """Refuse, once and before anything is read, probe flags the task cannot
+    honour; otherwise every (model, fold) fails with the same message."""
+    from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
+    from neuroatlas.extensions.tasks.seizure_detection import ProbeSettingsError, probe_settings
+
+    task = (config.get("task") or {}).get("name")
+    tasks = {task} if task else {load_dataset_spec(slug).default_task
+                                 for slug in config.get("datasets", {})}
+    if "seizure_detection" in tasks:
+        try:
+            probe_settings(config.get("probe"))
+        except ProbeSettingsError as exc:
+            from neuroatlas.cli import _msg
+
+            _msg.error(str(exc), "neuroatlas probe --help (the options seizure detection takes)")
+            raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

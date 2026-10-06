@@ -262,6 +262,9 @@ PAPER_SELECTION_METRIC = "auprc"
 _SELECTION_ALIASES = {
     "auprc": "auprc", "average_precision": "auprc", "ap": "auprc",
     "auroc": "auroc", "roc_auc": "auroc",
+    # the epilepsy headline, on the validation fold's windows
+    "event_sens_fa_auc": "event_sens_fa_auc", "event": "event_sens_fa_auc",
+    "sens_fa_auc": "event_sens_fa_auc",
 }
 #: `probe --selection-metric` defaults to this for every task; it is not a
 #: choice the user made, and seizure detection does not rank C by it.
@@ -329,13 +332,13 @@ def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     elif str(metric) == _CLI_DEFAULT_SELECTION:
         notes.append(f"selection metric {metric!r} is the probe command's default; seizure "
                      f"detection ranks C by validation {PAPER_SELECTION_METRIC!r} "
-                     f"(--selection-metric auprc or auroc)")
+                     f"(--selection-metric auprc, auroc or event_sens_fa_auc)")
         metric = PAPER_SELECTION_METRIC
     else:
         key = str(metric).strip().lower()
         if key not in _SELECTION_ALIASES:
             raise ProbeSettingsError(
-                f"seizure_detection ranks C by validation auprc or auroc; "
+                f"seizure_detection ranks C by validation auprc, auroc or event_sens_fa_auc; "
                 f"--selection-metric {metric} is not supported")
         metric = _SELECTION_ALIASES[key]
 
@@ -625,6 +628,13 @@ def evaluate_seizure_detection(
 
     window_s = float(datamodule.metadata.get("epoch_seconds", 30.0))
 
+    # The validation windows in recording/time order, as the event metric
+    # reads them (it is then available to rank C by, and is reported).
+    val_order = _temporal_order(val_meta)
+    val_x, val_y = val_x[val_order], np.asarray(val_y)[val_order]
+    val_meta = [val_meta[i] for i in val_order]
+    seconds = _seconds_per_window(dict(getattr(datamodule, "metadata", {}) or {}), window_s)
+
     # Unified probe: C-grid on val AUPRC + threshold tuning on val F1 +
     # per-recording event overlap + sens@FPR/h clinical targets
     from ._seizure_evaluation import full_binary_probe
@@ -634,6 +644,8 @@ def evaluate_seizure_detection(
         val_x=val_x, val_y=val_y,
         test_x=test_x, test_y=test_y,
         test_rec_ids=_rec_ids(test_meta),
+        val_rec_ids=np.asarray([str(r) for r in _rec_ids(val_meta)]),
+        event_window_s=seconds,
         window_s=window_s,
         c_values=settings["c_values"],
         class_weight=settings["class_weight"],
@@ -675,6 +687,7 @@ def evaluate_seizure_detection(
         "val_selection_score": probe_result["val_selection_score"],
         "tuned_threshold": probe_result["tuned_threshold"],
         "val_auprc": probe_result["val_auprc"],
+        "val_event_sens_fa_auc": probe_result.get("val_event_sens_fa_auc"),
         "val_f1_at_threshold": probe_result["val_f1_at_threshold"],
         "n_test": probe_result["n_test"],
         "n_test_pos": probe_result["n_test_pos"],

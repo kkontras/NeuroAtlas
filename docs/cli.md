@@ -962,7 +962,9 @@ options:
   --max-iter MAX_ITER
   --class-weight {balanced}
   --selection-metric SELECTION_METRIC
-                        Metric used to pick the best seed.
+                        Validation metric that picks the probe's C (and seed). Seizure
+                        detection: auprc (the paper's), auroc, or event_sens_fa_auc
+                        (the event-level Sens@FA AUC on the validation fold).
   --tune-c TUNE_C       Comma-separated C values for the regularisation sweep.
   --aggregation AGGREGATION
                         Subject aggregation for subject-level tasks, e.g. 'mean' or
