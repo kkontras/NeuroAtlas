@@ -103,15 +103,23 @@ def cmd_status(args) -> int:
     if args.format != "table":
         return 0
     counts = Counter(str(r["state"]).split(" (")[0] for r in rows)
-    print("\nstates: " + "   ".join(f"{k} {v}" for k, v in counts.most_common()))
-    for state in counts:
-        if state in data.STATES:
+    if len(rows) > 1:
+        print("\n" + "   ".join(f"{k} {v}" for k, v in counts.most_common()))
+    # Explain only what is not obvious: "found" needs no legend (-v shows all).
+    explain = [s for s in counts if s in data.STATES and (args.verbose or s != "found")]
+    if explain:
+        print()
+        for state in explain:
             print(f"  {state:<14} {data.STATES[state]}")
-    print("map: yes = a channel map ships for the dataset (configs/channel_maps/<dataset>.yaml)")
     root = config.get("data_root")
-    print(f"$DATA = your data root: {root if root else '(not set: neuroatlas config init --data-root DIR)'}")
+    if args.verbose:
+        print("map: yes = a channel map ships for the dataset (configs/channel_maps/<dataset>.yaml)")
+    shown = [_data_rel(st.path) for st in missing] if not args.verbose else []
+    if args.verbose or any(w.startswith("$DATA") for w in shown):
+        print(f"$DATA = your data root: "
+              f"{root if root else '(not set: neuroatlas config init --data-root DIR)'}")
     if missing and not args.verbose:
-        print("\nnot found -- where it was looked for, and the setting that moves it:")
+        print("\nnot found (where it was looked for; the setting points it at your copy):")
         width = max(len(st.slug) for st in missing)
         for st in missing:
             where = _data_rel(st.path)

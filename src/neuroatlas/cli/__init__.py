@@ -295,10 +295,24 @@ def _usage_error(message: str) -> "SystemExit":
 TRACEBACK_LOGGER = "neuroatlas.traceback"
 
 
+class _HiddenCount(logging.Handler):
+    """Counts what the console did not show (library INFO lines, Python
+    warnings), so a command can say so in one line at the end."""
+
+    def __init__(self):
+        super().__init__(logging.INFO)
+        self.count = 0
+
+    def emit(self, record):
+        if record.levelno < logging.WARNING or record.name == "py.warnings":
+            self.count += 1
+
+
 def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[logging.Handler]:
-    """Console: INFO (DEBUG with -v); for a report command WARNING and no
-    library warnings unless -v. The --log file always gets everything at
-    INFO, plus every traceback."""
+    """Console: WARNING and no library warnings, for every command, unless
+    -v (then DEBUG and everything): the per-model INFO lines of a long run
+    (backbone banners, loader lines, weight reports) are for -v and the log.
+    The --log file always gets everything at INFO, plus every traceback."""
     fmt = logging.Formatter("%(levelname)s: %(message)s")
     root = logging.getLogger()
     for h in [h for h in root.handlers if getattr(h, "_neuroatlas", False)]:
@@ -314,11 +328,14 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     if verbose:
         console.setLevel(logging.DEBUG)
     else:
-        console.setLevel(logging.WARNING if report else logging.INFO)
+        console.setLevel(logging.WARNING)
         console.addFilter(lambda r: r.name != TRACEBACK_LOGGER)
-        if report:
-            console.addFilter(lambda r: r.name != "py.warnings")
+        console.addFilter(lambda r: r.name != "py.warnings")
     handlers = [console]
+    if not verbose:
+        hidden = _HiddenCount()
+        hidden.addFilter(lambda r: r.name != TRACEBACK_LOGGER)
+        handlers.append(hidden)
     if log is not None:
         to_file = logging.StreamHandler(log)
         to_file.setFormatter(fmt)
@@ -327,8 +344,7 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     for h in handlers:
         h._neuroatlas = True
         root.addHandler(h)
-    if report:
-        logging.captureWarnings(True)
+    logging.captureWarnings(True)
     return handlers
 
 
@@ -467,6 +483,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         raise SystemExit(1) from None
     finally:
         root = logging.getLogger()
+        hidden = sum(h.count for h in handlers if isinstance(h, _HiddenCount))
+        if hidden and not command.report(rest):
+            where = f"; all of them are in {state['log']}" if state["log"] else \
+                "; --log FILE keeps them"
+            print(f"({hidden} log line(s) and library warning(s) not shown: -v shows them{where})",
+                  file=saved[1])
         for h in handlers:
             root.removeHandler(h)
         for logger_name, level in levels.items():

@@ -14,6 +14,40 @@ from neuroatlas.cli import Parser, UsageError
 from neuroatlas.cli._table import add_format_arg, render
 
 
+# What a metric is called in a table; JSON and CSV keep the key.
+METRIC_LABELS = {
+    "auroc": "AUROC(window)",
+    "auprc": "AUPRC(window)",
+    "balanced_accuracy": "bal_acc",
+    "mcc": "MCC",
+    "ovlp_f1": "event_F1",
+    "sensitivity_at_fpr_h_1_0": "sens@1FA/h",
+    "sensitivity_at_fpr_h_0_1": "sens@0.1FA/h",
+    "event_sens_fa_auc": "Sens@FA_AUC(event)",
+    "cohen_kappa": "kappa",
+    "macro_f1": "macro_F1",
+    "accuracy": "acc",
+    "mae": "MAE(years)",
+    "pearson_r": "pearson_r",
+    "r2": "R2",
+}
+
+
+# The headline's name in a table's title line.
+METRIC_NAMES = {
+    "auroc": "window-level AUROC",
+    "balanced_accuracy": "balanced accuracy",
+    "event_sens_fa_auc": "event-level Sens@FA AUC",
+    "mae": "MAE in years",
+    "pearson_r": "Pearson r",
+    "macro_f1": "macro-F1",
+}
+
+
+def metric_label(name: str) -> str:
+    return METRIC_LABELS.get(name, name)
+
+
 def _reference(benchmark: str) -> Optional[Dict[Tuple[str, str, str, str], float]]:
     """The paper's numbers, configs/reference/<benchmark>.csv:
     dataset,model,metric,value (and variant; a row without one is the
@@ -132,7 +166,7 @@ def results_main(argv: Optional[List[str]] = None) -> None:
             print(f"\ntolerance: {tol if tol is not None else 'none recorded'} ({m.headline})")
         return
 
-    direction = "" if m.higher_is_better else ", lower is better"
+    direction = "higher is better" if m.higher_is_better else "lower is better"
     has_dummy = m.higher_is_better and any(m.dummy_for(e.slug) is not None for e in bench.datasets)
     rows, notes = [], {}
     for s in summaries:
@@ -152,10 +186,15 @@ def results_main(argv: Optional[List[str]] = None) -> None:
     extra = ["benchmark", "metric", "variant", "status", "n_folds", "n_expected", "n_failed",
              *([] if has_dummy else ["normalized"]), "failures", "errors"]
     if args.format == "table":
+        # The table names each column by its metric (machine formats keep the
+        # keys): the headline's mean and spread, then the secondary metrics.
+        head = metric_label(m.headline)
         print(f"{bench.name}" + (f" ({args.variant} variant)" if args.variant else "")
-              + f": {m.headline}{direction}, mean ± std (population, as in the paper) "
-              f"over the folds that succeeded; folds = succeeded/protocol"
-              + ("; normalized: 0 = dummy, 1 = perfect" if has_dummy else ""))
+              + f": {METRIC_NAMES.get(m.headline, head)}, {direction}; mean ± std over folds"
+              + ("; normalized: 0 = chance, 1 = perfect" if has_dummy else ""))
+        names = {"mean": head, "std": "±", **{k: metric_label(k) for k in m.secondary}}
+        rows = [{names.get(k, k): v for k, v in r.items()} for r in rows]
+        columns = [names.get(c, c) for c in columns]
     render(rows, columns, args.format,
            notes if args.verbose or args.format != "table" else None, extra=extra)
     if args.format == "table":
@@ -169,6 +208,6 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         if failed and not args.verbose:
             print(f"{failed} row(s) have failed folds; -v says why")
         if short:
-            print(f"{short} row(s) ran on fewer folds than the protocol has (e.g. --debug): "
-                  f"their mean is not comparable with a full run")
+            print(f"{short} row(s) cover fewer folds than the protocol (k/N): "
+                  f"not comparable with a full run")
 
