@@ -30,7 +30,7 @@ class ChronosBackbone(UnivariateTimeSeriesBackbone):
         self.pipeline = ChronosPipeline.from_pretrained(
             hf_id,
             device_map=self.device,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,          # transformers >= 4.56 (torch_dtype is deprecated)
             cache_dir=_HF_CACHE,
         )
 
