@@ -9,9 +9,11 @@ extensions that plug into it, and the original verbs.
   The command. `cli/` has one module per command (argument parsing and
   output only); the work is in `catalog.py` (benchmarks), `selectors.py`
   (`-m`), `config.py` and `_paths.py` (settings and where files go),
-  `data.py`, `models.py`, `check.py`, `run.py`, `submit.py` and
-  `results.py`; `api.py` exposes the same verbs to Python. `cli/_gendocs.py`
-  writes `docs/cli.md` from the parsers.
+  `data.py`, `models.py`, `check.py`, `run.py`, `submit.py`,
+  `results.py` and `rescore.py`; `api.py` exposes the same verbs to Python.
+  `predictions.py` defines the file every probe fold saves its test
+  predictions in, and scores it. `cli/_gendocs.py` writes `docs/cli.md`
+  from the parsers.
 - `benchmarking_helpers/`
   The engine. `registry/` holds the contracts, spec discovery and fold
   manifests; `runtime/` the embedding cache, the runner, resource sizing and

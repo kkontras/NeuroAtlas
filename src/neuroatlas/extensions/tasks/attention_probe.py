@@ -586,6 +586,7 @@ def _train_attention_probe_windowed(
 
     per_seed: List[Dict[str, Any]] = []
     estimators: Dict[int, _TorchAttentionProbe] = {}
+    test_outputs: List[Dict[str, Any]] = []
 
     print(
         f"[attention_probe] fitting windowed probe on "
@@ -613,19 +614,26 @@ def _train_attention_probe_windowed(
                 test_score = probe.predict_proba_windowed(test_features, test_idx, test_masks)[:, 1]
             except Exception:
                 pass
+        try:
+            test_proba = probe.predict_proba_windowed(test_features, test_idx, test_masks)
+        except Exception:
+            test_proba = None
 
         val_metrics = compute_classification_metrics(val_y, val_pred, y_score=val_score)
         test_metrics = compute_classification_metrics(test_y, test_pred, y_score=test_score)
 
         estimators[seed] = probe
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
+        test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
+                             "y_proba": test_proba})
         print(
             f"[attention_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"
         )
 
-    return _aggregate_seeds(per_seed, estimators, selection_metric)
+    return _aggregate_seeds(per_seed, estimators, selection_metric, test_y=test_y,
+                            test_outputs=test_outputs, n_classes=n_classes)
 
 
 def _train_attention_probe_variable(
@@ -645,6 +653,7 @@ def _train_attention_probe_variable(
 
     per_seed: List[Dict[str, Any]] = []
     estimators: Dict[int, _TorchAttentionProbe] = {}
+    test_outputs: List[Dict[str, Any]] = []
 
     print(
         f"[attention_probe] fitting variable-length probe on "
@@ -669,22 +678,30 @@ def _train_attention_probe_variable(
                 test_score = probe.predict_proba_variable(test_seqs)[:, 1]
             except Exception:
                 pass
+        try:
+            test_proba = probe.predict_proba_variable(test_seqs)
+        except Exception:
+            test_proba = None
 
         val_metrics = compute_classification_metrics(val_y, val_pred, y_score=val_score)
         test_metrics = compute_classification_metrics(test_y, test_pred, y_score=test_score)
 
         estimators[seed] = probe
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
+        test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
+                             "y_proba": test_proba})
         print(
             f"[attention_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"
         )
 
-    return _aggregate_seeds(per_seed, estimators, selection_metric)
+    return _aggregate_seeds(per_seed, estimators, selection_metric, test_y=test_y,
+                            test_outputs=test_outputs, n_classes=n_classes)
 
 
-def _aggregate_seeds(per_seed, estimators, selection_metric):
+def _aggregate_seeds(per_seed, estimators, selection_metric, test_y=None, test_outputs=None,
+                     n_classes=None):
     best_row = max(per_seed, key=lambda r: float(r["val"][selection_metric]))
     best_seed = int(best_row["seed"])
     print(
@@ -708,6 +725,9 @@ def _aggregate_seeds(per_seed, estimators, selection_metric):
         best_seed=best_seed,
         best_val_metric=float(best_row["val"][selection_metric]),
         estimator=estimators[best_seed],
+        test_y=None if test_y is None else np.asarray(test_y),
+        test_outputs=test_outputs,
+        classes=None if n_classes is None else np.arange(int(n_classes)),
     )
 
 
@@ -831,11 +851,27 @@ def evaluate_attention_probe(
         **ep_kwargs,
     )
 
+    # The fold's test predictions (one row per test epoch), saved; the metrics
+    # recorded are score() of that file, which `neuroatlas rescore` recomputes.
+    from neuroatlas import predictions as preds
+
+    record = preds.new(
+        "attention_probe", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns={**preds.probe_columns(probe_result), **preds.id_columns(test_meta)},
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit=preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                probe_type="attention")))
+    metrics, saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="attention_probe_eval",
-        metrics=probe_result.metrics,
+        metrics=metrics,
         cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
@@ -844,7 +880,7 @@ def evaluate_attention_probe(
             "window_size": window_size,
             "num_queries": ep_kwargs["num_queries"],
             "probe_seeds": list(seeds),
-            "per_seed": probe_result.per_seed,
+            "per_seed": preds.per_seed(saved),
         },
     )
 
@@ -859,6 +895,7 @@ def evaluate_attention_probe_patient(
     task_config: Dict[str, Any],
     seeds,
     cache_root: Path,
+    probe_dir: Optional[Path] = None,
     **_,
 ) -> BenchmarkResult:
     """Aggregating attention probe: one prediction per subject."""
@@ -893,11 +930,28 @@ def evaluate_attention_probe_patient(
         **ep_kwargs,
     )
 
+    # One row per test subject, saved; the metrics recorded are score() of
+    # that file, which `neuroatlas rescore` recomputes.
+    from neuroatlas import predictions as preds
+
+    record = preds.new(
+        "attention_probe_patient", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns={**preds.probe_columns(probe_result),
+                 "subject_id": np.asarray([str(s) for s in test_subjects], dtype=str)},
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit=preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                probe_type="attention")))
+    metrics, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="attention_probe_patient_eval",
-        metrics=probe_result.metrics,
+        metrics=metrics,
         cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
@@ -918,15 +972,25 @@ def evaluate_attention_probe_patient(
 # Auto-discovery
 # ---------------------------------------------------------------------------
 
+def score(pred) -> Dict[str, Any]:
+    """The attention probe's metrics (per epoch or per subject) from a fold's
+    saved predictions."""
+    from neuroatlas import predictions as preds
+
+    return preds.score_probe(pred.group(""), pred.fit)[0]
+
+
 TASK_SPECS = [
     TaskSpec(
         slug="attention_probe",
         description="Context-window attention probe for per-epoch classification (sleep staging).",
         evaluator=evaluate_attention_probe,
+        score=score,
     ),
     TaskSpec(
         slug="attention_probe_patient",
         description="Attention-pooling probe for subject-level classification (diagnosis).",
         evaluator=evaluate_attention_probe_patient,
+        score=score,
     ),
 ]

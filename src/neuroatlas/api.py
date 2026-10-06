@@ -8,6 +8,7 @@ as the command does.
     api.check("sleep_stage", "biot_pretrained")                  # = check
     api.run_benchmark("sleep_stage", "biot_pretrained", debug=True)
     api.results("sleep_stage")                                   # = results
+    api.rescore("sleep_stage")                                   # = rescore
 
 Every table has exactly the columns of the command's ``--format json``
 (``dataset``, ``model``, ``not_applicable``, ``note``, ...),
@@ -33,7 +34,7 @@ from typing import Any as _Any, Dict as _Dict, List as _List, Optional as _Optio
 from neuroatlas import config as _config
 
 __all__ = ["benchmarks", "models", "data_status", "plan", "check", "run_benchmark",
-           "results"]
+           "results", "rescore"]
 
 _config.apply_to_environ()
 
@@ -145,7 +146,8 @@ def check(benchmark: str, models: str, datasets: str = "single", variant: str = 
 def run_benchmark(benchmark: str, models: str, datasets: str = "single",
                   variant: str = "default", *, debug: bool = False,
                   limit_batches: _Optional[int] = None, cache_root: _Optional[str] = None,
-                  output_root: _Optional[str] = None, online: bool = False):
+                  output_root: _Optional[str] = None, online: bool = False,
+                  reprobe: bool = False):
     """Run it here and return the results of *this* run's datasets, models and
     variant (`results`, filtered), read from ``output_root`` (default: the
     configured one).
@@ -153,14 +155,15 @@ def run_benchmark(benchmark: str, models: str, datasets: str = "single",
     ``online=False`` (default): downloads off, as `neuroatlas run`; a model
     whose weights are not here is reported failed, by name, and the others
     run. ``online=True``: as `neuroatlas --online run`, a missing checkpoint
-    is fetched."""
+    is fetched. ``reprobe=True``: as `run --reprobe`, every fold is fitted
+    again instead of rescored from its saved predictions."""
     from neuroatlas import run
 
     root = _Path(output_root) if output_root else None
     plans = run.plan(benchmark, models, datasets, variant, debug=debug, output_root=root)
     with _downloads(online):
         run.execute(plans, cache_root=_Path(cache_root) if cache_root else None,
-                    limit_batches=limit_batches)
+                    limit_batches=limit_batches, reprobe=reprobe)
     if limit_batches is not None:
         # execute put this run's results under <root>/_limited (a truncated
         # extraction never lands beside real results)
@@ -200,4 +203,32 @@ def results(benchmark: str, paths: _Optional[_Sequence[str]] = None,
         rows.append(row)
     return _frame(rows, ["benchmark", "metric", "dataset", "variant", "model", "status",
                          "mean", "std"])
+
+
+#: `rescore --format json`'s fields, in its order.
+RESCORE_COLUMNS = ("benchmark", "dataset", "variant", "model", "fold", "task", "result",
+                   "metric", "before", "after", "predictions", "results_file", "fix", "note")
+
+
+def rescore(benchmark: str, datasets: _Optional[str] = None, models: _Optional[str] = None,
+            output_root: _Optional[str] = None, variant: _Optional[str] = None):
+    """`rescore --format json`: recompute every result row's metrics from the
+    test predictions its probe saved, rewrite results.json (metadata kept,
+    ``metadata.rescored_at`` added), and return one row per result: ``result``
+    is same / changed / skipped / failed, ``before`` and ``after`` the
+    headline metric, ``fix`` for a skipped row the command that probes it
+    again. Nothing is fitted."""
+    from neuroatlas import rescore as rs
+
+    root = _Path(output_root).expanduser().resolve() if output_root else None
+    report = rs.rescore(benchmark, datasets=datasets, models=models, output_root=root,
+                        variant=variant)
+    rows = [{"benchmark": report.benchmark, "dataset": o.dataset, "variant": o.variant,
+             "model": o.model, "fold": o.fold, "task": o.task, "result": o.status,
+             "metric": report.headline, "before": o.before, "after": o.after,
+             "predictions": o.predictions, "results_file": str(o.file),
+             "fix": rs.fix_command(report.benchmark, o, root) if o.status == "skipped" else None,
+             "note": o.reason}
+            for o in report.outcomes]
+    return _frame(rows, RESCORE_COLUMNS)
 

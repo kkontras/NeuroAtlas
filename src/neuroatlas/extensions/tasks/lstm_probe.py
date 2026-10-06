@@ -282,7 +282,8 @@ def _read_lstm_kwargs(task_config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _aggregate_seeds(per_seed, estimators, selection_metric):
+def _aggregate_seeds(per_seed, estimators, selection_metric, test_y=None, test_outputs=None,
+                     n_classes=None):
     best_row = max(per_seed, key=lambda r: float(r["val"][selection_metric]))
     best_seed = int(best_row["seed"])
     best_val_sm = float(best_row["val"][selection_metric])
@@ -307,6 +308,9 @@ def _aggregate_seeds(per_seed, estimators, selection_metric):
         best_seed=best_seed,
         best_val_metric=float(best_row["val"][selection_metric]),
         estimator=estimators[best_seed],
+        test_y=None if test_y is None else np.asarray(test_y),
+        test_outputs=test_outputs,
+        classes=None if n_classes is None else np.arange(int(n_classes)),
     )
 
 
@@ -328,6 +332,7 @@ def _train_lstm_probe_windowed(
 
     per_seed: List[Dict[str, Any]] = []
     estimators: Dict[int, _TorchLSTMProbe] = {}
+    test_outputs: List[Dict[str, Any]] = []
 
     print(
         f"[lstm_probe] fitting windowed probe on "
@@ -355,19 +360,26 @@ def _train_lstm_probe_windowed(
                 test_score = probe.predict_proba_windowed(test_features, test_idx, test_masks)[:, 1]
             except Exception:
                 pass
+        try:
+            test_proba = probe.predict_proba_windowed(test_features, test_idx, test_masks)
+        except Exception:
+            test_proba = None
 
         val_metrics = compute_classification_metrics(val_y, val_pred, y_score=val_score)
         test_metrics = compute_classification_metrics(test_y, test_pred, y_score=test_score)
 
         estimators[seed] = probe
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
+        test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
+                             "y_proba": test_proba})
         print(
             f"[lstm_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"
         )
 
-    return _aggregate_seeds(per_seed, estimators, selection_metric)
+    return _aggregate_seeds(per_seed, estimators, selection_metric, test_y=test_y,
+                            test_outputs=test_outputs, n_classes=n_classes)
 
 
 # ---------------------------------------------------------------------------
@@ -441,11 +453,27 @@ def evaluate_lstm_probe(
         **lstm_kwargs,
     )
 
+    # The fold's test predictions (one row per test epoch), saved; the metrics
+    # recorded are score() of that file, which `neuroatlas rescore` recomputes.
+    from neuroatlas import predictions as preds
+
+    record = preds.new(
+        "lstm_probe", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns={**preds.probe_columns(probe_result), **preds.id_columns(test_meta)},
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit=preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                probe_type="lstm")))
+    metrics, saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="lstm_probe_eval",
-        metrics=probe_result.metrics,
+        metrics=metrics,
         cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
@@ -455,9 +483,16 @@ def evaluate_lstm_probe(
             "hidden_size": lstm_kwargs["hidden_size"],
             "num_layers": lstm_kwargs["num_layers"],
             "probe_seeds": list(seeds),
-            "per_seed": probe_result.per_seed,
+            "per_seed": preds.per_seed(saved),
         },
     )
+
+
+def score(pred) -> Dict[str, Any]:
+    """The LSTM probe's metrics from a fold's saved predictions."""
+    from neuroatlas import predictions as preds
+
+    return preds.score_probe(pred.group(""), pred.fit)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -469,5 +504,6 @@ TASK_SPECS = [
         slug="lstm_probe",
         description="Bidirectional LSTM probe for per-epoch classification with temporal context.",
         evaluator=evaluate_lstm_probe,
+        score=score,
     ),
 ]

@@ -820,6 +820,7 @@ def evaluate_linear_probe(
     cache_root: Path,
     extract_only: bool = False,
     embed_chunk: Optional[tuple] = None,
+    task_config: Optional[Dict[str, Any]] = None,
     **_,
 ) -> BenchmarkResult:
     cache_paths: dict = {}
@@ -910,6 +911,8 @@ def evaluate_linear_probe(
             payload.labels = np.asarray(payload.labels)[mask]
             payload.metadata = [m for m, keep in zip(payload.metadata, mask) if keep]
 
+    probe_type = str(probe_config.get("type", "linear"))
+    selection_metric = str(probe_config.get("selection_metric", "macro_f1"))
     probe_result = train_probe(
         train_payload.features,
         train_payload.labels,
@@ -918,10 +921,10 @@ def evaluate_linear_probe(
         test_payload.features,
         test_payload.labels,
         seeds=list(seeds),
-        probe_type=str(probe_config.get("type", "linear")),
+        probe_type=probe_type,
         max_iter=int(probe_config.get("max_iter", 10_000)),
         hidden_dims=probe_config.get("hidden_dims"),
-        selection_metric=str(probe_config.get("selection_metric", "macro_f1")),
+        selection_metric=selection_metric,
         class_weight=probe_config.get("class_weight"),
         c_values=probe_config.get("c_values"),
     )
@@ -938,11 +941,33 @@ def evaluate_linear_probe(
         },
     )
     cache_paths.update(probe_artifacts)
+
+    # The fold's test predictions, saved; the metrics recorded are computed
+    # from that file by score() -- what `neuroatlas rescore` runs again.
+    from neuroatlas import predictions as preds
+    from neuroatlas.benchmarking_helpers.probes.probe import _higher_is_better
+
+    test_meta = [m for m, keep in zip(test_payload.metadata, probe_result.test_keep) if keep]
+    record = preds.new(
+        "linear_probe", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns={**preds.probe_columns(probe_result), **preds.id_columns(test_meta)},
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit=preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                probe_type=probe_type,
+                                higher_is_better=_higher_is_better(selection_metric),
+                                hidden_dims=probe_config.get("hidden_dims")),
+            score={"label_mode": label_mode}))
+    metrics, saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="linear_probe_eval",
-        metrics=probe_result.metrics,
+        metrics=metrics,
         cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
@@ -957,9 +982,17 @@ def evaluate_linear_probe(
             "probe_feature_dim": int(np.asarray(train_payload.features).shape[1])
             if np.asarray(train_payload.features).ndim == 2 else None,
             "probe_seeds": list(seeds),
-            "per_seed": probe_result.per_seed,
+            "per_seed": preds.per_seed(saved),
         },
     )
+
+
+def score(pred) -> Dict[str, Any]:
+    """The linear probe's metrics from a fold's saved predictions: the
+    per-seed test metrics (mean, std) and the seed selected on validation."""
+    from neuroatlas import predictions as preds
+
+    return preds.score_probe(pred.group(""), pred.fit)[0]
 
 
 TASK_SPECS = [
@@ -967,5 +1000,6 @@ TASK_SPECS = [
         slug="linear_probe",
         description="Extract embeddings and fit a train/val/test linear or nonlinear probe.",
         evaluator=evaluate_linear_probe,
+        score=score,
     )
 ]

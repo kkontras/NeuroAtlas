@@ -32,6 +32,7 @@ usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]
 | [`submit`](#submit) | Write cluster jobs (HTCondor or SLURM) for a whole benchmark. |
 | [`status`](#status) | How each job of a `submit` is doing. |
 | [`results`](#results) | Summarise a benchmark's results: mean, spread, normalised score. |
+| [`rescore`](#rescore) | Recompute results' metrics from their saved test predictions. |
 | [`fetch`](#fetch) | Obtain a dataset's raw corpus, or say exactly how to. |
 | [`prepare`](#prepare) | Build a dataset's optional cache (no benchmark needs one). |
 | [`embed`](#embed) | Extract frozen-backbone embeddings for a dataset. |
@@ -507,10 +508,10 @@ Run a benchmark here: embed where missing, probe, write results.
 ```
 usage: neuroatlas run [-h] -m MODELS [--dataset single|full|SLUGS] [--variant VARIANT]
                       [--dry-run] [--debug] [--folds FOLDS] [--limit-batches N]
-                      [--skip-embed] [--num-workers N] [--cache-root CACHE_ROOT]
-                      [--output-root OUTPUT_ROOT] [--checkpoint-override ID.KEY=VALUE]
-                      [--per-model-output] [--allow-partial]
-                      [--format {table,csv,md,json}]
+                      [--skip-embed] [--reprobe] [--num-workers N]
+                      [--cache-root CACHE_ROOT] [--output-root OUTPUT_ROOT]
+                      [--checkpoint-override ID.KEY=VALUE] [--per-model-output]
+                      [--allow-partial] [--format {table,csv,md,json}]
                       benchmark
 
 Run a benchmark on this machine: for each dataset, `embed` (a no-op where the cache
@@ -547,6 +548,10 @@ options:
                         <output root>/_limited; too few subjects may leave a fold with
                         nothing to test on.
   --skip-embed          Probe only; fail where embeddings are missing.
+  --reprobe             Fit every fold again. Without it, a fold whose saved
+                        predictions (predictions.npz in its probe folder) were made
+                        with the same settings, weights and embeddings is not fitted
+                        again: its metrics are recomputed from them.
   --num-workers N       Data-loader workers for extraction. Default: the CPUs this job
                         may use (CPU affinity and cgroup quota) minus one, at most 16,
                         unless the dataset pins its own.
@@ -579,8 +584,8 @@ Write cluster jobs (HTCondor or SLURM) for a whole benchmark.
 usage: neuroatlas submit [-h] -m MODELS [--dataset single|full|SLUGS]
                          [--variant VARIANT] --out OUT [--backend {condor,slurm}]
                          [--mode {cached,retry,all}] [--output-root OUTPUT_ROOT]
-                         [--force] [-v] [--gpus GPUS] [--cpus CPUS] [--memory SIZE]
-                         [--time H:MM:SS] [--walltime SECONDS]
+                         [--force] [--reprobe] [-v] [--gpus GPUS] [--cpus CPUS]
+                         [--memory SIZE] [--time H:MM:SS] [--walltime SECONDS]
                          [--gpu-capability auto|none|X.Y] [--partition PARTITION]
                          [--no-mem] [--requirements REQUIREMENTS]
                          [--walltime-attr NAME] [--extra LINE]
@@ -617,6 +622,9 @@ options:
                         Results root for the jobs.
   --force               Write jobs for pairs whose data or weights are not found here
                         (the channel map is still obeyed).
+  --reprobe             The jobs fit every fold again (`run --reprobe`) instead of
+                        recomputing the metrics of folds whose saved predictions
+                        match. With --mode all to re-run jobs that finished.
   -v, --verbose         List every skipped pair.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
@@ -704,6 +712,41 @@ options:
                         The results root to read (default: the configured output
                         root).
   -v, --verbose         Show why failed folds failed: the message each one recorded.
+  --format {table,csv,md,json}
+                        Output format (default: table). csv, md and json carry the
+                        table's indented note lines as a `note` column; json uses null
+                        for a missing value.
+```
+
+
+## rescore
+
+Recompute results' metrics from their saved test predictions.
+
+```
+usage: neuroatlas rescore [-h] [--dataset SLUGS] [-m MODELS] [--variant VARIANT]
+                          [--output-root OUTPUT_ROOT] [--format {table,csv,md,json}]
+                          benchmark
+
+Recompute every result's metrics from the test predictions its probe saved, and
+rewrite results.json; nothing is fitted again.
+
+positional arguments:
+  benchmark
+
+options:
+  -h, --help            show this help message and exit
+  --dataset SLUGS       Only these datasets, comma-separated (default: every dataset
+                        that has results).
+  -m MODELS, --models MODELS
+                        An alias (all_fm, all_ts, ...), group, family or checkpoint
+                        ids, comma-separated; `-name` removes one (all,-reve). A
+                        family the benchmark leaves out (`neuroatlas show
+                        <benchmark>`) is skipped by an alias and refused by name.
+                        Default: every model that has results.
+  --variant VARIANT     Only this variant's results (default: every variant).
+  --output-root OUTPUT_ROOT
+                        The results root (default: the configured output root).
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -930,9 +973,9 @@ usage: neuroatlas probe [-h] [--config CONFIG] [--dataset DATASET] [-m MODELS]
                         [--aggregation AGGREGATION] [--seeds SEEDS]
                         [--seed-mode {fold,shared}] [--pooling {mean,per_patch}]
                         [--seed SEED] [--output-root OUTPUT_ROOT]
-                        [--cache-root CACHE_ROOT] [--extract-only] [--embed-chunk K/N]
-                        [--no-recording-norm] [--no-amplitude-scale] [--dry-run]
-                        [--list-tasks]
+                        [--cache-root CACHE_ROOT] [--reprobe] [--extract-only]
+                        [--embed-chunk K/N] [--no-recording-norm]
+                        [--no-amplitude-scale] [--dry-run] [--list-tasks]
 
 Fit a probe on extracted embeddings for any dataset/model/task.
 
@@ -981,6 +1024,11 @@ options:
   --cache-root CACHE_ROOT
                         Embedding cache root. Default: $EEG_CACHE_ROOT, else the
                         shared cache.
+  --reprobe             Fit every fold again. Without it, a fold whose predictions.npz
+                        is already in its probe folder -- same probe and task
+                        settings, dataset settings, fold, seeds, weights and
+                        embeddings -- is not fitted again: its metrics are recomputed
+                        from the saved predictions.
   --extract-only        Extract embeddings and exit (prefer `embed`).
   --embed-chunk K/N
   --no-recording-norm

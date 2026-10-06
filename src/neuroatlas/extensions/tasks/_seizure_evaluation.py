@@ -439,67 +439,19 @@ def tune_threshold(
 # ---------------------------------------------------------------------------
 
 
-def full_binary_probe(
-    *,
-    train_x: np.ndarray,
-    train_y: np.ndarray,
-    val_x: np.ndarray,
-    val_y: np.ndarray,
-    test_x: np.ndarray,
+def binary_test_metrics(
     test_y: np.ndarray,
-    test_rec_ids: Optional[Sequence[str]] = None,
-    val_rec_ids: Optional[Sequence[str]] = None,
-    window_s: float = 30.0,
-    event_window_s: Optional[float] = None,     # seconds a window stands for (the event metric)
-    c_values: Sequence[float] = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0),
-    class_weight: str = "balanced",
-    selection_metric: str = "auprc",
-    max_iter: int = 500,
-    threshold_objective: str = "f1",
-    seed: int = 0,
-    # When set, dumps test_y/test_proba/test_rec_ids/threshold to this path so
-    # ROC/Sens-FA/h plots can be regenerated without re-fitting. Filename is
-    # interpreted by save_probe_predictions; common pattern is
-    # ``out_dir / f"preds_fold{F}.npz"``.
-    predictions_path: Optional[Path] = None,
-    predictions_model_id: Optional[str] = None,
-    predictions_fold: Optional[int] = None,
+    test_proba: np.ndarray,
+    test_pred: np.ndarray,
+    test_rec_ids: Optional[Sequence[str]],
+    window_s: float,
 ) -> Dict[str, Any]:
-    """End-to-end binary seizure-detection linear probe.
-
-    C is chosen from ``c_values`` by validation ``selection_metric`` (AUPRC,
-    the paper's, or AUROC), with ``class_weight`` and ``max_iter`` passed to
-    the solver; the decision threshold is then tuned on validation F1.
-
-    Returns a flat dict with all standard metrics. Use ``test_rec_ids`` to
-    enable per-recording event grouping; if ``None``, the event metrics
-    fall back to merging the whole test array as one sequence (legacy
-    behavior, not recommended).
-    """
-    model, scaler, best_c, val_score = fit_lr_c_grid(
-        train_x, train_y, val_x, val_y,
-        c_values=c_values, class_weight=class_weight, max_iter=max_iter, seed=seed,
-        selection_metric=selection_metric, val_rec_ids=val_rec_ids,
-        window_s=event_window_s if event_window_s is not None else window_s,
-    )
-    val_proba = model.predict_proba(scaler.transform(val_x))[:, 1]
-    try:
-        val_auprc = float(average_precision_score(val_y, val_proba))
-    except Exception:
-        val_auprc = 0.0
-    val_event = None
-    if val_rec_ids is not None:
-        from ._event_sens_fa import curve_auc, fold_curve
-
-        v = float(curve_auc(fold_curve(val_y, val_proba, np.asarray(val_rec_ids),
-                                       window_s=event_window_s if event_window_s is not None
-                                       else window_s)))
-        val_event = v if np.isfinite(v) else None
-    thr, val_f1 = tune_threshold(model, scaler, val_x, val_y, objective=threshold_objective)
-
-    test_proba = model.predict_proba(scaler.transform(test_x))[:, 1]
-    test_pred = (test_proba >= thr).astype(np.int64)
-
+    """The test-set metrics of a binary seizure probe, from the window labels,
+    the seizure probabilities and the thresholded predictions: what
+    :func:`full_binary_probe` reports and what the task scores a fold's saved
+    predictions with. ``test_rec_ids`` groups the event-overlap metrics by
+    recording; ``None`` merges the whole test array as one sequence (legacy
+    behaviour, not recommended)."""
     # Threshold-free
     auroc = float(roc_auc_score(test_y, test_proba))
     auprc = float(average_precision_score(test_y, test_proba))
@@ -522,8 +474,7 @@ def full_binary_probe(
         ovlp = event_overlap_metrics_grouped(
             test_y, test_pred, np.zeros(len(test_y), dtype=object),
         )
-
-    out: Dict[str, Any] = {
+    return {
         # Threshold-free
         "test_auroc": auroc,
         "test_auprc": auprc,
@@ -542,6 +493,70 @@ def full_binary_probe(
         "test_ovlp_f1": ovlp["ovlp_f1"],
         "test_n_true_events": ovlp["n_true_events"],
         "test_n_pred_events": ovlp["n_pred_events"],
+    }
+
+
+def full_binary_probe(
+    *,
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    val_x: np.ndarray,
+    val_y: np.ndarray,
+    test_x: np.ndarray,
+    test_y: np.ndarray,
+    test_rec_ids: Optional[Sequence[str]] = None,
+    val_rec_ids: Optional[Sequence[str]] = None,
+    window_s: float = 30.0,
+    event_window_s: Optional[float] = None,     # seconds a window stands for (the event metric)
+    c_values: Sequence[float] = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0),
+    class_weight: str = "balanced",
+    selection_metric: str = "auprc",
+    max_iter: int = 500,
+    threshold_objective: str = "f1",
+    seed: int = 0,
+    test_metrics: bool = True,
+) -> Dict[str, Any]:
+    """End-to-end binary seizure-detection linear probe.
+
+    C is chosen from ``c_values`` by validation ``selection_metric`` (AUPRC,
+    the paper's, AUROC, or the validation fold's event Sens@FA AUC, which
+    needs ``val_rec_ids``), with ``class_weight`` and ``max_iter`` passed to
+    the solver; the decision threshold is then tuned on validation F1.
+
+    Returns a flat dict with all standard metrics (:func:`binary_test_metrics`)
+    and the fit's choices. Use ``test_rec_ids`` to enable per-recording event
+    grouping. ``test_metrics=False`` leaves out the test metrics (the task
+    computes them from the fold's saved predictions instead).
+    """
+    model, scaler, best_c, val_score = fit_lr_c_grid(
+        train_x, train_y, val_x, val_y,
+        c_values=c_values, class_weight=class_weight, max_iter=max_iter, seed=seed,
+        selection_metric=selection_metric, val_rec_ids=val_rec_ids,
+        window_s=event_window_s if event_window_s is not None else window_s,
+    )
+    val_proba = model.predict_proba(scaler.transform(val_x))[:, 1]
+    try:
+        val_auprc = float(average_precision_score(val_y, val_proba))
+    except Exception:
+        val_auprc = 0.0
+    val_event = None
+    if val_rec_ids is not None:
+        from ._event_sens_fa import curve_auc, fold_curve
+
+        v = float(curve_auc(fold_curve(val_y, val_proba, np.asarray(val_rec_ids),
+                                       window_s=event_window_s if event_window_s is not None
+                                       else window_s)))
+        val_event = v if np.isfinite(v) else None
+    thr, val_f1 = tune_threshold(model, scaler, val_x, val_y, objective=threshold_objective)
+
+    test_proba_full = model.predict_proba(scaler.transform(test_x))
+    test_proba = test_proba_full[:, 1]
+    test_pred = (test_proba >= thr).astype(np.int64)
+
+    out: Dict[str, Any] = (
+        binary_test_metrics(test_y, test_proba, test_pred, test_rec_ids, window_s)
+        if test_metrics else {})
+    out.update({
         # Diagnostic
         "best_weight_decay": float(best_c),
         "tuned_threshold": float(thr),
@@ -555,28 +570,13 @@ def full_binary_probe(
         "n_test": int(len(test_y)),
         "n_test_pos": int((test_y == 1).sum()),
         "n_test_neg": int((test_y == 0).sum()),
-        # The window probabilities themselves (an array, not a metric): the
-        # caller sweeps them for the event-level Sens@FA curve.
+        # The window probabilities themselves (arrays, not metrics): the
+        # caller saves them and sweeps them for the event-level Sens@FA curve.
         "test_proba": test_proba,
-    }
-
-    if predictions_path is not None:
-        from .predictions import save_probe_predictions
-        save_probe_predictions(
-            out_dir=Path(predictions_path).parent,
-            fold=predictions_fold if predictions_fold is not None else 0,
-            test_y=test_y,
-            test_proba=test_proba,
-            test_rec_ids=np.asarray(test_rec_ids, dtype=object) if test_rec_ids is not None else None,
-            model_id=predictions_model_id or "",
-            threshold=float(thr),
-            n_train=int(len(train_y)),
-            n_val=int(len(val_y)),
-            filename=Path(predictions_path).name,
-            best_weight_decay=float(best_c),
-            seed=int(seed),
-        )
-
+        "test_proba_full": test_proba_full,
+        "test_pred": test_pred,
+        "classes": np.asarray(model.classes_),
+    })
     return out
 
 

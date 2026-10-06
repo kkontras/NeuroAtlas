@@ -38,6 +38,7 @@ One word per idea, the same in the tables, the JSON and the Python API.
 | **embedding** | What a frozen model turns one window of EEG into. Models are never fine-tuned. |
 | **embedding cache** | Where embeddings are saved, keyed by dataset, checkpoint and the windowing; see [What is reused](#what-is-reused). |
 | **probe** | A linear model trained on the embeddings (logistic regression; ridge for brain age). Its score is the model's score. |
+| **predictions** | What a probe predicts on a fold's test rows, saved as `predictions.npz` in its probe folder; every metric is computed from them, and `rescore` recomputes them. See [Saved predictions and `rescore`](#saved-predictions-and-rescore). |
 | **fold** | One split of a dataset's subjects into train, validation and test, never sharing a subject (Bonn, which ships no subject ids, splits by clip). Most datasets have 5 folds, from a frozen file or a seeded splitter; BCI is leave-one-subject-out (`LOSO (N)`, one fold per subject); SHHS ships one fixed split (`fixed split`). |
 | **channel map** | Per dataset: which electrodes each model family gets, under which names. It can mark a family `skip`; that pair is **n/a**. A family the map has no entry for is **invalid**: `check`, `run` and `submit` report the pair and never run it. |
 | **n/a** | Not applicable, never zero: a pair the channel map skips, a spread over one fold, a model missing from part of a suite. `null` in JSON. |
@@ -482,7 +483,9 @@ tester's run); then the probe, which is CPU work, 5 to 12 min per fold on a
 Results go to `<output root>/<benchmark>/<dataset>/` (a variant adds
 `/<variant>`): `results.json` (one record per model and fold),
 `results.csv`, `results.md` and `summary.md` (the same table), and
-`probes/` (the fitted probes). `results.json` keeps earlier folds and
+`probes/`: per model and fold, the fitted probe, its test predictions
+(`predictions.npz`, [Saved predictions and `rescore`](#saved-predictions-and-rescore))
+and the row it recorded (`result.json`). `results.json` keeps earlier folds and
 models: a later run adds to it, and replaces a fold it runs again. A new
 result for a fold also drops that fold's earlier failed rows, so a retry
 that succeeds leaves no failure behind. Each row records when it was
@@ -493,7 +496,9 @@ The closing lines count this run's work, not the file's:
 entry for some model: those are not run, do not count as failed, and a
 `warning:` names them and the map to edit), plus how many earlier results
 the file also keeps, then where the results are and the `neuroatlas results`
-line that reads them.
+line that reads them. When some folds were not fitted because their saved
+predictions were reused, a `note:` says how many
+([Saved predictions are reused](#saved-predictions-are-reused)).
 
 ### What is reused
 
@@ -553,6 +558,54 @@ Brain age needs ages in the cache. A Sleep-EDF cache built without `xlrd`
 cache's folder and says to delete it and run again. Installing the package
 afterwards does not repair an existing cache.
 
+### Saved predictions are reused
+
+Every probe keeps each fold's test predictions
+([Saved predictions and `rescore`](#saved-predictions-and-rescore)), so a
+second `run` (or `probe`) does not fit a fold again when nothing it depends
+on has changed: it recomputes the fold's metrics from the saved file and
+says so. On the quickstart's two folds, 580 s the first time, 6 to 10 s the
+second (paths shortened):
+
+```
+$ neuroatlas run sleep_stage -m biot_pretrained --folds 0,1
+...
+$ neuroatlas probe --dataset sleep_edf_expanded --task sleep_staging --folds 0,1 --models biot_pretrained --output-root <output root>/sleep_stage/sleep_edf_expanded
+probing 1 model(s) on sleep_edf_expanded: 2 run(s), one line each as it finishes
+[1/2] sleep_edf_expanded biot_pretrained fold 0: ok (reused) (0s)
+[2/2] sleep_edf_expanded biot_pretrained fold 1: ok (reused) (0s)
+probe: 2 ok, 0 failed (results: <output root>/sleep_stage/sleep_edf_expanded)
+
+2 runs: 2 ok, 0 failed, 0 n/a
+note: reused saved predictions for 2 folds; --reprobe probes again
+```
+
+(BCI cohorts save less: building their datamodule reads and filters every
+MOABB recording, in the embed step and again in the probe step, before any
+fold is reused -- about 70 s of BNCI2014_001's 116 s.)
+
+A fold's file is reused when it is in the fold's probe folder -- whose name
+is a key of the probe settings, the task settings and the dataset settings,
+fold included -- and was made with the same seeds, `--pooling` and weights
+file (`--checkpoint-override`), from the same embeddings: a cache under this
+run's cache root whose files have the size and modification time they had
+when the probe read them. A cache extracted again (deleted and rebuilt, or
+re-embedded after a fix) therefore means a new probe. The weights are
+compared by their file's path, not its content; weights replaced in place
+also leave the old embeddings in the cache, and extracting those again is
+what makes the probe run again. A change to how a metric is computed
+applies (the metrics are recomputed); a change to how a probe is fitted is
+not seen: after one, run with `--reprobe`. Whenever a file is
+there but not reused, a `note:` says why (`saved predictions not reused,
+probing again: the embeddings they were fitted on were extracted again or
+are gone (...)`). The row restored has the metrics recomputed with today's
+code and `metadata.reused_predictions: true`; the probe step does
+not load the backbone, and its progress line reads `ok (reused)`.
+
+`--reprobe` (on `run`, `probe` and `submit`) fits every fold again and
+overwrites its files. Results from before this version have no file, and
+are fitted again as before.
+
 ### Run options
 
 - **`--debug`**: fold 0 only (results say `1/5` folds). Its extraction is
@@ -574,6 +627,8 @@ afterwards does not repair an existing cache.
   allocation) minus one, at most 16, unless the dataset pins its own. The
   probe caps its BLAS threads at 8.
 - **`--skip-embed`**: probe only; a pair with no embeddings fails.
+- **`--reprobe`**: fit every fold again instead of reusing its saved
+  predictions ([Saved predictions are reused](#saved-predictions-are-reused)).
 - **`--cache-root`, `--output-root`**: other roots for this run.
 - **`--checkpoint-override biot_pretrained.checkpoint_path=/my.ckpt`**:
   other weights for this run. Only `checkpoint_path` for now; the file must
@@ -664,7 +719,11 @@ failure with its host and log; `-v` gives one row per job.
 `--mode cached` (default) queues only `missing` jobs, so re-running
 `submit` never repeats work; `--mode retry` also takes `failed`, `partial`,
 `exited`, `stopped` and `removed` ones; `--mode all` takes everything. A job
-still in the queue (`running`, `idle`, `held`) is never queued again.
+still in the queue (`running`, `idle`, `held`) is never queued again. A job
+reuses the saved predictions of folds already probed with the same inputs
+([Saved predictions are reused](#saved-predictions-are-reused));
+`submit --reprobe` writes jobs that fit every fold again (`run --reprobe`),
+with `--mode all` to queue jobs that already finished.
 
 Resources per job: `--gpus 1 --cpus 4 --memory 32G` by default. `--memory`
 needs a unit (`32G`, `1500M`). The wall time is one setting for both
@@ -727,21 +786,6 @@ folders and quoted globs you name. One row per dataset × variant × model; a
   `metric`, `variant`, `status`, `n_folds`, `n_expected`, `n_failed`,
   `failures`, `errors` and `note`.
 
-**Saved predictions (epilepsy).** Each fold of the seizure probe also writes
-its test predictions to `predictions.npz` in that fold's probe folder,
-`<output root>/epilepsy/<dataset>/probes/<dataset>/<model>/<key>/` (the path
-is in `results.json` under `cache_paths.predictions`): `y_true`, `y_score`,
-`recording_id`, `subject_id`, `window_start_s`, `window_s`, `threshold`,
-`dataset`, `checkpoint_id`, `fold`. A metric can be recomputed from them
-without probing again, e.g. the event Sens@FA AUC of one fold:
-
-```python
-import numpy as np
-from neuroatlas.extensions.tasks import _event_sens_fa as esf
-z = np.load("predictions.npz")
-esf.fold_metrics(z["y_true"], z["y_score"], z["recording_id"], window_s=float(z["window_s"]))
-```
-
 A result recorded twice -- a quick `run` and later a cluster job of the same
 dataset, variant, model, fold and task -- counts once: the newest file wins,
 and a `warning:` says how many duplicates it dropped. Two variants of the same
@@ -756,6 +800,82 @@ it exits 1 saying so.
 Exit status: 0 with something to show; 1 when there are no results; 2 for
 a usage error.
 
+### Saved predictions and `rescore`
+
+Every probe writes, for each fold, its test predictions to `predictions.npz`
+in the fold's probe folder,
+`<output root>/<benchmark>/<dataset>/probes/<dataset>/<model>/<key>/`,
+beside the row it recorded (`result.json`); `results.json` has the file's
+path under `cache_paths.predictions`. The metrics each row records are
+computed from that file by its task's own scoring function, so a metric
+fixed or added after a run reaches it without probing again:
+
+```bash
+neuroatlas rescore sleep_stage                     # every result of the benchmark
+neuroatlas rescore epilepsy --dataset siena -m cbramod_pretrained
+```
+
+```
+$ neuroatlas rescore sleep_stage --dataset sleep_edf_expanded -m biot_pretrained
+dataset             model            fold  result          bal_acc before  after
+sleep_edf_expanded  biot_pretrained  0     rescored, same  0.66228         0.66228
+sleep_edf_expanded  biot_pretrained  1     rescored, same  0.650876        0.650876
+
+2 rescored from saved predictions: 0 changed, 2 the same; 1 results.json file rewritten
+```
+
+`rescore` recomputes each row's metrics from its file, merges them into the
+row as a run does (a metric the task computes is replaced, one it does not
+is kept), keeps the row's metadata and adds `metadata.rescored_at`, and
+rewrites `results.json` and the tables beside it; it fits nothing.
+`result` reads `rescored, same` or `rescored, changed`, with the headline
+before and after: on files the current version wrote it is always `same`.
+A row probed before predictions were saved has nothing to rescore and is
+listed with the command that probes it again:
+
+```
+skipped: sleep_edf_expanded/biot_pretrained folds 2, 3, 4: probed before predictions were saved
+  fix: neuroatlas run sleep_stage --dataset sleep_edf_expanded -m biot_pretrained --reprobe
+```
+
+It takes `--dataset`, `-m`, `--variant`, `--output-root` and `--format` as
+`results` does; `--format json` adds, per row, its file and that `fix`.
+Seizure predictions saved in their first layout (2026-10-06, before this
+version) are read too; their rescore keeps the validation choices (C,
+threshold) from `results.json`.
+
+**The file.** `np.load("predictions.npz")` reads it (no pickles); the full
+description is in `neuroatlas/predictions.py`.
+
+| entry | what |
+|---|---|
+| `format`, `dataset`, `checkpoint_id`, `task`, `fold` | text: `neuroatlas.predictions/1`, what made it (`fold` is empty for a cohort with one fixed split) |
+| `y_true` | per test row: the true class, or value (an age in years) |
+| `y_pred` | the predicted class, or value |
+| `y_proba`, `classes` | class probabilities (float32, rows × classes) and the class of each column |
+| `y_score` | binary tasks: the positive class's score (float64), what AUROC, AUPRC and the event Sens@FA read |
+| `subject_id`, `recording_id`, `session_id`, `epoch_index`, `trial_idx`, `window_start_s` | the rows' ids, those they have |
+| `window_s`, `threshold` | epilepsy: seconds per window, and the decision threshold tuned on validation |
+| `<group>/<column>` | further probes of the fold: arousal one per threshold (`threshold_1.0s/`), respiratory and limb events one per field and threshold (`apnea_any_fraction/threshold_1.0s/`), brain age one per estimator besides the headline (`ridge_subject/alpha_y_pred`: every ridge alpha's test predictions; `epoch_regression/`: the epoch-level rows; `holdout/`: a held-out cohort) |
+| `seed_y_pred`, `seed_y_score` | every seed's predictions, under `probe --seed-mode shared` |
+| `info` | JSON: `fit`, what the probe chose on validation (seed, C, alpha, threshold) and the validation scores it chose by -- a rescore keeps them; `score`, settings the metrics read; `groups`; and what the probe was given (seeds, pooling, probe and task settings, dataset settings, weights file, embedding caches with their files' sizes and times) |
+
+The rows are what the metrics count: 30 s epochs (sleep staging, arousal,
+respiratory and limb events, with their recording and epoch index -- what a
+hypnogram is built from), 10 s windows (epilepsy), trials (BCI; the fold's
+held-out subject is in `subject_id`), subjects or recordings (diagnosis,
+brain age). A Sleep-EDF staging fold is about 1.9 MB.
+
+```python
+import numpy as np
+from sklearn.metrics import balanced_accuracy_score
+from neuroatlas import predictions
+
+z = np.load("predictions.npz")
+balanced_accuracy_score(z["y_true"], z["y_pred"])     # one fold, by hand
+predictions.score("predictions.npz")                  # every metric the task records
+```
+
 ## 10. From Python
 
 ```python
@@ -768,6 +888,7 @@ api.plan("sleep_stage", "all_fm", datasets="full")      # = run --dry-run
 api.check("sleep_stage", "biot_pretrained")             # = check
 api.run_benchmark("sleep_stage", "biot_pretrained", debug=True)
 api.results("sleep_stage")                              # = results
+api.rescore("sleep_stage")                              # = rescore
 ```
 
 Each returns a pandas DataFrame. Importing `neuroatlas.api` applies the same
@@ -786,7 +907,11 @@ Missing numbers are `None` (NaN in a float column). `results()` takes
 
 `run_benchmark(...)` returns the results of this run's datasets, models and
 variant only, and takes `debug=`, `limit_batches=`, `cache_root=`,
-`output_root=` and `online=` (not `num_workers`).
+`output_root=`, `online=` and `reprobe=` (not `num_workers`). `rescore(...)`
+takes `datasets=`, `models=`, `output_root=` and `variant=`, rewrites the
+results as the command does, and returns one row per result: `result`
+(`same`, `changed`, `skipped`, `failed`), `before`, `after`, `predictions`
+and, for a skipped row, `fix`.
 
 The offline rule holds in Python too: no API function downloads. `check()`
 and `run_benchmark()` run with downloads switched off
@@ -813,6 +938,7 @@ Everything the tool writes, by default under `$NEUROATLAS_HOME`
 | embeddings | `<cache root>/<dataset>/<checkpoint>/all/<key>/` (`features.npy`, `labels.npy`, `items.json`, `metadata.json`); per fold and split for some cohorts ([What is reused](#what-is-reused)) |
 | `--limit-batches` | `<cache root>/_limited/...` and `<output root>/_limited/<benchmark>/<dataset>/` |
 | results of `run` | `<output root>/<benchmark>/<dataset>/`: `results.json`, `results.csv`, `results.md`, `summary.md`, `probes/` |
+| a fold's probe | `<output root>/<benchmark>/<dataset>/probes/<dataset>/<model>/<key>/`: `predictions.npz` (its test predictions), `result.json` (the row it recorded), `probe.pkl` and `metadata.json` (the fitted linear probe) |
 | results of cluster jobs | `<output root>/<benchmark>/<dataset>/<model>/results.json` and `job_status.json` |
 | hypnograms | `<output root>/sleep_hypnogram/<dataset>/`: `hypnograms.json`, `hypnogram_features.csv`, `hypnogram_features_summary.csv`, `results.json` |
 | job files | the `--out` folder: `jobs.json`, `jobs/<job>.sh`, `jobs.txt`, `jobs.job` or `jobs.sbatch`, `logs/` |

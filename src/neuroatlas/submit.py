@@ -524,12 +524,13 @@ def _ready(data_state, model_state) -> Optional[str]:
 
 
 def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
-              output_root: Optional[Path] = None, *, force: bool = False) -> Dict[str, Any]:
+              output_root: Optional[Path] = None, *, force: bool = False,
+              reprobe: bool = False) -> Dict[str, Any]:
     """Write a script per runnable (dataset, model). A pair whose data or
     weights are not on this machine is skipped with its reason (``force``
     writes it anyway); a pair the channel map rules out -- ``skip`` (n/a) or
     no entry for the family (invalid) -- or a dataset whose map does not
-    load, never gets a job."""
+    load, never gets a job. ``reprobe``: the jobs run ``run --reprobe``."""
     from neuroatlas import catalog, data, models as model_state, run as runmod
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
@@ -585,6 +586,8 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
                    "--dataset", dataset, "--variant", variant, *root_args]
             if label != "*":
                 cmd.append("--per-model-output")
+            if reprobe and not bench.derived_from:
+                cmd.append("--reprobe")
             script = out / "jobs" / f"{jid}.sh"
             # replace, never rewrite in place: bash reads a running script as it
             # goes, so a job of an earlier submit still running it must keep its copy

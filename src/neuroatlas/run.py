@@ -340,12 +340,16 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
             limit_batches: Optional[int] = None, skip_embed: bool = False,
             extra_embed: Optional[List[str]] = None,
             extra_probe: Optional[List[str]] = None,
-            num_workers: Optional[int] = None) -> Dict[str, Any]:
+            num_workers: Optional[int] = None, reprobe: bool = False) -> Dict[str, Any]:
     """Run the plans. Returns counts of ok / failed / n/a results.
 
     ``num_workers``: data-loader workers for the embed step (default: the
     CPUs this job may use, minus one, at most 16; see
     benchmarking_helpers/runtime/resources.py).
+
+    ``reprobe``: fit every fold again (``probe --reprobe``). Without it a fold
+    whose saved predictions match is rescored, not fitted; ``reused`` counts
+    those (of the ``ok`` ones).
     """
     import contextlib
 
@@ -353,8 +357,12 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
     from neuroatlas.cli import _msg
 
     # "kept": records already in results.json that this run did not write;
-    # "invalid": pairs the channel map has no entry for (never run)
-    summary = {"ok": 0, "failed": 0, "n/a": 0, "invalid": 0, "kept": 0, "datasets_failed": []}
+    # "invalid": pairs the channel map has no entry for (never run);
+    # "reused": ok results recomputed from a fold's saved predictions
+    summary = {"ok": 0, "failed": 0, "n/a": 0, "invalid": 0, "kept": 0, "reused": 0,
+               "datasets_failed": []}
+    if reprobe:
+        extra_probe = [*(extra_probe or []), "--reprobe"]
     if limit_batches is not None:
         # A truncated cache must never be read as a complete one, and the
         # results it gives must never land beside real ones (F-061).
@@ -449,6 +457,8 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
             code = (r.get("failure") or {}).get("code")
             if r.get("ok"):
                 summary["ok"] += 1
+                if (r.get("metadata") or {}).get("reused_predictions"):
+                    summary["reused"] += 1
             elif code == "channel_map_skip":
                 summary["n/a"] += 1
             else:

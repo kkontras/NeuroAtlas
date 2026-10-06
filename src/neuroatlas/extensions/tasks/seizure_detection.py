@@ -491,35 +491,125 @@ def _layout(cache_paths: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def prediction_columns(*, test_y, test_proba, test_meta: list, window_s: float,
+                       threshold, test_pred=None, test_proba_full=None, classes=None
+                       ) -> Dict[str, np.ndarray]:
+    """A seizure fold's test columns in the common predictions format
+    (neuroatlas.predictions): the window labels, the seizure probability
+    (``y_score``), the thresholded prediction, each window's recording,
+    subject and start time, and the window length and tuned threshold."""
+    meta = list(test_meta or [])
+    proba = np.asarray(test_proba, dtype=np.float64)
+    thr = np.nan if threshold is None else float(threshold)
+    if test_pred is None:
+        test_pred = ((proba >= thr).astype(np.int64) if np.isfinite(thr)
+                     else np.full(proba.shape, -1, dtype=np.int64))
+    if test_proba_full is None:
+        test_proba_full = np.stack([1.0 - proba, proba], axis=1)
+    cols: Dict[str, np.ndarray] = {
+        "y_true": np.asarray(test_y),
+        "y_pred": np.asarray(test_pred),
+        "y_score": proba,
+        "y_proba": np.asarray(test_proba_full, dtype=np.float32),
+        "classes": np.asarray([0, 1] if classes is None else classes),
+        # grouped as the event-overlap metrics group windows: a window with
+        # no recording id is a recording of its own
+        "recording_id": np.asarray(
+            [str(m.get("recording_id", m.get("recording_idx", i))) for i, m in enumerate(meta)],
+            dtype=str),
+        "subject_id": np.asarray([str(m.get("subject_id", m.get("subject", ""))) for m in meta],
+                                 dtype=str),
+        "window_start_s": np.asarray(
+            [np.nan if m.get("window_start_s") is None else float(m["window_start_s"])
+             for m in meta], dtype=np.float64),
+        "window_s": np.float64(window_s),
+        "threshold": np.float64(thr),
+    }
+    return cols
+
+
 def save_predictions(probe_dir: Path, *, test_y, test_proba, test_meta: list, window_s: float,
                      threshold, dataset_name: str, checkpoint_id: str, fold) -> Path:
-    """Write one fold's test predictions next to its probe outputs, so any
-    metric (the event Sens@FA AUC, a new one, a fixed one) can be recomputed
-    later without probing again: ``<probe dir>/predictions.npz`` with the
-    window labels and scores, each window's recording and start time, the
-    tuned decision threshold, and what produced them."""
-    probe_dir = Path(probe_dir)
-    probe_dir.mkdir(parents=True, exist_ok=True)
-    meta = list(test_meta or [])
+    """Write one fold's test predictions to ``<probe dir>/predictions.npz``
+    in the common format (neuroatlas.predictions), without the probe's
+    validation record: what a script that has only the scores can save."""
+    from neuroatlas import predictions as preds
 
-    def column(*keys, default=""):
-        return np.asarray([next((m[k] for k in keys if k in m), default) for m in meta])
+    record = preds.Predictions(
+        str(dataset_name), str(checkpoint_id), "seizure_detection", preds.fold_text(fold),
+        prediction_columns(test_y=test_y, test_proba=test_proba, test_meta=test_meta,
+                           window_s=window_s, threshold=threshold),
+        {"fit": {}, "score": {"seconds_per_window": float(window_s)}, "groups": []})
+    return record.save(Path(probe_dir) / preds.FILENAME)
 
-    path = probe_dir / "predictions.npz"
-    np.savez_compressed(
-        path,
-        y_true=np.asarray(test_y),
-        y_score=np.asarray(test_proba, dtype=np.float64),
-        recording_id=column("recording_id", "recording_idx").astype(str),
-        subject_id=column("subject_id", "subject").astype(str),
-        window_start_s=column("window_start_s", default=np.nan).astype(np.float64),
-        window_s=np.float64(window_s),
-        threshold=np.float64(np.nan if threshold is None else threshold),
-        dataset=np.asarray(dataset_name),
-        checkpoint_id=np.asarray(checkpoint_id),
-        fold=np.asarray(str(fold)),
-    )
-    return path
+
+def _temporal_order_of(rec_ids: np.ndarray, starts: Optional[np.ndarray]) -> np.ndarray:
+    """:func:`_temporal_order` on saved columns: by (recording, start time),
+    or the saved order when a window has no start time."""
+    if starts is None or len(starts) == 0 or not np.all(np.isfinite(starts)):
+        return np.arange(len(rec_ids))
+    return np.lexsort((np.asarray(starts, dtype=np.float64), np.asarray(rec_ids)))
+
+
+def score(pred) -> Dict[str, Any]:
+    """A seizure fold's metrics from its saved predictions: the event-level
+    Sens@FA curve and AUC (the headline), window AUROC/AUPRC, the
+    threshold-dependent and event-overlap metrics at the tuned threshold, and
+    what the probe chose on validation (C, threshold, validation scores)."""
+    from neuroatlas.extensions.tasks import _event_sens_fa
+    from ._seizure_evaluation import binary_test_metrics
+
+    cols = pred.group("")
+    fit = pred.fit
+    settings = pred.info.get("score") or {}
+    y = np.asarray(cols["y_true"])
+    p = np.asarray(cols["y_score"], dtype=np.float64)
+    window_s = float(cols["window_s"])
+    y_pred = cols.get("y_pred")
+    if y_pred is None:
+        y_pred = (p >= float(cols["threshold"])).astype(np.int64)
+    rec = np.asarray(cols["recording_id"])
+
+    metrics: Dict[str, Any] = {}
+    reason = settings.get("event_not_applicable")
+    if pred.legacy:
+        reason = _event_metric_not_applicable(pred.dataset, None, [{"recording_id": r} for r in rec[:1]])
+    if reason is not None:
+        metrics.update({"event_sens_fa_auc": None, "event_sens_fa_not_applicable": reason})
+    else:
+        order = _temporal_order_of(rec, cols.get("window_start_s"))
+        metrics.update(_event_sens_fa.fold_metrics(
+            y[order], p[order], rec[order],
+            window_s=float(settings.get("seconds_per_window", window_s))))
+    t = binary_test_metrics(y, p, y_pred, rec, window_s)
+    metrics.update({
+        "auroc": t["test_auroc"],
+        "auprc": t["test_auprc"],
+        "f1": t["test_f1"],
+        "precision": t["test_precision"],
+        "recall": t["test_recall"],
+        "balanced_accuracy": t["test_bal_acc"],
+        "mcc": t["test_mcc"],
+        "sensitivity_at_fpr_h_1_0": t["test_sens_at_fpr_h_1_0"],
+        "sensitivity_at_fpr_h_0_1": t["test_sens_at_fpr_h_0_1"],
+        "fpr_per_hour": t["test_fpr_h"],
+        "ovlp_sensitivity": t["test_ovlp_sens"],
+        "ovlp_precision": t["test_ovlp_prec"],
+        "ovlp_f1": t["test_ovlp_f1"],
+        "n_true_events": t["test_n_true_events"],
+        "n_pred_events": t["test_n_pred_events"],
+    })
+    # what the probe chose on validation (absent from a file saved without it)
+    for key in ("best_weight_decay", "best_c", "val_selection_score", "tuned_threshold",
+                "val_auprc", "val_event_sens_fa_auc", "val_f1_at_threshold"):
+        if key in fit:
+            metrics[key] = fit[key]
+    metrics.update({
+        "n_test": int(len(y)),
+        "n_test_pos": int((y == 1).sum()),
+        "n_test_neg": int((y == 0).sum()),
+    })
+    return metrics
 
 
 def evaluate_seizure_detection(
@@ -652,47 +742,46 @@ def evaluate_seizure_detection(
         selection_metric=settings["selection_metric"],
         max_iter=settings["max_iter"],
         seed=(seeds[0] if seeds else 0),
+        test_metrics=False,
     )
 
-    cache_paths["predictions"] = str(save_predictions(
-        probe_dir, test_y=test_y, test_proba=probe_result["test_proba"], test_meta=test_meta,
-        window_s=window_s, threshold=probe_result.get("tuned_threshold"),
-        dataset_name=dataset_name, checkpoint_id=checkpoint_spec.identifier,
-        fold=dict(getattr(datamodule, "metadata", {}) or {}).get("fold")))
+    # The fold's test predictions, saved; the metrics recorded -- the headline
+    # (configs/benchmarks/epilepsy.yaml: this fold's event Sens@FA curve and
+    # its own AUC, which `neuroatlas results` aggregates over folds) and the
+    # rest -- are score() of that file, what `neuroatlas rescore` recomputes.
+    from neuroatlas import predictions as preds
 
-    # Translate to the metrics schema expected by the BenchmarkRunner
-    metrics: Dict[str, Any] = {
-        # the headline (configs/benchmarks/epilepsy.yaml): this fold's curve
-        # and its own AUC; `neuroatlas results` aggregates the curves
-        **event_sens_fa_metrics(dataset_name, datamodule, test_y, probe_result["test_proba"],
-                                test_meta, window_s),
-        "auroc": probe_result["test_auroc"],
-        "auprc": probe_result["test_auprc"],
-        "f1": probe_result["test_f1"],
-        "precision": probe_result["test_precision"],
-        "recall": probe_result["test_recall"],
-        "balanced_accuracy": probe_result["test_bal_acc"],
-        "mcc": probe_result["test_mcc"],
-        "sensitivity_at_fpr_h_1_0": probe_result["test_sens_at_fpr_h_1_0"],
-        "sensitivity_at_fpr_h_0_1": probe_result["test_sens_at_fpr_h_0_1"],
-        "fpr_per_hour": probe_result["test_fpr_h"],
-        "ovlp_sensitivity": probe_result["test_ovlp_sens"],
-        "ovlp_precision": probe_result["test_ovlp_prec"],
-        "ovlp_f1": probe_result["test_ovlp_f1"],
-        "n_true_events": probe_result["test_n_true_events"],
-        "n_pred_events": probe_result["test_n_pred_events"],
-        "best_weight_decay": probe_result["best_weight_decay"],
-        "best_c": probe_result["best_weight_decay"],
-        # the validation score C was chosen by (settings["selection_metric"])
-        "val_selection_score": probe_result["val_selection_score"],
-        "tuned_threshold": probe_result["tuned_threshold"],
-        "val_auprc": probe_result["val_auprc"],
-        "val_event_sens_fa_auc": probe_result.get("val_event_sens_fa_auc"),
-        "val_f1_at_threshold": probe_result["val_f1_at_threshold"],
-        "n_test": probe_result["n_test"],
-        "n_test_pos": probe_result["n_test_pos"],
-        "n_test_neg": probe_result["n_test_neg"],
-    }
+    reason = _event_metric_not_applicable(dataset_name, datamodule, test_meta)
+    if reason is not None:
+        logger.info("event-level Sens@FA not computed: %s", reason)
+    record = preds.new(
+        "seizure_detection", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns=prediction_columns(
+            test_y=test_y, test_proba=probe_result["test_proba"], test_meta=test_meta,
+            window_s=window_s, threshold=probe_result["tuned_threshold"],
+            test_pred=probe_result["test_pred"], test_proba_full=probe_result["test_proba_full"],
+            classes=probe_result["classes"]),
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit={
+                "best_weight_decay": probe_result["best_weight_decay"],
+                "best_c": probe_result["best_weight_decay"],
+                # the validation score C was chosen by (settings["selection_metric"])
+                "val_selection_score": probe_result["val_selection_score"],
+                "tuned_threshold": probe_result["tuned_threshold"],
+                "val_auprc": probe_result["val_auprc"],
+                "val_event_sens_fa_auc": probe_result.get("val_event_sens_fa_auc"),
+                "val_f1_at_threshold": probe_result["val_f1_at_threshold"],
+                "selection_metric": settings["selection_metric"],
+                "n_train": probe_result["n_train"],
+                "n_val": probe_result["n_val"],
+            },
+            score={"seconds_per_window": seconds, "event_not_applicable": reason}))
+    metrics, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
 
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
@@ -732,5 +821,6 @@ TASK_SPECS = [
             "Sens@FA AUC, AUROC/AUPRC/F1/sensitivity-at-FPR and event-overlap metrics."
         ),
         evaluator=evaluate_seizure_detection,
+        score=score,
     )
 ]

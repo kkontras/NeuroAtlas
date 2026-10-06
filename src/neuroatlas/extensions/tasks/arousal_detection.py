@@ -12,11 +12,16 @@ choose the operating point.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 
-from neuroatlas.benchmarking_helpers import BenchmarkResult, EmbeddingPayload, TaskSpec
+from neuroatlas.benchmarking_helpers import (
+    BenchmarkFailure,
+    BenchmarkResult,
+    EmbeddingPayload,
+    TaskSpec,
+)
 from neuroatlas.benchmarking_helpers.runtime.cache import (
     cache_exists,
     load_embedding_payload,
@@ -77,6 +82,7 @@ def evaluate_arousal_detection(
         and getattr(datamodule, "limit_windows_per_split", None) is None
     )
 
+    cache_paths: Dict[str, Any] = {}
     if use_global_cache:
         global_cache_dir = _embedding_cache_dir(
             cache_root, dataset_name, checkpoint_spec, "all",
@@ -84,29 +90,34 @@ def evaluate_arousal_detection(
         )
         if cache_exists(global_cache_dir):
             full_payload = load_embedding_payload(global_cache_dir, mmap_mode="r")
+            cache_paths["global_cache_dir"] = str(global_cache_dir)
         else:
-            full_payload, _ = _extract_or_load_embeddings(
+            full_payload, paths = _extract_or_load_embeddings(
                 cache_root, dataset_name, "all", checkpoint_spec, backbone,
                 datamodule.full_embedding_dataloader(), datamodule,
                 cache_purpose="global_embeddings",
             )
+            cache_paths.update({f"global_{k}": v for k, v in paths.items()})
         split_payloads = datamodule.split_global_embedding_payload(full_payload)
         train_payload = split_payloads["train"]
         val_payload = split_payloads["val"]
         test_payload = split_payloads["test"]
     else:
-        train_payload, _ = _extract_or_load_embeddings(
+        train_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "train", checkpoint_spec, backbone,
             datamodule.train_dataloader(), datamodule,
         )
-        val_payload, _ = _extract_or_load_embeddings(
+        cache_paths.update({f"train_{k}": v for k, v in paths.items()})
+        val_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "val", checkpoint_spec, backbone,
             datamodule.val_dataloader(), datamodule,
         )
-        test_payload, _ = _extract_or_load_embeddings(
+        cache_paths.update({f"val_{k}": v for k, v in paths.items()})
+        test_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "test", checkpoint_spec, backbone,
             datamodule.test_dataloader(), datamodule,
         )
+        cache_paths.update({f"test_{k}": v for k, v in paths.items()})
 
     subset_filter = task_config.get("subset_filter")
     if subset_filter:
@@ -123,10 +134,21 @@ def evaluate_arousal_detection(
             checkpoint_id=checkpoint_spec.identifier,
             dataset_name=dataset_name,
             evaluation_mode="arousal_detection",
-            failure={"code": "missing_labels", "message": "No arousal_fraction in metadata. Only MASS SS01 supports arousal detection.", "details": {}},
+            failure=BenchmarkFailure(
+                code="missing_labels",
+                message="No arousal_fraction in metadata. Only MASS SS01 supports arousal detection."),
         )
 
-    all_threshold_results: Dict[str, Any] = {}
+    from neuroatlas import predictions as preds
+    from neuroatlas.benchmarking_helpers.probes.probe import _higher_is_better
+
+    probe_type = str(probe_config.get("type", "linear"))
+    selection_metric = str(probe_config.get("selection_metric", "macro_f1"))
+    # One probe per threshold on the same test epochs: each is a group of the
+    # fold's predictions file (threshold_<s>s/...), ids at the top level.
+    columns: Dict[str, Any] = dict(preds.id_columns(test_payload.metadata))
+    fit: Dict[str, Any] = {}
+    groups: List[str] = []
     for threshold in thresholds:
         train_labels = binary_labels_from_fraction_seconds(
             train_payload.metadata, "arousal_fraction", threshold, default_eps,
@@ -139,8 +161,9 @@ def evaluate_arousal_detection(
         )
 
         key = f"threshold_{threshold}s"
+        groups.append(key)
         if len(np.unique(train_labels)) < 2:
-            all_threshold_results[key] = {
+            fit[key] = {
                 "skipped": True,
                 "reason": f"Only one class at threshold={threshold}s",
             }
@@ -151,19 +174,37 @@ def evaluate_arousal_detection(
             val_payload.features, val_labels,
             test_payload.features, test_labels,
             seeds=list(seeds),
-            probe_type=str(probe_config.get("type", "linear")),
+            probe_type=probe_type,
             max_iter=int(probe_config.get("max_iter", 10_000)),
             hidden_dims=probe_config.get("hidden_dims"),
-            selection_metric=str(probe_config.get("selection_metric", "macro_f1")),
+            selection_metric=selection_metric,
             class_weight=probe_config.get("class_weight"),
         )
-        all_threshold_results[key] = probe_result.metrics
+        columns.update(preds.prefixed(key, preds.probe_columns(probe_result, with_row=True)))
+        fit[key] = preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                   probe_type=probe_type,
+                                   higher_is_better=_higher_is_better(selection_metric),
+                                   hidden_dims=probe_config.get("hidden_dims"))
+
+    record = preds.new(
+        "arousal_detection", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule, columns=columns,
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths, fit=fit,
+            groups=groups,
+            score={"thresholds_seconds": list(thresholds), "default_epoch_seconds": default_eps,
+                   "subset_filter": subset_filter}))
+    all_threshold_results, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
 
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="arousal_detection",
         metrics=all_threshold_results,
+        cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
             **_dataset_context(datamodule),
@@ -174,10 +215,26 @@ def evaluate_arousal_detection(
     )
 
 
+def score(pred) -> Dict[str, Any]:
+    """Arousal metrics from a fold's saved predictions: one block per
+    threshold, as the probe reports them (a skipped threshold says why)."""
+    from neuroatlas import predictions as preds
+
+    out: Dict[str, Any] = {}
+    for key in pred.groups:
+        fit = pred.fit[key]
+        if fit.get("skipped"):
+            out[key] = {"skipped": True, "reason": fit.get("reason")}
+            continue
+        out[key] = preds.score_probe(pred.group(key), fit)[0]
+    return out
+
+
 TASK_SPECS = [
     TaskSpec(
         slug="arousal_detection",
         description="Binary arousal detection probe using epoch-length-aware seconds thresholds.",
         evaluator=evaluate_arousal_detection,
+        score=score,
     )
 ]
