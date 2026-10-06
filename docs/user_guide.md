@@ -259,11 +259,11 @@ has them.
 
 | access | datasets | what happens |
 |---|---|---|
-| `physionet` | Sleep-EDF Expanded (8.1 GB), UCDDB (1.3 GB), HMC (15.7 GB), EEGMat (0.18 GB; the benchmark does not read these raw files, see `data prepare`) | `wget -r -N -c -nv` from physionet.org into the folder the reader expects: one line per file, resumable. `--mirror aws` fetches the same files from PhysioNet's open-data copy on AWS instead: no account, one line per file, a partial file resumes, md5 checked where the copy publishes one. |
+| `physionet` | Sleep-EDF Expanded (8.1 GB), UCDDB (1.3 GB), HMC (15.7 GB), EEGMat (0.18 GB; the benchmark does not read these raw files, see `data prepare`) | `wget -r -N -c` from physionet.org into the folder the reader expects, resumable; wget's own output is read, not shown: the live line names the file in transfer and counts the bytes against the manifest's size (`of ~1.3 GB`), files already there toward the percent but not the rate. `--mirror aws` fetches the same files from PhysioNet's open-data copy on AWS instead: no account, one line per file, a partial file resumes, md5 checked where the copy publishes one. |
 | `zenodo` | CHB-MIT (21.7 GB), Siena (4.5 GB), Helsinki neonatal (4.3 GB), DOD (58.1 GB) | in Python: resumable, md5-checked, one line per file; a zip is unpacked where the reader expects it and then deleted (`--keep-archive` keeps it). Needs about twice the size free while the zip exists. |
 | `url` | Bonn (3 MB) | the five zips from the university's site, md5-checked, unpacked |
-| `nsrr` | CFS, HomePAP, MESA, MrOS, STAGES, WSC | the official `nsrr` tool, after a free-disk check (50 GB). The token is fed to the tool's prompt on stdin: never on the command line, never in the environment, never printed. `NEUROATLAS_NSRR_DATASETS=wsc,cfs` refuses, up front, cohorts your token is not approved for. SHHS is refused: its reader needs the CoRe-Sleep preprocessed version, which no script here builds. |
-| `moabb` | the 14 MOABB BCI datasets | MOABB's own download into the MOABB folder, one line per subject. Needs the `[bci]` extra and `pip install --no-deps "moabb==1.2.0"` ([Install](#1-install)); without MOABB it is refused (exit 2). |
+| `nsrr` | CFS, HomePAP, MESA, MrOS, STAGES, WSC | the official `nsrr` tool, after a free-disk check (50 GB). The token is fed to the tool's prompt on stdin: never on the command line, never in the environment, never printed. `NEUROATLAS_NSRR_DATASETS=wsc,cfs` refuses, up front, cohorts your token is not approved for. SHHS is refused: its reader needs the CoRe-Sleep preprocessed version, which no script here builds. The tool's own lines still show, under a live line with the bytes written so far. |
+| `moabb` | the 14 MOABB BCI datasets | MOABB's own download into the MOABB folder, one line per subject; MOABB itself says nothing, so the live line counts the subjects and the bytes arriving. Needs the `[bci]` extra and `pip install --no-deps "moabb==1.2.0"` ([Install](#1-install)); without MOABB it is refused (exit 2). |
 | `tuh`, `manual` | TUAB, TUSZ, DCSM, DREAMER (2), Epilepsiae, ISRUC, MASS, NMT, PhysioNet 2026 | prints where to request it, what the reader expects, and where to put it (exit 0) |
 | `internal` | ArithmeticTask, SeizeIT1, SeizeIT2 | the same: not public, obtain it from the authors |
 
@@ -271,6 +271,32 @@ Measured transfers: Sleep-EDF Expanded from the AWS copy, 399 files and 8.2
 GB in 18 min; from physionet.org the tester saw about 100 KB/s (UCDDB, 1.3
 GB, 3 h 35 min). EEGMat from the AWS copy, 76 files in 2 min. Helsinki from
 Zenodo, 85 files in 13 min. BNCI2014_004 from MOABB, 9 subjects in 1 min.
+
+What `data download` prints: a header, then per dataset where it comes
+from and goes, one line per file as it completes, and a result line; a live
+line meanwhile shows the bytes (of the whole dataset when the listing gives
+every size, else of the file in transfer):
+
+```
+$ neuroatlas data download bonn
+downloading 1 dataset(s): bonn
+[1/1] bonn: downloading from www.ukbonn.de into <data root>/bonn/raw
+  [1/5] z.zip: 591 kB in 0s, md5 ok
+  ...
+  [5/5] s.zip: 787 kB in 0s, md5 ok
+  unpacked z.zip -> <data root>/bonn/raw/ (100 files)
+  deleted z.zip (pass --keep-archive to keep it)
+  ...
+[1/1] bonn: downloaded, 5 files, 3.2 MB (1s)
+```
+
+From physionet.org the live line reads `[1/1] ucddb: downloading 5%
+(ucddb003.rec, 67 MB of ~1.3 GB, 74 kB/s, 4m 54s, ~4h 38m left)` (the total
+is the manifest's estimate; a resumed download counts the files already
+there toward the percent, not the rate). A failed transfer ends with
+`error:`, the tool's last lines and a `fix:` line, then `[1/1] ucddb: failed
+(10m 26s)`; an interrupted one, `error: interrupted`, and the next run
+carries on where it stopped.
 
 A download refused before anything ran (no token, not enough disk, a
 missing tool, SHHS) exits 2; a transfer that failed exits 1. `--dry-run`
@@ -360,7 +386,14 @@ neuroatlas models download all_fm
 
 `models download` fetches what a selection lacks and exits 1 unless every
 model ends up usable; a model whose package is missing still gets its
-weights. Some notes worth knowing:
+weights. It prints `downloading N checkpoint(s)`, a live line per checkpoint
+while it transfers (`[1/3] neurogpt_pretrained: downloading 84% (268 MB of
+318 MB, 141 MB/s, 0m 03s, ~0m 00s left)`; a GitHub clone shows git's own
+count, `cloning 935963004/LaBraM 17% (133 MB, 6/35 objects, 0m 04s)`), and
+one result line each: `[1/3] neurogpt_pretrained: downloaded, 318 MB (7s)`,
+`[2/3] labram_pretrained: found`, or `failed` after its `error:` and `fix:`
+lines. Hugging Face's own progress bars are switched off; its byte counts
+feed the line. Some notes worth knowing:
 
 - REVE: downloading it accepts the REVE Responsible Use License.
 - EEGPT: the upstream Figshare share is browser-only; it comes from a
@@ -458,10 +491,12 @@ shortened):
 $ neuroatlas run sleep_stage -m biot_pretrained
 
 $ neuroatlas embed --dataset sleep_edf_expanded --models biot_pretrained
-[extract-only] global cache already exists at <cache root>/sleep_edf_expanded/biot_pretrained/all/644ef899f1fb53b6
+embedding 1 model(s) on sleep_edf_expanded: 1 run(s)
+[1/1] sleep_edf_expanded biot_pretrained: cached (already extracted)
 embed: 1 ok, 0 failed (cache: <cache root>)
 
 $ neuroatlas probe --dataset sleep_edf_expanded --task sleep_staging --models biot_pretrained --output-root <output root>/sleep_stage/sleep_edf_expanded
+probing 1 model(s) on sleep_edf_expanded: 5 run(s), one line each as it finishes
 [probe] fitting linear classification probe on train=265039 val=95642 test=96971 with 1 seed(s)
 ...
 probe: 5 ok, 0 failed (results: <output root>/sleep_stage/sleep_edf_expanded)
@@ -473,6 +508,45 @@ results: <output root>/sleep_stage  (`neuroatlas results sleep_stage`)
 A pair that fails says so the moment it does, in one line (`error:
 sleep_edf_expanded/biot_pretrained (fold 2): CUDA out of memory. (-v: full
 message)`); the whole message is in `results.json` and in `--log`.
+
+While it works, every step says what it is doing, from its first second
+(until the command prints its first line, a terminal shows `neuroatlas
+embed: starting (0m 03s)`). `embed` prints a header, then for each model one
+live line, rewritten in place: `indexing recordings`, `loading weights`,
+`indexing windows`, then
+
+```
+[1/1] siena labram_pretrained: embedding 50% (10/20 batches, 1m 49s, ~1m 30s left)
+```
+
+and `writing the cache`. The time left counts from the first batch (a
+loader's first batch takes its time once). When the model is done the live
+line gives way to its result line -- `[1/1] siena labram_pretrained: ok, 1,280
+windows (3m 23s)`, `cached (already extracted)`, or `failed` after its
+`error:` line -- so the screen keeps one line per model. A dataset that
+caches per fold runs its folds inside that one item (the live line names the
+fold from the second on). `probe` keeps one line per fold: `probing (1m 05s)`
+while it fits, then `ok, event_sens_fa_auc 0.612 (2m 05s)` (`ok (reused)`
+when the fold's saved predictions served).
+
+Off a terminal -- a pipe, a cluster job's output file -- there is no live
+line: a start line, a line per tenth of the work (at most one per 5 s; none
+for a step that takes a second), and the result line:
+
+```
+embedding 1 model(s) on siena: 1 run(s)
+[1/1] siena labram_pretrained: embedding
+[1/1] siena labram_pretrained: embedding 10% (2/20 batches, 0m 36s, ~2m 44s left)
+...
+[1/1] siena labram_pretrained: embedding 90% (18/20 batches, 3m 00s, ~0m 17s left)
+[1/1] siena labram_pretrained: ok, 1,280 windows (3m 23s)
+```
+
+A `--log FILE` keeps the header and result lines (and every log line), never
+the live line or a terminal code. A warning printed meanwhile starts on a
+clean line; with `NO_COLOR` or `TERM=dumb` the live line is erased with
+spaces instead of an escape code. The live line is cut to the terminal's
+width, so it never wraps.
 
 How long it takes, measured on Sleep-EDF with BIOT: extraction 29 min on an
 RTX 4500 Ada another job was also using (17 min on an idle GPU, in the

@@ -190,6 +190,10 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser.add_argument("--output-root", default=None,
                         help="Run directory. Extraction writes no results here, but the "
                              "runner creates it (default: artifacts/embeddings/<dataset>).")
+    parser.add_argument("--limit-batches", type=int, default=None, metavar="N",
+                        help="Stop each extraction after N batches: a smoke test. Writes to "
+                             "a cache of its own, <cache root>/_limited, so a later full "
+                             "extraction never takes the truncated one for complete.")
     parser.add_argument("--embed-chunk", default=None, metavar="K/N",
                         help="Extract subject chunk K of N for parallel jobs, e.g. '0/4'. "
                              "Chunks are merged automatically on the first read, so no "
@@ -324,6 +328,9 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
             overrides.setdefault(model, {})["runtime_overrides"] = runtime
 
     cache_root = Path(args.cache_root) if args.cache_root else default_cache_root()
+    if getattr(args, "limit_batches", None) is not None:
+        # a truncated cache must never be read as a complete one (as `run`)
+        cache_root = cache_root / "_limited"
     output_root = (
         Path(args.output_root) if args.output_root
         else artifacts_dir("embeddings", spec.slug)
@@ -364,6 +371,8 @@ def main(argv: List[str] | None = None) -> None:
 
     if not args.dataset:
         build_parser().error("--dataset is required (or use --list-datasets)")
+    if args.limit_batches is not None and args.limit_batches < 1:
+        build_parser().error(f"--limit-batches must be 1 or more, got {args.limit_batches}")
 
     config = build_config(args)
 
@@ -387,9 +396,14 @@ def main(argv: List[str] | None = None) -> None:
     # Imported here, not at module scope: linear_probe pulls in torch, and
     # probing is CPU-only by design -- `--help` and config assembly must not
     # drag in the GPU stack.
-    from neuroatlas.extensions.tasks.linear_probe import embedding_pooling
+    from neuroatlas.extensions.tasks.linear_probe import embedding_pooling, limit_batches
 
-    with embedding_pooling(args.pooling):
+    import contextlib
+
+    # `run --limit-batches` sets its own limit around this verb: leave it be
+    limited = (limit_batches(args.limit_batches) if args.limit_batches is not None
+               else contextlib.nullcontext())
+    with embedding_pooling(args.pooling), limited:
         results = runner.run()
 
     from neuroatlas.entrypoints._common import report_results

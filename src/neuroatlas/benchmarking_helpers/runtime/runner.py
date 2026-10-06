@@ -12,6 +12,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
+from neuroatlas import progress
+
 from .cache import build_cache_key, cache_exists
 from ..channels.channel_map import (
     ChannelMap,
@@ -130,59 +132,15 @@ class _ChannelMapDataloaderWrapper:
         return len(self._loader)
 
 
-class _Ticker:
+def _Ticker(label: str, every: float = 2.0, *, verb: str = "probing", stream=None,
+            start_line_off_tty: bool = True) -> progress.Progress:
     """Shows that a run is alive while it works. On a terminal: one line,
     "<label>: probing (1m 05s)", rewritten every few seconds and cleared when
     the run ends (its result line follows). Elsewhere (a log, a cluster job):
-    one "<label>: probing" line at the start."""
-
-    def __init__(self, label: str, every: float = 2.0, *, verb: str = "probing",
-                 stream=None, start_line_off_tty: bool = True):
-        import sys
-        import threading
-
-        self.label, self.every, self.verb = label, every, verb
-        self.stream = stream if stream is not None else sys.stdout
-        # the terminal itself, not a --log tee: the live line is for the screen
-        self.stream = getattr(self.stream, "_stream", self.stream)
-        self.start_line_off_tty = start_line_off_tty
-        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
-        try:
-            from neuroatlas.cli._msg import use_color
-            escapes = use_color(self.stream)
-        except Exception:                                   # pragma: no cover
-            escapes = False
-        # erase the line with an escape code where allowed, else with spaces
-        self._clear = "\r\x1b[K" if escapes else "\r" + " " * (len(label) + 40) + "\r"
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._tick, daemon=True) if self.tty else None
-
-    def _text(self, seconds: float) -> str:
-        minutes, secs = divmod(int(seconds), 60)
-        return f"{self.label}: {self.verb} ({minutes}m {secs:02d}s)"
-
-    def _tick(self):
-        started = time.monotonic()
-        while not self._stop.wait(self.every):
-            self.stream.write(self._clear + self._text(time.monotonic() - started))
-            self.stream.flush()
-
-    def __enter__(self):
-        if self.tty:
-            self.stream.write(self._text(0))
-            self.stream.flush()
-            self._thread.start()
-        elif self.start_line_off_tty:
-            print(f"{self.label}: {self.verb}", file=self.stream, flush=True)
-        return self
-
-    def __exit__(self, *exc):
-        if self.tty:
-            self._stop.set()
-            self._thread.join()
-            self.stream.write(self._clear)
-            self.stream.flush()
-        return False
+    one "<label>: probing" line at the start. (neuroatlas.progress, with the
+    line saying only the verb.)"""
+    return progress.Progress(label, verb=verb, every=every, stream=stream,
+                             start_line_off_tty=start_line_off_tty, phases=False)
 
 
 # The metric a progress line shows for a fold, first one present.
@@ -200,9 +158,18 @@ def _progress_line(done: int, total: int, result, seconds: float) -> str:
         # (reused): recomputed from the fold's saved predictions, not fitted
         what = "ok" + (" (reused)" if (result.metadata or {}).get("reused_predictions") else "") \
             + (f", {value[0]} {value[1]:.3f}" if value else "")
-    minutes, secs = divmod(int(round(seconds)), 60)
-    return f"[{done}/{total}] {where}: {what} ({minutes}m {secs:02d}s)" if minutes else \
-        f"[{done}/{total}] {where}: {what} ({secs}s)"
+    return progress.result_line(done, total, where, what, seconds)
+
+
+def _embed_outcome(results: List[BenchmarkResult], counts: Dict[str, int]) -> str:
+    """What an extraction pass over one (dataset, model) did, for its result
+    line: ``ok, 50,749 windows``, ``cached (already extracted)``, ``failed``."""
+    if not results or any(not r.ok for r in results):
+        return "failed"
+    if counts.get("extracted"):
+        windows = counts.get("windows")
+        return f"ok, {windows:,} windows" if windows else "ok"
+    return "cached (already extracted)"
 
 
 def _wrap_datamodule_with_channel_map(datamodule, cmap: ChannelMap, model_family: str):
@@ -541,6 +508,8 @@ class BenchmarkRunner:
         """
         dataset_spec = load_dataset_spec(dataset_name)
         (self.cache_root / dataset_name).mkdir(parents=True, exist_ok=True)
+        # what an `embed` item's live line says meanwhile (a probe's keeps "probing")
+        progress.current().phase("indexing recordings")
         datamodule = dataset_spec.create_datamodule(dataset_config, checkpoint=checkpoint_spec)
         checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec, verbose=True)
         if self.embed_chunk is not None:
@@ -586,9 +555,13 @@ class BenchmarkRunner:
         if _precomputed_cache_available(datamodule, checkpoint_spec):
             backbone = _PrecomputedStubBackbone(checkpoint_spec)
         elif load_weights:
+            progress.current().phase("loading weights")
             backbone = load_backbone(checkpoint_spec)
         else:
             backbone = None
+        # until the extraction loop counts batches: building its loader, or
+        # finding the cache already there
+        progress.current().phase("preparing the windows")
         return datamodule, backbone
 
     def _run_one(self, dataset_name: str, dataset_config: Dict[str, Any], checkpoint_spec) -> BenchmarkResult:
@@ -712,43 +685,70 @@ class BenchmarkRunner:
         results: List[BenchmarkResult] = []
         selected_models = self._selected_models()
         specs = [self._apply_spec_overrides(spec) for spec in load_checkpoint_registry(selected_models)]
-        # An extraction pass over several folds (`embed --folds`, which `run`
-        # passes so per-split cohorts get every fold the probe reads) is done
-        # for a (dataset, model) once one fold reports a fold-independent
-        # cache: the other folds would only rebuild the datamodule to find it.
-        extracted_for_every_fold: set = set()
         runs = list(self._dataset_runs())
-        probing = not (self.extract_only or self.embed_chunk is not None)
+        if self.extract_only or self.embed_chunk is not None:
+            return self._extract(runs, specs)
         total, done = len(runs) * len(specs), 0
-        if probing and total:
+        if total:
             datasets = sorted({name for name, _ in runs})
             print(f"probing {len(specs)} model(s) on {', '.join(datasets)}: {total} run(s), "
                   f"one line each as it finishes", flush=True)
         for dataset_name, dataset_config in runs:
             for spec in specs:
-                pair = (dataset_name, spec.identifier)
-                if self.extract_only and pair in extracted_for_every_fold:
-                    continue
                 started = time.monotonic()
-                if probing:
-                    fold = dataset_config.get("fold")
-                    label = (f"[{done + 1}/{total}] {dataset_name} {spec.identifier}"
-                             + ("" if fold is None else f" fold {fold}"))
-                    with _Ticker(label):
-                        result = self._run_one(dataset_name, dataset_config, spec)
-                else:
+                fold = dataset_config.get("fold")
+                label = (f"[{done + 1}/{total}] {dataset_name} {spec.identifier}"
+                         + ("" if fold is None else f" fold {fold}"))
+                with _Ticker(label):
                     result = self._run_one(dataset_name, dataset_config, spec)
                 results.append(result)
-                if self.extract_only and _serves_every_fold(result):
-                    extracted_for_every_fold.add(pair)
-                if probing:
-                    # One line per probed fold, whatever the log level: a probe
-                    # over many models runs for hours with nothing else to show.
-                    done += 1
-                    print(_progress_line(done, total, result, time.monotonic() - started),
-                          flush=True)
-        if not (self.extract_only or self.embed_chunk is not None):
-            self._write_outputs(results)
+                # One line per probed fold, whatever the log level: a probe
+                # over many models runs for hours with nothing else to show.
+                done += 1
+                print(_progress_line(done, total, result, time.monotonic() - started),
+                      flush=True)
+        self._write_outputs(results)
+        return results
+
+    def _extract(self, runs: List[tuple], specs) -> List[BenchmarkResult]:
+        """The extraction pass (`embed`): one item per (dataset, model), its
+        folds inside it, a live line through its phases and one result line.
+
+        An extraction over several folds (`embed --folds`, which `run` passes
+        so per-split cohorts get every fold the probe reads) is done for a
+        (dataset, model) once one fold reports a fold-independent cache: the
+        other folds would only rebuild the datamodule to find it.
+        """
+        results: List[BenchmarkResult] = []
+        by_dataset: Dict[str, List[Dict[str, Any]]] = {}
+        for dataset_name, dataset_config in runs:
+            by_dataset.setdefault(dataset_name, []).append(dataset_config)
+        total, done = len(by_dataset) * len(specs), 0
+        if total:
+            chunk = (f", subject chunk {self.embed_chunk[0]}/{self.embed_chunk[1]}"
+                     if self.embed_chunk is not None else "")
+            print(f"embedding {len(specs)} model(s) on {', '.join(by_dataset)}: "
+                  f"{total} run(s){chunk}", flush=True)
+        for dataset_name, configs in by_dataset.items():
+            for spec in specs:
+                done += 1
+                where = f"{dataset_name} {spec.identifier}"
+                pair_results: List[BenchmarkResult] = []
+                with progress.Progress(f"[{done}/{total}] {where}", verb="embedding") as item:
+                    for i, dataset_config in enumerate(configs):
+                        fold = dataset_config.get("fold")
+                        if i and fold is not None:
+                            # the first fold's cache serves only that fold
+                            # (a per-split cohort): name the fold from here on
+                            item.relabel(f"[{done}/{total}] {where} fold {fold}")
+                        result = self._run_one(dataset_name, dataset_config, spec)
+                        pair_results.append(result)
+                        if _serves_every_fold(result):
+                            break
+                results.extend(pair_results)
+                outcome = _embed_outcome(pair_results, item.counts)
+                seconds = None if outcome.startswith("cached") else item.seconds
+                print(progress.result_line(done, total, where, outcome, seconds), flush=True)
         return results
 
     def _result_key(self, result: BenchmarkResult) -> tuple:

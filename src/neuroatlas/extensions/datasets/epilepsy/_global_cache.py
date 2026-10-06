@@ -222,8 +222,12 @@ class RecordingWindowGlobalCache:
     def full_embedding_dataloader(self):
         from torch.utils.data import DataLoader
 
+        from neuroatlas import progress
         from neuroatlas.extensions.datasets.adapters._loader_adapters import SplitTaggingLoader
 
+        # the window index of every recording (a header read each): an
+        # embed item's live line says so meanwhile
+        progress.current().phase("indexing windows")
         ds = self._window_dataset(self._global_recordings(), self._window_s, signal_cache_size=2)
         workers = int(self._num_workers or 0)
         loader = DataLoader(

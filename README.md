@@ -302,6 +302,22 @@ on request), `hub (cached)`, `manual` (with instructions) or `package
 missing` (with the install line). DeepSOZ is GPL-3.0 and is fetched from its
 upstream repository, never shipped with the package.
 
+While a checkpoint downloads, a live line on the terminal shows its bytes,
+percent, rate and time left (`[1/3] neurogpt_pretrained: downloading 84%
+(268 MB of 318 MB, 141 MB/s, 0m 03s, ~0m 00s left)`); each ends in one line:
+
+```
+downloading 3 checkpoint(s)
+[1/3] neurogpt_pretrained: downloaded, 318 MB (7s)
+[2/3] labram_pretrained: downloaded, 97 MB (9s)
+[3/3] eegnetv4_bnci2014_001: downloaded, 430 kB (1s)
+3 checkpoints: 3 ready
+```
+
+(`found` when it is already here; `failed` after its `error:` and `fix:`
+lines.) `data download` reads the same way: `downloading 1 dataset(s):
+bonn`, a line per file, and `[1/1] bonn: downloaded, 5 files, 3.2 MB (1s)`.
+
 **6. Check before running.** Each pair pushes one real batch through the
 model and stops; this takes seconds per pair.
 
@@ -358,6 +374,16 @@ neuroatlas run brain_age -m biot_pretrained                      # ~1 min: reuse
 neuroatlas run sleep_hypnogram -m biot_pretrained                # ~20 s: from the staging results
 neuroatlas run epilepsy --dataset siena -m cbramod_pretrained    # ~4 min
 ```
+
+Every long step says what it is doing from its first second. Extraction
+prints `embedding 1 model(s) on siena: 1 run(s)`, then for each model one
+live line through its phases (`indexing recordings`, `loading weights`,
+`embedding 50% (10/20 batches, 1m 49s, ~1m 30s left)`, `writing the cache`)
+that leaves one result line: `[1/1] siena labram_pretrained: ok, 1,280
+windows (3m 23s)`, or `cached (already extracted)`. The probe does the same
+per fold. Off a terminal (a pipe, a cluster job's output) the live line
+becomes a start line and a line per tenth of the work; a `--log` file gets
+the header and result lines, never the live line.
 
 **9. Read the results.**
 

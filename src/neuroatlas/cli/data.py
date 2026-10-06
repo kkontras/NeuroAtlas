@@ -142,25 +142,60 @@ def cmd_status(args) -> int:
 def cmd_download(args) -> int:
     from neuroatlas import data
 
+    plans = [data.plan_download(slug, mirror=args.mirror, keep_archive=args.keep_archive)
+             for slug in expand_targets(args.datasets)]
+    if not args.dry_run:
+        return _download(plans)
     status = 0
-    for slug in expand_targets(args.datasets):
-        plan = data.plan_download(slug, mirror=args.mirror, keep_archive=args.keep_archive)
-        if args.dry_run:
-            if plan.handler in ("manual", "internal"):
-                for line in data.describe_manual(plan):
-                    print(line)
-                continue
-            why = data.refusal(plan)
-            for line in data.describe(plan):
+    for plan in plans:
+        slug = plan.slug
+        if plan.handler in ("manual", "internal"):
+            for line in data.describe_manual(plan):
                 print(line)
-            if why:
-                _msg.error(f"{slug}: {why}")
-                status = max(status, 2)
-            else:
-                size = f", about {plan.size_gb:g} GB" if plan.size_gb else ""
-                print(f"{slug}: dry run{size}; nothing was transferred")
             continue
-        status = max(status, data.run_download(plan))
+        why = data.refusal(plan)
+        for line in data.describe(plan):
+            print(line)
+        if why:
+            _msg.error(f"{slug}: {why}")
+            status = max(status, 2)
+        else:
+            size = f", about {plan.size_gb:g} GB" if plan.size_gb else ""
+            print(f"{slug}: dry run{size}; nothing was transferred")
+    return status
+
+
+def _download(plans) -> int:
+    """The downloads, as every long command shows its work (neuroatlas.progress):
+    a header; per dataset a start line, a live line while it transfers (one
+    line per file under it) and a result line. Datasets fetched by hand print
+    how, as they come."""
+    from neuroatlas import data, progress
+
+    status = 0
+    auto = [p for p in plans if p.handler not in ("manual", "internal")]
+    if auto:
+        progress.say(f"downloading {len(auto)} dataset(s): {', '.join(p.slug for p in auto)}")
+    done = 0
+    for plan in plans:
+        if plan.handler in ("manual", "internal"):
+            for line in data.describe_manual(plan):
+                print(line)
+            continue
+        done += 1
+        label = f"[{done}/{len(auto)}] {plan.slug}"
+        why = data.refusal(plan)
+        if why:
+            _msg.error(f"{plan.slug}: {why}")
+            progress.say(progress.result_line(done, len(auto), plan.slug, "refused"))
+            status = max(status, 2)
+            continue
+        progress.say(f"{label}: downloading {data.source_text(plan)}".rstrip())
+        with progress.Progress(label, verb="downloading", start_line_off_tty=False) as item:
+            rc = data.run_download(plan)
+        progress.say(progress.result_line(done, len(auto), plan.slug,
+                                          data.result_text(rc, item.counts), item.seconds))
+        status = max(status, rc)
     return status
 
 
