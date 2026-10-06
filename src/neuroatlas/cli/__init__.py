@@ -397,7 +397,11 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     logging.getLogger("neuroatlas").setLevel(logging.DEBUG if verbose else logging.NOTSET)
     logging.getLogger(TRACEBACK_LOGGER).setLevel(logging.DEBUG)
 
-    console = logging.StreamHandler(console_stream)
+    from neuroatlas import progress
+
+    # LineSafe: a record printed while a live progress line is on screen
+    # starts on a clean line, NO_COLOR terminals included
+    console = logging.StreamHandler(progress.LineSafe(console_stream))
     console.setFormatter(_msg.LogFormatter(color=_msg.use_color(console_stream),
                                            clear_line=_msg.use_color(console_stream)))
     # the whole text of a message the screen shows shortened: for the log
@@ -540,7 +544,15 @@ def main(argv: Optional[List[str]] = None) -> None:
         handlers = _setup_logging(state["verbose"], command.report(rest), sys.stderr, log)
         if log is not None:
             sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
-        importlib.import_module(command.module).main(rest)
+        import contextlib
+
+        from neuroatlas import progress
+
+        # On a terminal, "neuroatlas embed: starting (0m 03s)" until the
+        # command prints its first line: importing the engine and planning
+        # take seconds. Not for the commands that print a report.
+        with (contextlib.nullcontext() if command.report(rest) else progress.starting(name)):
+            importlib.import_module(command.module).main(rest)
     except config.ConfigError as exc:
         _msg.error(exc.code if isinstance(exc.code, str) else str(exc))
         raise SystemExit(2) from None

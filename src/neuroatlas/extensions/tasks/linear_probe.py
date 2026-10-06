@@ -7,8 +7,8 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 from torch.utils.data import DataLoader, Sampler
-from tqdm.auto import tqdm
 
+from neuroatlas import progress
 from neuroatlas.benchmarking_helpers import BenchmarkResult, EmbeddingPayload, TaskSpec
 from neuroatlas.benchmarking_helpers.runtime.cache import (
     IncrementalEmbeddingWriter,
@@ -529,6 +529,14 @@ def _extract(backbone, batch):
     return backbone.extract_embeddings(batch)
 
 
+def _batches(loader) -> Optional[int]:
+    """How many batches *loader* yields, or None when it cannot say."""
+    try:
+        return len(loader)
+    except TypeError:
+        return None
+
+
 def _extract_or_load_embeddings(
     cache_root: Path,
     dataset_name: str,
@@ -553,6 +561,7 @@ def _extract_or_load_embeddings(
                 if cache_exists(ext_dir):
                     import time
                     t0 = time.time()
+                    progress.current().phase("reading the embeddings").count("cached")
                     payload = load_embedding_payload(ext_dir, mmap_mode="r")
                     dt = time.time() - t0
                     print(
@@ -574,7 +583,9 @@ def _extract_or_load_embeddings(
                 )
 
     cache_dir = cache_dir_override if cache_dir_override is not None else _embedding_cache_dir(cache_root, dataset_name, checkpoint_spec, split_name, datamodule, purpose=cache_purpose)
+    item = progress.current()
     if cache_exists(cache_dir):
+        item.phase("reading the embeddings").count("cached")
         payload = load_embedding_payload(cache_dir, mmap_mode="r")
         return payload, {"cache_dir": str(cache_dir), "cache_hit": True}
 
@@ -586,11 +597,13 @@ def _extract_or_load_embeddings(
 
     order_tag = _loader_order_tag(dataloader)
     if order_tag is not None:
-        progress = read_progress(cache_dir)
-        if progress and progress.get("n_rows") and not progress.get("order"):
+        interrupted = read_progress(cache_dir)
+        if interrupted and interrupted.get("n_rows") and not interrupted.get("order"):
             # Rows written in an unrecorded order cannot be skipped by index.
-            print(f"[embedding] discarding an interrupted extraction at {cache_dir}: "
-                  f"its row order was not recorded", flush=True)
+            from neuroatlas.cli import _msg
+
+            _msg.note(f"{dataset_name}/{checkpoint_spec.identifier}: discarding an interrupted "
+                      f"extraction at {cache_dir}: its row order was not recorded")
             discard_partial(cache_dir)
 
     _MAX_SPLITS = 8
@@ -617,11 +630,6 @@ def _extract_or_load_embeddings(
             and skip_rows % batch_size_val == 0
         )
 
-        try:
-            total_batches = len(dataloader)
-        except TypeError:
-            total_batches = None
-
         def _has_evict(ds) -> bool:
             return hasattr(ds, "evict_subject") or hasattr(ds, "evict_recording")
 
@@ -632,6 +640,7 @@ def _extract_or_load_embeddings(
                 ds.evict_recording(key)
 
         initial_batches = 0
+        remaining = None                       # batches the loop below will see
         if use_subject_split:
             splits = _split_dataset_by_subject(loader_dataset, num_workers)
             sub_offsets = [0] * num_workers
@@ -661,6 +670,7 @@ def _extract_or_load_embeddings(
                     )
                 )
             raw_iter = _sequential_round_robin_iterator(sub_loaders, done_in_open_round)
+            remaining = sum(_batches(dl) or 0 for dl in sub_loaders)
             can_evict_per_loader = all(_has_evict(ds) for ds in splits)
         else:
             splits = None
@@ -676,6 +686,7 @@ def _extract_or_load_embeddings(
                 resume_dl, initial_batches = resumed
                 efficient_resume = True
                 raw_iter = ((0, batch) for batch in resume_dl)
+                remaining = _batches(resume_dl)
             elif efficient_resume:
                 resume_loader = DataLoader(
                     loader_dataset,
@@ -688,6 +699,7 @@ def _extract_or_load_embeddings(
                 )
                 initial_batches = skip_rows // batch_size_val
                 raw_iter = ((0, batch) for batch in resume_loader)
+                remaining = _batches(resume_loader)
             elif num_workers > 0 and loader_dataset is not None and collate_fn is not None and batch_size_val is not None:
                 safe_loader = DataLoader(
                     loader_dataset,
@@ -698,6 +710,7 @@ def _extract_or_load_embeddings(
                     pin_memory=False,
                 )
                 raw_iter = ((0, batch) for batch in safe_loader)
+                remaining = _batches(safe_loader)
             elif num_workers > 0 and loader_dataset is not None and collate_fn is not None:
                 batch_sampler = getattr(dataloader, "batch_sampler", None)
                 if batch_sampler is not None:
@@ -718,8 +731,10 @@ def _extract_or_load_embeddings(
                         pin_memory=False,
                     )
                 raw_iter = ((0, batch) for batch in safe_loader)
+                remaining = _batches(safe_loader)
             else:
                 raw_iter = ((0, batch) for batch in dataloader)
+                remaining = _batches(dataloader)
 
         can_evict_single = (
             not use_subject_split
@@ -729,14 +744,22 @@ def _extract_or_load_embeddings(
         prev_subjects: set = set()
         prev_subjects_per_loader: Dict[int, set] = {}
         rows_seen = skip_rows if efficient_resume else 0
-        desc = f"Embedding {dataset_name}/{checkpoint_spec.model_family}/{split_name}"
         if skip_rows:
-            mode = "efficient" if efficient_resume else "re-walking"
-            desc += f" (resuming from {skip_rows} rows, {mode})"
+            from neuroatlas.cli import _msg
+
+            _msg.note(f"{dataset_name}/{checkpoint_spec.identifier}: resuming an interrupted "
+                      f"extraction after {skip_rows:,} windows"
+                      + ("" if efficient_resume else " (reading the finished ones again)"))
+        # One live line, "embedding 45% (352/793 batches, 1m 05s, ~1m 20s
+        # left)", for the item the runner opened (neuroatlas.progress); a
+        # resumed one starts at the resume point, not at 0.
+        start = initial_batches if efficient_resume else 0
+        total_batches = None if remaining is None else start + remaining
+        if total_batches is not None and _MAX_BATCHES is not None:
+            total_batches = min(total_batches, start + _MAX_BATCHES)
+        item.phase("embedding", total=total_batches, done=start, unit="batches")
         n_extracted = 0
-        # A resumed bar starts at the resume point, not at 0.
-        for loader_idx, batch in tqdm(raw_iter, total=total_batches, desc=desc, leave=True,
-                                      initial=initial_batches if efficient_resume else 0):
+        for loader_idx, batch in raw_iter:
             if _MAX_BATCHES is not None and n_extracted >= _MAX_BATCHES:
                 break
             batch_len = len(batch["meta"])
@@ -746,6 +769,7 @@ def _extract_or_load_embeddings(
                     writer.extend_items_without_append(meta)
                 rows_seen += batch_len
                 del batch
+                item.update(advance=1, carried=1)        # read again, not embedded
                 continue
             rows_seen += batch_len
             n_extracted += 1
@@ -770,6 +794,7 @@ def _extract_or_load_embeddings(
                 for sid in prev_subjects - batch_subjects:
                     _do_evict(loader_dataset, sid)
                 prev_subjects = batch_subjects
+            item.update(advance=1)
         if can_evict_per_loader:
             for li, subjs in prev_subjects_per_loader.items():
                 for sid in subjs:
@@ -778,10 +803,12 @@ def _extract_or_load_embeddings(
             for sid in prev_subjects:
                 _do_evict(loader_dataset, sid)
 
+        item.phase("writing the cache")
         cache_metadata = _cache_spec(dataset_name, checkpoint_spec, split_name, datamodule, purpose=cache_purpose)
         paths = writer.finalize(metadata=cache_metadata)
     paths["cache_hit"] = False
     payload = load_embedding_payload(cache_dir, mmap_mode="r")
+    item.count("extracted").count("windows", len(payload.labels))
     return payload, paths
 
 
@@ -834,7 +861,12 @@ def evaluate_linear_probe(
         if cache_exists(global_cache_dir):
             # Full cache already ready.
             if extract_only:
-                print(f"[extract-only] global cache already exists at {global_cache_dir}")
+                # the runner says "cached (already extracted)"; the path is for -v and --log
+                import logging
+
+                logging.getLogger(__name__).info("%s/%s: global cache already exists at %s",
+                                                 dataset_name, checkpoint_spec.identifier,
+                                                 global_cache_dir)
                 return _extract_only_result(dataset_name, checkpoint_spec, datamodule, backbone, "already_cached", {"global_cache_dir": str(global_cache_dir)})
             full_payload = load_embedding_payload(global_cache_dir, mmap_mode="r")
             full_paths: dict = {"cache_dir": str(global_cache_dir), "cache_hit": True}
@@ -844,7 +876,12 @@ def evaluate_linear_probe(
             chunk_idx, n_chunks = embed_chunk
             chunk_dir = global_cache_dir / "_chunks" / f"{chunk_idx}_of_{n_chunks}"
             if cache_exists(chunk_dir):
-                print(f"[embed-chunk] chunk {chunk_idx}/{n_chunks} already cached at {chunk_dir}")
+                import logging
+
+                progress.current().count("cached")
+                logging.getLogger(__name__).info("%s/%s: chunk %d/%d already cached at %s",
+                                                 dataset_name, checkpoint_spec.identifier,
+                                                 chunk_idx, n_chunks, chunk_dir)
             else:
                 _extract_or_load_embeddings(
                     cache_root, dataset_name, "all", checkpoint_spec, backbone,

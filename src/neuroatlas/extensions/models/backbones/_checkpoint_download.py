@@ -13,9 +13,11 @@ that holds only a config is not mistaken for the weights.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from neuroatlas import progress
 from neuroatlas._paths import checkout_root, home
 
 logger = logging.getLogger(__name__)
@@ -272,6 +275,128 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+# --------------- progress: what a download shows while it runs --------------- #
+# Every transfer below reports to the item `models download` (or a run that
+# fetches on the fly) has open: neuroatlas.progress shows one live line,
+# "downloading 45% (143 MB of 318 MB, 12 MB/s, 0m 12s, ~0m 14s left)", and
+# the bytes counted here make the item's result line ("downloaded, 318 MB").
+
+
+def _copy(response, handle, name: str, total: Optional[int] = None) -> int:
+    """Copy a urlopen *response* into *handle*, the bytes onto the live line.
+    Returns how many were copied."""
+    item = progress.current()
+    if total is None:
+        try:
+            total = int((getattr(response, "headers", None) or {}).get("Content-Length") or 0) or None
+        except (TypeError, ValueError):
+            total = None
+    item.phase("downloading", total=total, unit="bytes")
+    item.update(note=name)
+    copied = 0
+    while True:
+        chunk = response.read(1 << 20)
+        if not chunk:
+            break
+        handle.write(chunk)
+        copied += len(chunk)
+        item.update(advance=len(chunk))
+        item.count("bytes", len(chunk))
+    return copied
+
+
+class _Counting:
+    """A response read through by someone else (tarfile): its bytes onto the line."""
+
+    def __init__(self, response):
+        self._response = response
+        self._item = progress.current()
+
+    def read(self, n: int = -1) -> bytes:
+        data = self._response.read(n)
+        if data:
+            self._item.update(advance=len(data))
+            self._item.count("bytes", len(data))
+        return data
+
+
+class _HubBar:
+    """What huggingface_hub takes for a tqdm bar: its counts go to the item."""
+
+    def __init__(self, item, total=None, initial=0):
+        self._item = item
+        item.add_total(total)                      # a snapshot's files add up
+        if initial:
+            item.update(advance=int(initial), carried=int(initial))
+
+    def update(self, n=1):
+        n = int(n or 0)
+        self._item.update(advance=n)
+        self._item.count("bytes", n)
+
+    def __getattr__(self, name):            # set_description, refresh, close, ...
+        return lambda *a, **k: None
+
+
+@contextlib.contextmanager
+def hub_progress(*watched):
+    """A Hugging Face download on our line instead of huggingface_hub's bars.
+
+    Its bars are switched off, and the byte counts its downloads report
+    (huggingface_hub's file_download progress hook) are routed to the item's
+    live line, with the files' sizes as the total. Where that hook is not
+    there (another huggingface_hub version), the bytes arriving under the
+    *watched* folders are shown instead.
+    """
+    item = progress.current()
+    if not isinstance(item, progress.Progress):
+        yield                                      # no line of ours: its bars stay
+        return
+    undo = []
+    try:
+        from huggingface_hub.utils import (
+            are_progress_bars_disabled,
+            disable_progress_bars,
+            enable_progress_bars,
+        )
+
+        if not are_progress_bars_disabled():
+            disable_progress_bars()
+            undo.append(enable_progress_bars)
+    except Exception:                                  # not installed, or a stand-in
+        pass
+    item.phase("downloading", unit="bytes")
+    hooked = False
+    try:
+        import huggingface_hub.file_download as file_download
+
+        original = file_download._get_progress_bar_context
+        if callable(original):
+            def bar_context(*args, total=None, initial=0, **kwargs):
+                return contextlib.nullcontext(_HubBar(item, total, initial))
+
+            file_download._get_progress_bar_context = bar_context
+            undo.append(lambda: setattr(file_download, "_get_progress_bar_context", original))
+            hooked = True
+    except Exception:
+        pass
+    # the bytes arriving on disk too: xet reports in large steps, and another
+    # huggingface_hub version may not report at all
+    written = progress.DiskBytes(*watched) if watched else None
+    if written is not None:
+        item.watch(written)
+    try:
+        yield
+    finally:
+        for step in reversed(undo):
+            step()
+        if written is not None:
+            item.watch(None)
+            if not hooked or not item.counts.get("bytes"):
+                written._next = 0.0
+                item.count("bytes", written() or 0)
+
+
 def _verify(path: Path, expected: Optional[str], what: str) -> None:
     if not expected:
         return
@@ -433,8 +558,9 @@ def download_hub_folder(local_dir: Path, repo_id: str, allow_patterns=None,
     from huggingface_hub import snapshot_download
 
     local_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns,
-                      token=token)
+    with hub_progress(local_dir):
+        snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns,
+                          token=token)
     return local_dir
 
 
@@ -485,14 +611,16 @@ def _download_huggingface(local_path: Path, repo_id: str) -> Path:
         local_dir = local_path
         for _ in tail:
             local_dir = local_dir.parent
-        downloaded = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
-                                          local_dir=str(local_dir), token=token))
+        with hub_progress(local_dir):
+            downloaded = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                              local_dir=str(local_dir), token=token))
     else:
         # It does not (NeuroGPT's pretrained_model/pytorch_model.bin, kept as
         # .../neurogpt/pytorch_model.bin): fetch next to it, then move it there.
         with tempfile.TemporaryDirectory(dir=local_path.parent) as tmp:
-            fetched = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
-                                           local_dir=tmp, token=token))
+            with hub_progress(tmp):
+                fetched = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                               local_dir=tmp, token=token))
             shutil.move(str(fetched), str(local_path))
         downloaded = local_path
     logger.info("Downloaded %s from HuggingFace %s", repo_filename, repo_id)
@@ -525,10 +653,14 @@ def _download_safetensors_as_torch(local_path: Path, repo_id: str, token: Option
 
     filename, sha256 = HUB_SAFETENSORS_AS_TORCH[repo_id]
     with tempfile.TemporaryDirectory(prefix="neuroatlas_dl_", dir=str(local_path.parent)) as tmp:
-        fetched = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_dir=tmp, token=token))
+        with hub_progress(tmp):
+            fetched = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_dir=tmp,
+                                           token=token))
+        progress.current().phase("checking SHA-256")
         _verify(fetched, sha256, f"https://huggingface.co/{repo_id}/{filename}")
         # read into memory rather than memory-map: an open map keeps the file
         # busy and the temporary folder cannot be removed on NFS
+        progress.current().phase("writing the torch checkpoint")
         state = load_bytes(fetched.read_bytes())
         partial = Path(tmp) / local_path.name
         torch.save({"state_dict": state,
@@ -565,16 +697,14 @@ def _download_github(local_path: Path, repo_url: str) -> Path:
     with tempfile.TemporaryDirectory(prefix="eegbench_dl_") as tmpdir:
         clone_url = f"https://github.com/{repo_slug}.git"
         logger.info("Cloning %s (shallow) to download checkpoint...", clone_url)
-        subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, os.path.join(tmpdir, "repo")],
-            check=True, capture_output=True,
-        )
+        _git_clone(clone_url, os.path.join(tmpdir, "repo"), repo_slug)
         src = Path(tmpdir) / "repo" / internal_path
         if not src.exists():
             raise FileNotFoundError(
                 f"Expected checkpoint at {internal_path} in {repo_slug} but not found after cloning."
             )
         shutil.copy2(str(src), str(local_path))
+        progress.current().count("bytes", local_path.stat().st_size)
 
         # Also copy config.json / LICENSE if present alongside
         for extra in ("config.json", "LICENSE"):
@@ -585,6 +715,58 @@ def _download_github(local_path: Path, repo_url: str) -> Path:
 
     logger.info("Downloaded %s from %s", local_path.name, repo_slug)
     return local_path
+
+
+_GIT_PROGRESS = re.compile(
+    r"(Receiving objects|Resolving deltas|Updating files):\s+(\d+)% \((\d+)/(\d+)\)"
+    r"(?:, ([\d.]+) (KiB|MiB|GiB|bytes))?")
+_GIT_UNITS = {"bytes": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}
+
+
+def _git_clone(url: str, dest: str, what: str) -> None:
+    """``git clone --depth 1`` with git's own progress (``Receiving objects:
+    45% (123/456), 12.3 MiB``) turned into the live line, instead of a
+    silent minute; git's last words when it fails."""
+    item = progress.current()
+    item.phase(f"cloning {what}")
+    fd, log = tempfile.mkstemp(prefix="neuroatlas-git-", suffix=".log")
+    seen = {"offset": 0, "text": ""}
+    phases = {"Receiving objects": f"cloning {what}", "Resolving deltas": "resolving deltas",
+              "Updating files": "checking out files"}
+
+    def poll():
+        with open(log, "rb") as fh:
+            fh.seek(seen["offset"])
+            new = fh.read()
+        seen["offset"] += len(new)
+        seen["text"] = (seen["text"] + new.decode("utf-8", errors="replace"))[-4096:]
+        matches = list(_GIT_PROGRESS.finditer(seen["text"]))
+        if matches:
+            m = matches[-1]
+            text, total = phases[m.group(1)], int(m.group(4))
+            if item.phase_text != text or item.total != total:
+                # objects differ in size (one is the checkpoint): no time left
+                item.phase(text, total=total, unit="objects", eta=False)
+                item.watch(poll)
+            note = None
+            if m.group(5):
+                note = progress.size(float(m.group(5)) * _GIT_UNITS[m.group(6)])
+            item.update(done=int(m.group(3)), note=note)
+        return None
+
+    item.watch(poll)
+    try:
+        done = subprocess.run(["git", "clone", "--progress", "--depth", "1", url, dest],
+                              stdout=subprocess.DEVNULL, stderr=fd)
+    finally:
+        os.close(fd)
+        item.watch(None)
+        with open(log, encoding="utf-8", errors="replace") as fh:
+            said = fh.read()
+        os.unlink(log)
+    if done.returncode:
+        last = [line.strip() for line in re.split(r"[\r\n]+", said) if line.strip()][-2:]
+        raise RuntimeError(f"git clone {url} exited {done.returncode}: " + " | ".join(last))
 
 
 def _download_release_asset(local_path: Path, asset_url: str) -> Path:
@@ -613,7 +795,7 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
     def save(response):
         partial = local_path.with_name(local_path.name + ".partial")
         with open(partial, "wb") as handle:
-            shutil.copyfileobj(response, handle)
+            _copy(response, handle, local_path.name)
         partial.replace(local_path)
 
     logger.info("Downloading release asset %s", asset_url)
@@ -675,7 +857,7 @@ def _download_github_commit_files(local_path: Path, reference: str) -> Path:
         logger.info("Downloading %s", url)
         try:
             with urllib.request.urlopen(url, timeout=120) as response, open(partial, "wb") as handle:
-                shutil.copyfileobj(response, handle)
+                _copy(response, handle, name)
             _verify(partial, sha256, url)
         except BaseException:
             partial.unlink(missing_ok=True)
@@ -704,7 +886,7 @@ def _download_google_drive_zip(local_path: Path, drive_url: str) -> Path:
         archive = Path(tmpdir) / "download.zip"
         logger.info("Downloading %s", drive_url)
         with urllib.request.urlopen(drive_url) as response, open(archive, "wb") as handle:
-            shutil.copyfileobj(response, handle)
+            _copy(response, handle, "the upstream zip")
         if not zipfile.is_zipfile(archive):
             # Drive serves an HTML consent page instead of the file when the
             # object is large enough to trigger its virus-scan interstitial.
@@ -783,11 +965,16 @@ def _download_docker_image_file(local_path: Path, image_ref: str) -> Path:
     wanted = {member, "./" + member, "/" + member}
     local_path.parent.mkdir(parents=True, exist_ok=True)
     partial = local_path.with_name(local_path.name + ".partial")
-    for layer in reversed(manifest["layers"]):
+    item = progress.current()
+    layers = list(reversed(manifest["layers"]))
+    for i, layer in enumerate(layers, 1):
         logger.info("Scanning layer %s (%.0f MB) of %s for %s",
                     layer["digest"][:19], layer.get("size", 0) / 1e6, repo, member)
+        # each layer streams through, newest first, until the file turns up
+        item.phase("downloading", total=layer.get("size") or None, unit="bytes")
+        item.update(note=f"image layer {i}/{len(layers)}")
         with get(f"{registry}/blobs/{layer['digest']}", "*/*") as response, \
-                tarfile.open(fileobj=response, mode="r|*") as tar:
+                tarfile.open(fileobj=_Counting(response), mode="r|*") as tar:
             for entry in tar:
                 if entry.name in wanted and entry.isfile():
                     with tar.extractfile(entry) as src, open(partial, "wb") as dst:

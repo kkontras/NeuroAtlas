@@ -859,7 +859,8 @@ usage: neuroatlas embed [-h] [--dataset DATASET] [-m MODELS] [--set KEY=VALUE]
                         [--checkpoint MODEL=PATH] [--folds FOLDS]
                         [--data-root DATA_ROOT] [--batch-size BATCH_SIZE]
                         [--num-workers NUM_WORKERS] [--cache-root CACHE_ROOT]
-                        [--output-root OUTPUT_ROOT] [--embed-chunk K/N]
+                        [--output-root OUTPUT_ROOT] [--limit-batches N]
+                        [--embed-chunk K/N]
                         [--expected-epoch-seconds EXPECTED_EPOCH_SECONDS]
                         [--no-recording-norm] [--no-amplitude-scale]
                         [--pooling {mean,per_patch}] [--seed SEED] [--dry-run]
@@ -898,6 +899,9 @@ options:
   --output-root OUTPUT_ROOT
                         Run directory. Extraction writes no results here, but the
                         runner creates it (default: artifacts/embeddings/<dataset>).
+  --limit-batches N     Stop each extraction after N batches: a smoke test. Writes to
+                        a cache of its own, <cache root>/_limited, so a later full
+                        extraction never takes the truncated one for complete.
   --embed-chunk K/N     Extract subject chunk K of N for parallel jobs, e.g. '0/4'.
                         Chunks are merged automatically on the first read, so no
                         separate merge step is needed.

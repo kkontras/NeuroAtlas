@@ -148,9 +148,12 @@ def download(p: Dict[str, Any]) -> int:
         print(render(p))
         _msg.error(f"{p['slug']} cannot be fetched automatically")
         return 2
+    from neuroatlas.cli.data import _download
+
     root = Path(p["data_root"]) if p.get("data_root") else None
     with _data_root(root):
-        return data.run_download(data.plan_download(p["slug"]))
+        # data download's own lines: header, live line, result line
+        return _download([data.plan_download(p["slug"])])
 
 
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:

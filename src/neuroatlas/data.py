@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from neuroatlas import _paths
+from neuroatlas import _paths, progress
 from neuroatlas import config as user_config
 from neuroatlas.cli import _msg
 
@@ -529,8 +530,10 @@ def plan_download(slug: str, *, mirror: str = "physionet",
             plan.listing = f"{S3_BUCKET}/?list-type=2&prefix={prefix}"
             return plan
         url = f"https://physionet.org/files/{prefix}"
-        plan.commands = [["wget", "-r", "-N", "-c", "-np", "-nH", "--cut-dirs=3", "-nv",
-                          "--reject", "index.html*", "-P", str(root), url]]
+        # --progress=dot:mega: wget's output is read, not shown (_ToolOutput),
+        # and its dots become the bytes on the live line
+        plan.commands = [["wget", "-r", "-N", "-c", "-np", "-nH", "--cut-dirs=3",
+                          "--progress=dot:mega", "--reject", "index.html*", "-P", str(root), url]]
         plan.after = [f"faster: neuroatlas data download {slug} --mirror aws (PhysioNet's "
                       f"open-data copy on AWS, no account needed)"]
         return plan
@@ -683,7 +686,8 @@ def describe(plan: DownloadPlan) -> List[str]:
     return lines
 
 
-# -- transfers done in Python: resumable, verified, one progress line per file
+# -- transfers done in Python: resumable, verified, one line per file (and a
+#    live line meanwhile, neuroatlas.progress)
 
 def _http_json(url: str) -> Any:
     with urllib.request.urlopen(url, timeout=60) as response:
@@ -722,53 +726,60 @@ def _md5(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _human(n: float) -> str:
-    for unit in ("B", "kB", "MB", "GB", "TB"):
-        if n < 1000 or unit == "TB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1000
-    return f"{n:.1f} TB"
+def _fetch(f: Fetch, echo, label: str, overall: bool = False) -> None:
+    """Transfer one file, resuming a partial one; raise on any failure.
 
-
-def _fetch(f: Fetch, echo, label: str) -> None:
-    """Transfer one file, resuming a partial one; raise on any failure."""
+    The bytes go to the live line of the item running (neuroatlas.progress):
+    with *overall*, toward the total of every file the listing sized; else
+    as this file's own percent. One line per file goes to *echo* when it is
+    done.
+    """
+    item = progress.current()
     f.dest.parent.mkdir(parents=True, exist_ok=True)
-    if f.dest.is_file() and f.size is not None and f.dest.stat().st_size == f.size \
-            and (f.md5 is None or _md5(f.dest) == f.md5):
-        echo(f"{label} {f.dest.name}: already complete")
-        return
+    if f.dest.is_file() and (f.size is not None or f.md5 is not None) \
+            and (f.size is None or f.dest.stat().st_size == f.size):
+        if f.md5 is not None:
+            item.update(note=f"{label} checking {f.dest.name}")
+        if f.md5 is None or _md5(f.dest) == f.md5:
+            echo(f"  {label} {f.dest.name}: already complete")
+            item.count("skipped")
+            if overall:
+                item.update(advance=f.dest.stat().st_size, carried=f.dest.stat().st_size)
+            return
     part = f.dest.with_name(f.dest.name + ".part")
     have = part.stat().st_size if part.is_file() else 0
     request = urllib.request.Request(f.url, headers={"Range": f"bytes={have}-"} if have else {})
-    started, last = time.monotonic(), time.monotonic()
+    started = time.monotonic()
     with urllib.request.urlopen(request, timeout=120) as response:
         if have and response.status != 206:        # server ignored the range: start over
             have = 0
         total = f.size or (int(response.headers.get("Content-Length", 0)) + have) or None
-        done = have
+        if overall:
+            item.update(advance=have, carried=have, note=f"{label} {f.dest.name}")
+        else:
+            item.phase("downloading", total=total, done=have, unit="bytes")
+            item.update(note=f"{label} {f.dest.name}")
         with open(part, "ab" if have else "wb") as out:
             while True:
                 chunk = response.read(1 << 20)
                 if not chunk:
                     break
                 out.write(chunk)
-                done += len(chunk)
-                if time.monotonic() - last > 30 and total:
-                    last = time.monotonic()
-                    rate = (done - have) / max(last - started, 1e-6)
-                    echo(f"{label} {f.dest.name}: {_human(done)} of {_human(total)} "
-                         f"({_human(rate)}/s)")
+                item.update(advance=len(chunk))
+                item.count("bytes", len(chunk))
     if f.size is not None and part.stat().st_size != f.size:
         raise IOError(f"{f.dest.name}: got {part.stat().st_size} bytes, expected {f.size}\n"
                       f"fix: run the same download again (it resumes)")
-    if f.md5 and _md5(part) != f.md5:
-        part.unlink()
-        raise IOError(f"{f.dest.name}: md5 mismatch (expected {f.md5}); the partial file "
-                      f"was removed\nfix: run the same download again")
+    if f.md5:
+        item.update(note=f"{label} checking {f.dest.name}")
+        if _md5(part) != f.md5:
+            part.unlink()
+            raise IOError(f"{f.dest.name}: md5 mismatch (expected {f.md5}); the partial file "
+                          f"was removed\nfix: run the same download again")
     part.replace(f.dest)
-    seconds = max(time.monotonic() - started, 1e-6)
-    echo(f"{label} {f.dest.name}: {_human(f.dest.stat().st_size)} in {seconds:.0f} s"
-         + (", md5 ok" if f.md5 else ""))
+    item.count("files")
+    echo(f"  {label} {f.dest.name}: {progress.size(f.dest.stat().st_size)} in "
+         f"{progress.duration(time.monotonic() - started)}" + (", md5 ok" if f.md5 else ""))
 
 
 def _resolve_listing(plan: DownloadPlan) -> None:
@@ -801,19 +812,24 @@ def _resolve_listing(plan: DownloadPlan) -> None:
 
 def _unpack(archive: Path, echo, keep: bool) -> None:
     target = archive.parent
-    echo(f"unpack: {archive.name} -> {target}/")
+    item = progress.current()
     with zipfile.ZipFile(archive) as zf:
         members = [m for m in zf.infolist() if not m.filename.startswith("__MACOSX/")
                    and not m.filename.rsplit("/", 1)[-1].startswith("._")]
+        item.phase("unpacking", total=len(members), unit="entries")
+        item.update(note=archive.name)
         for member in members:
             out = target / member.filename
             if member.is_dir():
                 out.mkdir(parents=True, exist_ok=True)
             elif not (out.is_file() and out.stat().st_size == member.file_size):
                 zf.extract(member, target)
+            item.update(advance=1)
+    files = sum(1 for m in members if not m.is_dir())
+    echo(f"  unpacked {archive.name} -> {target}/ ({files} files)")
     if not keep:
         archive.unlink()
-        echo(f"deleted {archive.name} (pass --keep-archive to keep it)")
+        echo(f"  deleted {archive.name} (pass --keep-archive to keep it)")
 
 
 @contextlib.contextmanager
@@ -844,37 +860,222 @@ def _moabb_download(plan: DownloadPlan, echo) -> int:
                                   + _msg.brief(_msg.exception_text(exc))))
         return 1
     subjects = list(getattr(dataset, "subject_list", []) or [None])
-    echo(f"moabb: {cfg.moabb_name}, {len(subjects)} subject(s), into {plan.dest}")
+    echo(f"  MOABB {cfg.moabb_name}: {_msg.plural(len(subjects), 'subject')}, into {plan.dest}")
     if logging.getLogger().level > logging.DEBUG:    # `neuroatlas -v` keeps them
         # One request line per file per subject otherwise (O-8).
         for name in ("moabb", "mne", "pooch", "httpx", "httpcore", "nemar", "urllib3"):
             logging.getLogger(name).setLevel(logging.WARNING)
+    # MOABB says nothing while it fetches: the live line counts subjects, and
+    # the bytes arriving under the MOABB folder (when that is cheap to sum)
+    item = progress.current()
+    item.phase("downloading", total=len(subjects), unit="subjects")
+    written = progress.DiskBytes(plan.dest) if isinstance(item, progress.Progress) else None
+    item.watch(written)
     started = time.monotonic()
-    for i, subject in enumerate(subjects, 1):
-        log = io.StringIO()
+    try:
+        for i, subject in enumerate(subjects, 1):
+            log = io.StringIO()
+            item.update(note=f"subject {subject}" if subject is not None else None)
+            began = time.monotonic()
+            try:
+                with _quiet(log):
+                    if subject is None:
+                        dataset.download(path=str(plan.dest), update_path=False)
+                    else:
+                        # accept stays False: a dataset whose licence must be
+                        # accepted says so in the one-line error below.
+                        dataset.download(subject_list=[subject], path=str(plan.dest),
+                                         update_path=False)
+            except Exception as exc:                  # noqa: BLE001 -- one line, not a traceback
+                tail = " | ".join(line for line in log.getvalue().splitlines()[-3:] if line.strip())
+                if tail:
+                    logging.getLogger(__name__).info("%s: MOABB's last output: %s", plan.slug, tail)
+                echo(_msg.format("error", f"{plan.slug}: subject {subject}: "
+                                          + _msg.brief(_msg.exception_text(exc))))
+                return 1
+            item.update(advance=1)
+            item.count("subjects")
+            echo(f"  [{i}/{len(subjects)}] subject {subject} "
+                 f"({progress.duration(time.monotonic() - began)})")
+    finally:
+        if written is not None:
+            written._next = 0.0
+            item.count("bytes", written() or 0)
+    logging.getLogger(__name__).info("%s: %d subject(s) in %.0f s", plan.slug, len(subjects),
+                                     time.monotonic() - started)
+    return 0
+
+
+class _ToolOutput:
+    """What a download tool (wget, nsrr) writes, read while it runs.
+
+    The tool's stdout and stderr go to a file; :meth:`poll` reads what is new
+    each time the item's line ticks. wget's lines (``--progress=dot:mega``)
+    become files done, bytes and the file in transfer on the live line;
+    another tool's lines are passed on to *echo*, so it reads as before. The
+    last lines are kept for the error message when the tool fails.
+    """
+
+    _START = re.compile(r"^--\d{4}-\d\d-\d\d \d\d:\d\d:\d\d--\s+(\S+)")
+    _LENGTH = re.compile(r"^Length: (\d+)(?: \([^)]*\))?(?:, (\d+) \([^)]*\) remaining)?")
+    _SAVING = re.compile(r"^Saving to: ['\u2018\"](.+?)['\u2019\"]\s*$")
+    _SAVED = re.compile(r" saved \[(\d+)(?:/\d+)?\]\s*$")
+    _KEPT = re.compile(r"^(?:File ['\u2018\"](.+?)['\u2019\"] (?:not modified on server|already "
+                       r"there)|Server file no newer than local file ['\u2018\"](.+?)['\u2019\"])")
+    _DOTS = re.compile(r"^\s*(\d+)K ([.,\s]*)")
+
+    def __init__(self, path: str, *, wget: bool, item=None, echo=None, written=None):
+        self.path, self.wget, self.echo = path, wget, echo
+        self.item = item if item is not None else progress.current()
+        self.written = written            # DiskBytes for a tool that does not say
+        self.offset = 0
+        self.buffer = ""
+        self.files = self.skipped = 0
+        self.present = 0                  # bytes of the files finished or kept
+        self.current = 0                  # bytes of the file in transfer
+        self.had = 0                      # of which there before (a resumed file)
+        self.listing = False              # the file in transfer is a directory listing
+        self.tail: List[str] = []
+        self._lock = threading.Lock()
+
+    def poll(self, final: bool = False):
+        with self._lock:
+            try:
+                with open(self.path, "rb") as fh:
+                    fh.seek(self.offset)
+                    new = fh.read()
+            except OSError:
+                new = b""
+            self.offset += len(new)
+            self.buffer += new.decode("utf-8", errors="replace")
+            *lines, self.buffer = self.buffer.split("\n")
+            if final and self.buffer:
+                lines, self.buffer = lines + [self.buffer], ""
+            for line in lines:
+                self._line(line.rstrip("\r"))
+            if self.wget:
+                dots = self._DOTS.match(self.buffer)
+                if dots:
+                    self._dots(dots)
+                self.item.update(done=self.present + self.current)
+        return self.written() if self.written is not None else None
+
+    def _dots(self, match) -> None:
+        marks = sum(match.group(2).count(c) for c in ".,")
+        self.current = int(match.group(1)) * 1024 + marks * 65536
+
+    def _line(self, line: str) -> None:
+        if not line.strip():
+            return
+        if not self.wget:
+            self.tail = (self.tail + [line])[-20:]
+            if self.echo is not None:
+                self.echo(f"  {line.rstrip()}")
+            return
+        dots = self._DOTS.match(line)
+        if dots:
+            self._dots(dots)
+            return
+        self.tail = (self.tail + [line])[-20:]
+        start = self._START.match(line)
+        if start:
+            name = start.group(1).rstrip("/").rsplit("/", 1)[-1]
+            self.current = self.had = 0
+            self.listing = start.group(1).endswith("/") or name.startswith("robots.txt")
+            if not self.listing:
+                self.item.update(note=name)
+            return
+        length = self._LENGTH.match(line)
+        if length and length.group(2):
+            self.had = int(length.group(1)) - int(length.group(2))
+            self.item.update(carried=self.had)
+            return
+        saving = self._SAVING.match(line)
+        if saving:
+            self.listing = self.listing or Path(saving.group(1)).name.startswith("index.html")
+            return
+        saved = self._SAVED.search(line)
+        if saved:
+            if not self.listing:
+                got = int(saved.group(1))
+                self.present += got
+                self.files += 1
+                self.item.count("files").count("bytes", max(0, got - self.had))
+            self.current = self.had = 0
+            return
+        kept = self._KEPT.match(line)
+        if kept:
+            path = Path(kept.group(1) or kept.group(2))
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            self.skipped += 1
+            self.present += size
+            self.item.count("skipped").update(carried=size)
+            self.current = self.had = 0
+            return
+        if "fully retrieved" in line:
+            self.skipped += 1
+            self.item.count("skipped")
+
+
+def _run_tool(argv: List[str], plan: DownloadPlan, token: Optional[str], echo) -> int:
+    """Run wget or nsrr with their output read as it comes (:class:`_ToolOutput`):
+    a live line instead of silence, the tool's last lines when it fails."""
+    import tempfile
+
+    item = progress.current()
+    wget = argv[0] == "wget"
+    fd, path = tempfile.mkstemp(prefix=f"neuroatlas-{argv[0]}-", suffix=".log")
+    if wget:
+        # the size is the manifest's estimate: shown as "of ~1.3 GB"
+        total = plan.size_gb * 1e9 if plan.size_gb else None
+        item.phase("downloading", total=total, unit="bytes", approx=True)
+        output = _ToolOutput(path, wget=True, item=item)
+        extra = {"env": {**os.environ, "LC_ALL": "C"}}      # wget's words, in English
+    else:
+        item.phase(" ".join(argv[:3]))
+        written = (progress.DiskBytes(plan.dest or plan.cwd)
+                   if isinstance(item, progress.Progress) else None)
+        output = _ToolOutput(path, wget=False, item=item, echo=echo, written=written)
+        extra = {}
+    item.watch(output.poll)
+    try:
+        # The token goes to the tool's own prompt on stdin: never argv (visible
+        # in `ps`), never the environment, never printed.
+        done = subprocess.run(argv, cwd=plan.cwd,
+                              input=(token + "\n") if token else None, text=True,
+                              stdout=fd, stderr=subprocess.STDOUT, **extra)
+    finally:
+        os.close(fd)
+        item.watch(None)
+        output.poll(final=True)
+        if output.written is not None:
+            output.written._next = 0.0
+            item.count("bytes", output.written() or 0)
         try:
-            with _quiet(log):
-                if subject is None:
-                    dataset.download(path=str(plan.dest), update_path=False)
-                else:
-                    # accept stays False: a dataset whose licence must be
-                    # accepted says so in the one-line error below.
-                    dataset.download(subject_list=[subject], path=str(plan.dest),
-                                     update_path=False)
-        except Exception as exc:                      # noqa: BLE001 -- one line, not a traceback
-            tail = " | ".join(line for line in log.getvalue().splitlines()[-3:] if line.strip())
-            if tail:
-                logging.getLogger(__name__).info("%s: MOABB's last output: %s", plan.slug, tail)
-            echo(_msg.format("error", f"{plan.slug}: subject {subject}: "
-                                      + _msg.brief(_msg.exception_text(exc))))
-            return 1
-        echo(f"  [{i}/{len(subjects)}] subject {subject} ({time.monotonic() - started:.0f} s)")
+            os.unlink(path)
+        except OSError:
+            pass
+    if done.returncode:
+        last = [line for line in output.tail if "robots.txt" not in line][-3:]
+        detail = ("\n" + "\n".join(last)) if last else ""
+        how = (f"was stopped (signal {-done.returncode})" if done.returncode < 0
+               else f"exited {done.returncode}")
+        echo(_msg.format("error", f"{plan.slug}: `{argv[0]}` {how}{detail}",
+                         f"neuroatlas data download {plan.slug} (it carries on where this "
+                         f"stopped)"))
+        return 1
     return 0
 
 
 def run_download(plan: DownloadPlan, *, echo=None) -> int:
     """Execute a plan. Exit status: 0 done (or instructions printed), 1 a
-    transfer or tool failed, 2 refused before anything ran."""
+    transfer or tool failed, 2 refused before anything ran.
+
+    Progress goes to the item running (neuroatlas.progress), when there is
+    one; *echo* gets one line per file, unpacked archive or subject."""
     if echo is None:
         echo = say
     if plan.handler in ("manual", "internal"):
@@ -894,11 +1095,19 @@ def run_download(plan: DownloadPlan, *, echo=None) -> int:
     if plan.handler == "moabb":
         return _moabb_download(plan, echo)
 
+    item = progress.current()
     if plan.fetches or plan.listing:
         try:
+            if plan.listing:
+                item.phase("listing the files")
             _resolve_listing(plan)
+            sizes = [f.size for f in plan.fetches]
+            overall = bool(sizes) and all(sizes)
+            if overall:
+                # every size is known: one percent for the whole dataset
+                item.phase("downloading", total=sum(sizes), unit="bytes")
             for i, f in enumerate(plan.fetches, 1):
-                _fetch(f, echo, f"[{i}/{len(plan.fetches)}]")
+                _fetch(f, echo, f"[{i}/{len(plan.fetches)}]", overall=overall)
             for archive in plan.unpack:
                 _unpack(archive, echo, plan.keep_archive)
         except (OSError, urllib.error.URLError, zipfile.BadZipFile, ValueError) as exc:
@@ -913,18 +1122,53 @@ def run_download(plan: DownloadPlan, *, echo=None) -> int:
     elif plan.dest:
         plan.dest.mkdir(parents=True, exist_ok=True)
     for argv in plan.commands:
-        echo(f"$ {' '.join(argv)}")
-        # The token goes to the tool's own prompt on stdin: never argv (visible
-        # in `ps`), never the environment, never printed.
-        done = subprocess.run(argv, cwd=plan.cwd,
-                              input=(token + "\n") if token else None, text=True,
-                              stdout=None, stderr=None)
-        if done.returncode:
-            echo(_msg.format("error", f"{plan.slug}: `{argv[0]}` exited {done.returncode}"))
+        echo(f"  $ {' '.join(argv)}")
+        if _run_tool(argv, plan, token, echo):
             return 1
     for line in plan.after:
         echo(line)
     return 0
+
+
+def source_text(plan: DownloadPlan) -> str:
+    """Where a download comes from and goes, for its start line."""
+    if plan.handler == "moabb":
+        what = "with MOABB"
+    elif plan.handler == "nsrr":
+        what = "with the nsrr tool"
+    elif plan.commands and plan.commands[0][0] == "wget":
+        what = "from physionet.org with wget"
+    elif plan.listing and "amazonaws" in plan.listing:
+        what = "from PhysioNet's open-data copy on AWS"
+    elif plan.listing or plan.fetches:
+        url = plan.listing or plan.fetches[0].url
+        what = f"from {urllib.parse.urlparse(url).hostname}"
+    else:
+        what = ""
+    where = plan.dest if plan.dest is not None else plan.cwd
+    return " ".join(part for part in (what, f"into {where}" if where else "") if part)
+
+
+def result_text(status: int, counts: Dict[str, int]) -> str:
+    """What a dataset's download did, for its result line: ``downloaded, 5
+    files, 3.2 MB``, ``found, 25 files already complete``, ``failed``."""
+    if status == 2:
+        return "refused"
+    if status:
+        return "failed"
+    files, skipped = counts.get("files", 0), counts.get("skipped", 0)
+    nbytes, subjects = counts.get("bytes", 0), counts.get("subjects", 0)
+    if subjects:
+        return f"downloaded, {_msg.plural(subjects, 'subject')}" + (
+            f", {progress.size(nbytes)}" if nbytes else "")
+    if files:
+        return (f"downloaded, {_msg.plural(files, 'file')}, {progress.size(nbytes)}"
+                + (f"; {skipped} already complete" if skipped else ""))
+    if skipped:
+        return f"found, {_msg.plural(skipped, 'file')} already complete"
+    if nbytes:
+        return f"done, {progress.size(nbytes)} written"
+    return "done"
 
 
 def say(line: str) -> None:

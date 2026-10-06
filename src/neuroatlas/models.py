@@ -261,9 +261,14 @@ def download(spec) -> ModelStatus:
     if (st.weights or st.state) == "hub":
         from huggingface_hub import snapshot_download
 
+        from neuroatlas.extensions.models.backbones._checkpoint_download import hub_progress
+
         cache = hub_cache_dirs(spec.model_family)[0]
-        snapshot_download(spec.checkpoint_path,
-                          cache_dir=str(cache) if spec.model_family in _HUB_CACHE_FAMILIES else None)
+        # the bytes on the live line of `models download` (its bars off)
+        with hub_progress(cache / ("models--" + spec.checkpoint_path.replace("/", "--"))):
+            snapshot_download(spec.checkpoint_path,
+                              cache_dir=str(cache) if spec.model_family in _HUB_CACHE_FAMILIES
+                              else None)
         return status(spec)
     from neuroatlas.extensions.models.backbones._checkpoint_download import ensure_checkpoint
 
