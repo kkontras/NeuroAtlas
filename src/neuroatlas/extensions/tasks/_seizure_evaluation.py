@@ -16,6 +16,9 @@ Key features vs a naive sklearn probe:
   recording or subject boundaries)
 - Sensitivity at clinical FPR/h targets (1/h, 0.1/h) — the SzCORE / Epilepsy
   Bench reporting standard
+
+The benchmark's headline, the paper's event-level Sens@FA AUC, is not here:
+it is in _event_sens_fa.py (numpy only, also used by ``neuroatlas results``).
 """
 from __future__ import annotations
 
@@ -511,6 +514,9 @@ def full_binary_probe(
         "n_test": int(len(test_y)),
         "n_test_pos": int((test_y == 1).sum()),
         "n_test_neg": int((test_y == 0).sum()),
+        # The window probabilities themselves (an array, not a metric): the
+        # caller sweeps them for the event-level Sens@FA curve.
+        "test_proba": test_proba,
     }
 
     if predictions_path is not None:

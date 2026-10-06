@@ -41,7 +41,7 @@ One word per idea, the same in the tables, the JSON and the Python API.
 | **fold** | One split of a dataset's subjects into train, validation and test, never sharing a subject (Bonn, which ships no subject ids, splits by clip). Most datasets have 5 folds, from a frozen file or a seeded splitter; BCI is leave-one-subject-out (`LOSO (N)`, one fold per subject); SHHS ships one fixed split (`fixed split`). |
 | **channel map** | Per dataset: which electrodes each model family gets, under which names. It can mark a family `skip`; that pair is **n/a**. A family the map has no entry for is **invalid**: `check`, `run` and `submit` report the pair and never run it. |
 | **n/a** | Not applicable, never zero: a pair the channel map skips, a spread over one fold, a model missing from part of a suite. `null` in JSON. |
-| **dummy** | What a trivial predictor scores (0.5 AUROC, 0.2 balanced accuracy for 5 sleep stages). |
+| **dummy** | What a trivial predictor scores (0.2 balanced accuracy for 5 sleep stages). Epilepsy's event-level headline has none: a constant predictor's score depends on the split. |
 | **normalized** | `(score − dummy) / (1 − dummy)`: 0 is the trivial guess, 1 is perfect. Only for benchmarks with a fixed dummy and a higher-is-better metric. |
 | **offline** | Downloads switched off; see [the offline rule](#the-offline-rule). |
 

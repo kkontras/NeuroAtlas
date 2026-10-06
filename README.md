@@ -344,14 +344,14 @@ neuroatlas results brain_age
 neuroatlas results epilepsy
 ```
 
-What the fresh install gave (`std` is the population standard deviation
-over the folds, the convention of every ± in the paper):
+What the fresh install gave (± is the standard deviation over the folds;
+for the epilepsy headline it is the SD of the per-fold AUCs):
 
 | Benchmark | Dataset | Model | Metric | Result | Reference |
 |---|---|---|---|---|---|
 | `sleep_stage` | Sleep-EDF | BIOT | balanced accuracy | 0.657 ± 0.014 (5/5 folds) | 0.657 (the authors' run) |
 | `brain_age` | Sleep-EDF SC | BIOT | MAE, years | 11.984 ± 1.690 (5/5) | 11.98 ± 1.69 (paper's brain-age table) |
-| `epilepsy` | Siena | CBraMod | AUROC | 0.851 ± 0.021 (5/5) | see note |
+| `epilepsy` | Siena | CBraMod | window AUROC (a secondary column) | 0.851 ± 0.021 (5/5) | see note |
 
 Siena's published numbers were drawn on folds of recordings, not patients
 (see the Siena entry under `provenance.known_issues` in
@@ -454,8 +454,10 @@ paper but not run here yet; `neuroatlas show <benchmark>` says why.
 
 ### Epilepsy
 
-Ten cohorts in the `epilepsy` benchmark, scored by window-level AUROC with
-event-level metrics beside it. Seven are continuously labelled (a label per
+Ten cohorts in the `epilepsy` benchmark, scored by the event-level
+Sens@FA AUC (the paper's headline: the area under the folds' median curve of
+seizure-event sensitivity against false alarms per hour, 0.1-100 FA/h), with
+window-level AUROC, AUPRC and balanced accuracy beside it. Seven are continuously labelled (a label per
 10 s window); three label whole recordings as normal or abnormal. Folds are
 patient-level, except Bonn, which ships no subject identifiers (its folds
 are over clips). AUB-Med is planned: readable, but the paper reports no
