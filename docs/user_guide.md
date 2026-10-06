@@ -694,6 +694,21 @@ folders and quoted globs you name. One row per dataset × variant × model; a
   `metric`, `variant`, `status`, `n_folds`, `n_expected`, `n_failed`,
   `failures`, `errors` and `note`.
 
+**Saved predictions (epilepsy).** Each fold of the seizure probe also writes
+its test predictions to `predictions.npz` in that fold's probe folder,
+`<output root>/epilepsy/<dataset>/probes/<dataset>/<model>/<key>/` (the path
+is in `results.json` under `cache_paths.predictions`): `y_true`, `y_score`,
+`recording_id`, `subject_id`, `window_start_s`, `window_s`, `threshold`,
+`dataset`, `checkpoint_id`, `fold`. A metric can be recomputed from them
+without probing again, e.g. the event Sens@FA AUC of one fold:
+
+```python
+import numpy as np
+from neuroatlas.extensions.tasks import _event_sens_fa as esf
+z = np.load("predictions.npz")
+esf.fold_metrics(z["y_true"], z["y_score"], z["recording_id"], window_s=float(z["window_s"]))
+```
+
 A result recorded twice -- a quick `run` and later a cluster job of the same
 dataset, variant, model, fold and task -- counts once: the newest file wins,
 and `results` says how many duplicates it dropped. Two variants of the same
