@@ -307,23 +307,40 @@ def fit_lr_c_grid(
     max_iter: int = 500,
     seed: int = 0,
     selection_metric: str = "auprc",
+    val_rec_ids: Optional[Sequence[str]] = None,
+    window_s: float = 10.0,
 ) -> Tuple[LogisticRegression, StandardScaler, float, float]:
     """Fit balanced LogisticRegression with C-grid search on val AUPRC (binary;
-    ``selection_metric="auroc"`` ranks by val AUROC instead) or val macro-F1
+    ``selection_metric="auroc"`` ranks by val AUROC, ``"event_sens_fa_auc"``
+    by the validation fold's event-level Sens@FA AUC -- the epilepsy headline;
+    it needs ``val_rec_ids``, windows in recording/time order) or val macro-F1
     (multiclass).
 
     Returns (best_clf, fitted_scaler, best_C, best_val_score).
     """
-    if selection_metric not in ("auprc", "auroc"):
-        raise ValueError(f"selection_metric must be 'auprc' or 'auroc', got {selection_metric!r}")
+    if selection_metric not in ("auprc", "auroc", "event_sens_fa_auc"):
+        raise ValueError(f"selection_metric must be 'auprc', 'auroc' or 'event_sens_fa_auc', "
+                         f"got {selection_metric!r}")
+    if selection_metric == "event_sens_fa_auc" and val_rec_ids is None:
+        raise ValueError("selection_metric='event_sens_fa_auc' needs the validation windows' "
+                         "recording ids (val_rec_ids)")
     scaler = StandardScaler().fit(Xtr)
     Xtr_s = scaler.transform(Xtr)
     Xval_s = scaler.transform(Xval)
 
     is_binary = len(np.unique(np.concatenate([ytr, yval]))) <= 2
-    rank = average_precision_score if selection_metric == "auprc" else roc_auc_score
+    if selection_metric == "event_sens_fa_auc":
+        from ._event_sens_fa import curve_auc, fold_curve
+
+        def rank(y, p):
+            return float(curve_auc(fold_curve(y, p, np.asarray(val_rec_ids), window_s=window_s)))
+    else:
+        rank = average_precision_score if selection_metric == "auprc" else roc_auc_score
 
     best_clf, best_C, best_score = None, None, -np.inf
+    # For the event metric: a C whose validation curve never reaches the
+    # 0.1-100 FA/h range scores NaN; if every C does, rank by AUPRC instead.
+    fallback = []
     for C in c_values:
         clf = LogisticRegression(
             C=C,
@@ -343,6 +360,13 @@ def fit_lr_c_grid(
                 score = float(rank(yval, proba))
             except Exception:
                 score = 0.0
+            if selection_metric == "event_sens_fa_auc":
+                try:
+                    fallback.append((float(average_precision_score(yval, proba)), C, clf))
+                except Exception:
+                    fallback.append((0.0, C, clf))
+                if not np.isfinite(score):
+                    continue
         else:
             pred = clf.predict(Xval_s)
             score = float(f1_score(yval, pred, average="macro", zero_division=0))
@@ -351,6 +375,11 @@ def fit_lr_c_grid(
             best_score = score
             best_clf = clf
             best_C = C
+
+    if best_clf is None and fallback:
+        best_score, best_C, best_clf = max(fallback, key=lambda t: t[0])
+        logger.warning("the validation fold's event Sens@FA curve never reaches 0.1-100 FA/h "
+                       "for any C; C=%s chosen by validation AUPRC instead", best_C)
 
     if best_clf is None:
         # Last-resort fallback: fit at C=1.0 without C-grid
@@ -419,7 +448,9 @@ def full_binary_probe(
     test_x: np.ndarray,
     test_y: np.ndarray,
     test_rec_ids: Optional[Sequence[str]] = None,
+    val_rec_ids: Optional[Sequence[str]] = None,
     window_s: float = 30.0,
+    event_window_s: Optional[float] = None,     # seconds a window stands for (the event metric)
     c_values: Sequence[float] = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0),
     class_weight: str = "balanced",
     selection_metric: str = "auprc",
@@ -448,13 +479,22 @@ def full_binary_probe(
     model, scaler, best_c, val_score = fit_lr_c_grid(
         train_x, train_y, val_x, val_y,
         c_values=c_values, class_weight=class_weight, max_iter=max_iter, seed=seed,
-        selection_metric=selection_metric,
+        selection_metric=selection_metric, val_rec_ids=val_rec_ids,
+        window_s=event_window_s if event_window_s is not None else window_s,
     )
     val_proba = model.predict_proba(scaler.transform(val_x))[:, 1]
     try:
         val_auprc = float(average_precision_score(val_y, val_proba))
     except Exception:
         val_auprc = 0.0
+    val_event = None
+    if val_rec_ids is not None:
+        from ._event_sens_fa import curve_auc, fold_curve
+
+        v = float(curve_auc(fold_curve(val_y, val_proba, np.asarray(val_rec_ids),
+                                       window_s=event_window_s if event_window_s is not None
+                                       else window_s)))
+        val_event = v if np.isfinite(v) else None
     thr, val_f1 = tune_threshold(model, scaler, val_x, val_y, objective=threshold_objective)
 
     test_proba = model.predict_proba(scaler.transform(test_x))[:, 1]
@@ -506,6 +546,7 @@ def full_binary_probe(
         "best_weight_decay": float(best_c),
         "tuned_threshold": float(thr),
         "val_auprc": float(val_auprc),
+        "val_event_sens_fa_auc": val_event,
         "selection_metric": selection_metric,
         "val_selection_score": float(val_score),
         "val_f1_at_threshold": float(val_f1),
