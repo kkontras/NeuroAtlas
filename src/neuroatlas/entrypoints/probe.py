@@ -216,6 +216,12 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser.add_argument("--cache-root", default=None,
                         help="Embedding cache root. Default: $EEG_CACHE_ROOT, else the "
                              "shared cache.")
+    parser.add_argument("--reprobe", action="store_true",
+                        help="Fit every fold again. Without it, a fold whose "
+                             "predictions.npz is already in its probe folder -- same "
+                             "probe and task settings, dataset settings, fold, seeds, "
+                             "weights and embeddings -- is not fitted again: its "
+                             "metrics are recomputed from the saved predictions.")
     parser.add_argument("--extract-only", action="store_true",
                         help="Extract embeddings and exit (prefer `embed`).")
     parser.add_argument("--embed-chunk", default=None, metavar="K/N")
@@ -353,6 +359,8 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
             # a CPU-only probe job silently turns into a GPU extraction.
             # --extract-only and --embed-chunk are the deliberate exceptions.
             "require_cached_embeddings": not args.extract_only,
+            # only when asked: the default leaves the resolved config as it was
+            **({"reprobe": True} if getattr(args, "reprobe", False) else {}),
         },
         "probe": probe_block,
         "task": task_block,
@@ -395,6 +403,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.config:
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+        if args.reprobe:
+            config.setdefault("benchmark", {})["reprobe"] = True
     else:
         config = build_config(args)
 

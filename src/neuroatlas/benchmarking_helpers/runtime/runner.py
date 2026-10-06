@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import logging
@@ -196,7 +197,9 @@ def _progress_line(done: int, total: int, result, seconds: float) -> str:
     else:
         value = next(((m, (result.metrics or {}).get(m)) for m in _PROGRESS_METRICS
                       if isinstance((result.metrics or {}).get(m), (int, float))), None)
-        what = "ok" + (f", {value[0]} {value[1]:.3f}" if value else "")
+        # (reused): recomputed from the fold's saved predictions, not fitted
+        what = "ok" + (" (reused)" if (result.metadata or {}).get("reused_predictions") else "") \
+            + (f", {value[0]} {value[1]:.3f}" if value else "")
     minutes, secs = divmod(int(round(seconds)), 60)
     return f"[{done}/{total}] {where}: {what} ({minutes}m {secs:02d}s)" if minutes else \
         f"[{done}/{total}] {where}: {what} ({secs}s)"
@@ -309,6 +312,28 @@ def _format_mean_std_f1_per_class(mean_values, std_values, digits: int = 4) -> s
     return "[" + pairs + "]"
 
 
+@contextlib.contextmanager
+def results_lock(output_root: Path):
+    """Exclusive use of ``<output_root>/results.json`` (and the tables made
+    from it) while it is read and rewritten: two jobs writing one folder, or
+    a rescore beside a run, must not lose each other's rows."""
+    lock_path = Path(output_root) / ".results.lock"
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.lockf(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        lock_path.unlink(missing_ok=True)
+
+
 class BenchmarkRunner:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -323,6 +348,10 @@ class BenchmarkRunner:
             benchmark_cfg.get("require_cached_embeddings", False)
         )
         self.embed_chunk: Optional[Tuple[int, int]] = benchmark_cfg.get("embed_chunk")
+        # A fold whose predictions.npz is already in its probe folder, made
+        # from the same inputs, is rescored rather than probed again, unless
+        # `probe --reprobe` (neuroatlas.predictions).
+        self.reprobe: bool = bool(benchmark_cfg.get("reprobe", False))
 
     def _selected_datasets(self) -> List[str]:
         return list(self.config.get("datasets", {}).keys())
@@ -382,8 +411,76 @@ class BenchmarkRunner:
             "task": self._task_config(),
             "dataset_context": dict(getattr(datamodule, "metadata", {})),
         }
+        from neuroatlas.extensions.tasks.linear_probe import current_pooling
+
+        # Only when it is not the default, as in the embedding cache key: a
+        # per_patch probe must not land in (and be reused as) the mean one's
+        # folder, and the default keeps every existing folder's key.
+        if current_pooling() != "mean":
+            probe_parts["pooling"] = current_pooling()
         key = build_cache_key(probe_parts)
         return self.output_root / "probes" / dataset_name / checkpoint_id / key
+
+    def _saved_result(self, dataset_name: str, checkpoint_spec, datamodule, task_name: str,
+                      probe_dir: Path) -> Optional[BenchmarkResult]:
+        """This fold's result recomputed from the predictions an earlier probe
+        saved in *probe_dir*, when they were made from the same inputs;
+        otherwise None (the fold is probed). The folder's key already fixes
+        the probe and task settings and the dataset context, fold included;
+        predictions.reuse_problem checks the rest (seeds, pooling, weights,
+        and that the embeddings are the ones they were fitted on)."""
+        from neuroatlas import predictions as preds
+        from neuroatlas.extensions.tasks.linear_probe import current_pooling
+
+        path = probe_dir / preds.FILENAME
+        if not path.is_file():
+            return None
+        fold = (getattr(datamodule, "metadata", None) or {}).get("fold")
+        where = f"{dataset_name}/{checkpoint_spec.identifier}" + (
+            f" fold {fold}" if fold is not None else "")
+        sidecar = probe_dir / preds.RESULT_FILENAME
+        try:
+            pred = preds.load(path)
+            why = None if sidecar.is_file() else "no result.json beside them (an older version saved them)"
+            why = why or preds.reuse_problem(
+                pred, task=task_name, seeds=self._effective_seeds(datamodule),
+                pooling=current_pooling(), checkpoint_path=checkpoint_spec.checkpoint_path,
+                cache_root=self.cache_root)
+            if why is None:
+                row = BenchmarkResult.from_dict(json.loads(sidecar.read_text(encoding="utf-8")))
+                if (row.dataset_name, row.checkpoint_id) != (dataset_name, checkpoint_spec.identifier):
+                    why = "their result.json is another dataset's or model's"
+        except Exception as exc:  # unreadable: probe again, and say so
+            why = f"they cannot be read ({type(exc).__name__}: {exc})"
+        if why is not None:
+            from neuroatlas.cli import _msg
+
+            _msg.note(f"{where}: saved predictions not reused, probing again: {why}")
+            return None
+        row.metrics = preds.scorer(task_name)(pred)
+        preds.refresh_metadata(row.metadata, pred)
+        row.cache_paths["predictions"] = str(path)
+        row.metadata.pop("written_at", None)
+        row.metadata["reused_predictions"] = True
+        # the fold's progress line says "ok (reused)"; the file, for -v and --log
+        logging.getLogger(__name__).info("%s: reused the saved predictions %s", where, path)
+        return row
+
+    @staticmethod
+    def _remember(result: BenchmarkResult, probe_dir: Path) -> None:
+        """Keep the result row beside the predictions it was computed from:
+        what a later run restores when it reuses them."""
+        if result.ok and (result.cache_paths or {}).get("predictions"):
+            from neuroatlas import predictions as preds
+
+            try:
+                preds.write_result(probe_dir, result.to_dict())
+            except OSError as exc:
+                from neuroatlas.cli import _msg
+
+                _msg.warning(f"{result.dataset_name}/{result.checkpoint_id}: could not keep "
+                             f"result.json beside the predictions ({exc}); a later run fits "
+                             f"this fold again")
 
     @staticmethod
     def _pair_config(dataset_config: Dict[str, Any], cmap: Optional[ChannelMap],
@@ -533,11 +630,24 @@ class BenchmarkRunner:
         dataset_config = self._pair_config(dataset_config, cmap, checkpoint_spec)
 
         try:
+            effective_extract_only = self.extract_only or self.embed_chunk is not None
+            reuse = not (self.reprobe or effective_extract_only)
+            # Weights only once the fold is known to need probing: a fold
+            # whose saved predictions are reused never loads its backbone.
             datamodule, backbone = self._prepare_pair(
-                dataset_name, dataset_config, checkpoint_spec, cmap)
+                dataset_name, dataset_config, checkpoint_spec, cmap, load_weights=not reuse)
             # The spec the backbone was built from (results record it).
             checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec)
-            effective_extract_only = self.extract_only or self.embed_chunk is not None
+            probe_dir = self._probe_dir(dataset_name, checkpoint_spec.identifier, datamodule)
+            if reuse:
+                saved = self._saved_result(dataset_name, checkpoint_spec, datamodule,
+                                           task_name, probe_dir)
+                if saved is not None:
+                    if cmap is not None:
+                        saved.metadata.setdefault("channel_map_applied", True)
+                    return saved
+                if backbone is None:
+                    backbone = load_backbone(checkpoint_spec)
             from neuroatlas.extensions.tasks.linear_probe import (
                 require_cached_embeddings,
             )
@@ -557,13 +667,15 @@ class BenchmarkRunner:
                     probe_config=self._probe_config(),
                     task_config=self._task_config(),
                     seeds=self._effective_seeds(datamodule),
-                    probe_dir=self._probe_dir(dataset_name, checkpoint_spec.identifier, datamodule),
+                    probe_dir=probe_dir,
                     cache_root=self.cache_root,
                     extract_only=effective_extract_only,
                     embed_chunk=self.embed_chunk,
                 )
             if cmap is not None:
                 result.metadata.setdefault("channel_map_applied", True)
+            if not effective_extract_only:
+                self._remember(result, probe_dir)
             return result
         except Exception as exc:
             from neuroatlas.cli import _msg
@@ -727,21 +839,8 @@ class BenchmarkRunner:
         return merged
 
     def _write_outputs(self, results: Iterable[BenchmarkResult]) -> None:
-        lock_path = self.output_root / ".results.lock"
-        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.lockf(fd, fcntl.LOCK_EX)
+        with results_lock(self.output_root):
             self._write_outputs_unlocked(results)
-        finally:
-            try:
-                fcntl.lockf(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            lock_path.unlink(missing_ok=True)
 
     def _write_outputs_unlocked(self, results: Iterable[BenchmarkResult]) -> None:
         results = list(results)
@@ -753,7 +852,11 @@ class BenchmarkRunner:
         results = self._merge_with_existing(results)
         with open(self.output_root / "results.json", "w", encoding="utf-8") as handle:
             json.dump([result.to_dict() for result in results], handle, indent=2)
+        self.write_tables(results)
 
+    def write_tables(self, results: List[BenchmarkResult]) -> None:
+        """results.csv, summary.md and results.md from the rows of results.json
+        (`neuroatlas rescore` rewrites them after changing the metrics)."""
         csv_rows = [
             "dataset,task,mode,aggregation,fold,checkpoint_id,evaluation_mode,status,"
             "val_accuracy,val_macro_f1,val_weighted_f1,val_cohen_kappa,val_f1_per_class,"

@@ -41,6 +41,11 @@ def build_parser() -> Parser:
                         "nothing to test on.")
     p.add_argument("--skip-embed", action="store_true",
                    help="Probe only; fail where embeddings are missing.")
+    p.add_argument("--reprobe", action="store_true",
+                   help="Fit every fold again. Without it, a fold whose saved predictions "
+                        "(predictions.npz in its probe folder) were made with the same "
+                        "settings, weights and embeddings is not fitted again: its metrics "
+                        "are recomputed from them.")
     p.add_argument("--num-workers", type=int, default=None, metavar="N",
                    help="Data-loader workers for extraction. Default: the CPUs this job may "
                         "use (CPU affinity and cgroup quota) minus one, at most 16, unless "
@@ -144,10 +149,11 @@ def _command(verb: str, argv: List[str], models: List[str], extra: List[str]) ->
     return " ".join(["neuroatlas", verb, *argv, "--models", ",".join(models), *extra])
 
 
-def plan_row(p, restricted: bool, overrides: List[str] = ()) -> dict:
+def plan_row(p, restricted: bool, overrides: List[str] = (), reprobe: bool = False) -> dict:
     """One plan as `run --dry-run --format json` prints it (without its note);
     ``api.plan`` builds its table from the same rows."""
     runs = bool(p.embed_argv and p.models)
+    probe_extra = ["--output-root", str(p.output), *overrides, *(["--reprobe"] if reprobe else [])]
     return {
         "benchmark": p.benchmark, "dataset": p.dataset, "task": _task(p),
         "models": list(p.models), "n_models": len(p.models),
@@ -157,8 +163,7 @@ def plan_row(p, restricted: bool, overrides: List[str] = ()) -> dict:
         "invalid": list(p.invalid), "n_invalid": len(p.invalid),
         "output": str(p.output),
         "embed_command": _command("embed", p.embed_argv, p.models, list(overrides)) if runs else None,
-        "probe_command": _command("probe", p.probe_argv, p.models,
-                                  ["--output-root", str(p.output), *overrides]) if runs else None,
+        "probe_command": _command("probe", p.probe_argv, p.models, probe_extra) if runs else None,
     }
 
 
@@ -222,7 +227,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     rows: List[dict] = []
     notes = {}
     for i, p in enumerate(plans):
-        rows.append(plan_row(p, restricted, overrides))
+        rows.append(plan_row(p, restricted, overrides, reprobe=args.reprobe))
         lines = plan_notes(p, p in incomplete and not args.allow_partial)
         if lines:
             notes[i] = lines
@@ -258,7 +263,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     summary = runmod.execute(
         plans, cache_root=Path(args.cache_root) if args.cache_root else None,
         limit_batches=args.limit_batches, skip_embed=args.skip_embed,
-        extra_embed=overrides, extra_probe=overrides, num_workers=args.num_workers)
+        extra_embed=overrides, extra_probe=overrides, num_workers=args.num_workers,
+        reprobe=args.reprobe)
     kept = summary.get("kept", 0)
     invalid = summary.get("invalid", 0)
     total = summary["ok"] + summary["failed"] + summary["n/a"] + invalid
@@ -266,7 +272,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                              [("ok", summary["ok"]), ("failed", summary["failed"]),
                               ("n/a", summary["n/a"]), ("invalid", invalid)],
                              keep_zero=("ok", "failed", "n/a"))
-          + (f"; results.json also keeps {_msg.plural(kept, 'earlier result')}" if kept else ""))
+          + (f"; results.json also keeps {_msg.plural(kept, 'earlier result')}" if kept else ""),
+          flush=True)
+    if summary.get("reused"):
+        # folds whose saved predictions matched: rescored, not fitted
+        _msg.note(f"reused saved predictions for {_msg.plural(summary['reused'], 'fold')}; "
+                  f"--reprobe probes again")
     if invalid:
         pairs = [f"{p.dataset}/{m}" for p in plans for m in p.invalid]
         from neuroatlas.benchmarking_helpers.channels.channel_map import _default_yaml_path

@@ -94,6 +94,7 @@ work with every command.
 | `submit <benchmark> -m MODELS --out DIR` | Write HTCondor or SLURM jobs for a whole benchmark (one per dataset × model). |
 | `status --out DIR` | How each submitted job is doing. |
 | `results <benchmark>` | Mean ± std over the folds, folds done / expected, normalised score. |
+| `rescore <benchmark>` | Recompute every result's metrics from the test predictions each fold saved; nothing is fitted. |
 | `fetch`, `prepare`, `embed`, `probe`, `hypnogram` | The verbs underneath `run`, for running one step by hand. |
 
 Model selections (`-m`): a checkpoint id (`biot_pretrained`), a family
@@ -179,6 +180,8 @@ neuroatlas run sleep_stage -m biot_pretrained               # ~40 min
 neuroatlas run brain_age -m biot_pretrained                 # reuses the sleep embeddings
 neuroatlas run sleep_hypnogram -m biot_pretrained           # from the staging results
 neuroatlas run epilepsy --dataset siena -m cbramod_pretrained
+neuroatlas run sleep_stage -m biot_pretrained               # again: reuses each fold's saved predictions, fits nothing
+neuroatlas run sleep_stage -m biot_pretrained --reprobe     # fit every fold again
 ```
 
 **The steps underneath, by hand** (`show` prints them for any benchmark,
@@ -206,6 +209,8 @@ neuroatlas results sleep_stage       # mean ± std over folds, folds done/expect
 neuroatlas results brain_age
 neuroatlas results epilepsy -v       # -v also shows why failed folds failed
 neuroatlas results sleep_stage --format csv
+neuroatlas rescore sleep_stage       # recompute every result's metrics from its fold's saved test predictions
+neuroatlas rescore epilepsy --dataset siena -m cbramod_pretrained
 ```
 
 **Cluster** (`submit` writes the job files; it submits nothing)
@@ -222,6 +227,7 @@ api.benchmarks()
 api.data_status("sleep_stage")
 api.check("sleep_stage", models="biot_pretrained")
 api.results("sleep_stage")
+api.rescore("sleep_stage")           # = rescore
 ```
 
 With any command: `-v` shows more, `--log run.log` keeps everything, and
@@ -359,6 +365,8 @@ neuroatlas run epilepsy --dataset siena -m cbramod_pretrained    # ~4 min
 neuroatlas results sleep_stage
 neuroatlas results brain_age
 neuroatlas results epilepsy
+neuroatlas rescore sleep_stage                     # seconds: every metric recomputed from the folds' saved test predictions ("rescored, same")
+neuroatlas run sleep_stage -m biot_pretrained      # seconds: no fold is fitted again ("note: reused saved predictions for 5 folds")
 ```
 
 What the fresh install gave (± is the standard deviation over the folds;
@@ -368,7 +376,7 @@ for the epilepsy headline it is the SD of the per-fold AUCs):
 |---|---|---|---|---|---|
 | `sleep_stage` | Sleep-EDF | BIOT | balanced accuracy | 0.657 ± 0.014 (5/5 folds) | 0.657 (the authors' run) |
 | `brain_age` | Sleep-EDF SC | BIOT | MAE, years | 11.984 ± 1.690 (5/5) | 11.98 ± 1.69 (paper's brain-age table) |
-| `epilepsy` | Siena | CBraMod | window AUROC (a secondary column) | 0.851 ± 0.021 (5/5) | see note |
+| `epilepsy` | Siena | CBraMod | event Sens@FA AUC (window AUROC 0.813) | 0.496 ± 0.159 (5/5) | 0.51 ± 0.09, on the paper's recording-level folds (see note) |
 
 Siena's published numbers were drawn on folds of recordings, not patients
 (see the Siena entry under `provenance.known_issues` in

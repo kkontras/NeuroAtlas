@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from joblib import Parallel, delayed
 
-from neuroatlas.benchmarking_helpers import BenchmarkResult, TaskSpec
+from neuroatlas.benchmarking_helpers import BenchmarkFailure, BenchmarkResult, TaskSpec
 from neuroatlas.benchmarking_helpers.runtime.cache import (
     cache_exists,
     load_embedding_payload,
@@ -91,6 +91,7 @@ def evaluate_respiratory_event_detection(
         and getattr(datamodule, "limit_windows_per_split", None) is None
     )
 
+    cache_paths: Dict[str, Any] = {}
     if use_global_cache:
         global_cache_dir = _embedding_cache_dir(
             cache_root, dataset_name, checkpoint_spec, "all",
@@ -98,29 +99,34 @@ def evaluate_respiratory_event_detection(
         )
         if cache_exists(global_cache_dir):
             full_payload = load_embedding_payload(global_cache_dir, mmap_mode="r")
+            cache_paths["global_cache_dir"] = str(global_cache_dir)
         else:
-            full_payload, _ = _extract_or_load_embeddings(
+            full_payload, paths = _extract_or_load_embeddings(
                 cache_root, dataset_name, "all", checkpoint_spec, backbone,
                 datamodule.full_embedding_dataloader(), datamodule,
                 cache_purpose="global_embeddings",
             )
+            cache_paths.update({f"global_{k}": v for k, v in paths.items()})
         split_payloads = datamodule.split_global_embedding_payload(full_payload)
         train_payload = split_payloads["train"]
         val_payload = split_payloads["val"]
         test_payload = split_payloads["test"]
     else:
-        train_payload, _ = _extract_or_load_embeddings(
+        train_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "train", checkpoint_spec, backbone,
             datamodule.train_dataloader(), datamodule,
         )
-        val_payload, _ = _extract_or_load_embeddings(
+        cache_paths.update({f"train_{k}": v for k, v in paths.items()})
+        val_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "val", checkpoint_spec, backbone,
             datamodule.val_dataloader(), datamodule,
         )
-        test_payload, _ = _extract_or_load_embeddings(
+        cache_paths.update({f"val_{k}": v for k, v in paths.items()})
+        test_payload, paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "test", checkpoint_spec, backbone,
             datamodule.test_dataloader(), datamodule,
         )
+        cache_paths.update({f"test_{k}": v for k, v in paths.items()})
 
     for payload in (train_payload, val_payload, test_payload):
         _enrich_derived_fields(payload.metadata)
@@ -136,16 +142,19 @@ def evaluate_respiratory_event_detection(
             checkpoint_id=checkpoint_spec.identifier,
             dataset_name=dataset_name,
             evaluation_mode="respiratory_event_detection",
-            failure={
-                "code": "missing_labels",
-                "message": "No respiratory-event fraction fields in metadata.",
-                "details": {"expected_any_of": list(event_fields)},
-            },
+            failure=BenchmarkFailure(
+                code="missing_labels",
+                message="No respiratory-event fraction fields in metadata.",
+                details={"expected_any_of": list(event_fields)},
+            ),
         )
+
+    probe_type = str(probe_config.get("type", "linear"))
+    selection_metric = str(probe_config.get("selection_metric", "macro_f1"))
 
     def _fit_one(
         field: str, threshold: float,
-    ) -> Tuple[str, str, Dict[str, Any]]:
+    ) -> Tuple[str, str, Any]:
         train_labels = binary_labels_from_fraction_seconds(
             train_payload.metadata, field, threshold, default_eps,
         )
@@ -163,19 +172,21 @@ def evaluate_respiratory_event_detection(
             val_payload.features, val_labels,
             test_payload.features, test_labels,
             seeds=list(seeds),
-            probe_type=str(probe_config.get("type", "linear")),
+            probe_type=probe_type,
             max_iter=int(probe_config.get("max_iter", 10_000)),
             hidden_dims=probe_config.get("hidden_dims"),
-            selection_metric=str(probe_config.get("selection_metric", "macro_f1")),
+            selection_metric=selection_metric,
             class_weight=probe_config.get("class_weight"),
         )
-        return (field, key, probe_result.metrics)
+        return (field, key, probe_result)
 
-    all_results: Dict[str, Dict[str, Any]] = {}
+    # The order the metrics list fields and thresholds in: a missing field
+    # where the loop meets it, the others in the order their probes ran.
+    layout: Dict[str, Any] = {}
     jobs: List[Tuple[str, float]] = []
     for field in event_fields:
         if not any(field in m for m in train_payload.metadata[:10]):
-            all_results[field] = {
+            layout[field] = {
                 "skipped": True,
                 "reason": f"Field {field!r} not present in metadata",
             }
@@ -187,14 +198,49 @@ def evaluate_respiratory_event_detection(
     results_list = Parallel(n_jobs=n_parallel, require="sharedmem")(
         delayed(_fit_one)(field, thr) for field, thr in jobs
     )
-    for field, key, metrics in results_list:
-        all_results.setdefault(field, {})[key] = metrics
+
+    # One probe per (field, threshold) on the same test epochs: each is a
+    # group of the fold's predictions file (<field>/threshold_<s>s/...).
+    from neuroatlas import predictions as preds
+    from neuroatlas.benchmarking_helpers.probes.probe import _higher_is_better
+
+    columns: Dict[str, Any] = dict(preds.id_columns(test_payload.metadata))
+    fit: Dict[str, Any] = {}
+    groups: List[str] = []
+    for field, key, outcome in results_list:
+        layout.setdefault(field, {})[key] = None
+        group = f"{field}/{key}"
+        groups.append(group)
+        if isinstance(outcome, dict):            # skipped: one class only
+            fit[group] = outcome
+            continue
+        columns.update(preds.prefixed(group, preds.probe_columns(outcome, with_row=True)))
+        fit[group] = preds.probe_fit(outcome, selection_metric=selection_metric,
+                                     probe_type=probe_type,
+                                     higher_is_better=_higher_is_better(selection_metric),
+                                     hidden_dims=probe_config.get("hidden_dims"))
+    fit["layout"] = [[field, entry if entry.get("skipped") else list(entry)]
+                     for field, entry in layout.items()]
+
+    record = preds.new(
+        "respiratory_event_detection", dataset_name=dataset_name,
+        checkpoint_spec=checkpoint_spec, datamodule=datamodule, columns=columns,
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths, fit=fit,
+            groups=groups,
+            score={"event_fields": list(event_fields), "thresholds_seconds": list(thresholds),
+                   "default_epoch_seconds": default_eps}))
+    all_results, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
 
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="respiratory_event_detection",
         metrics=all_results,
+        cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
             **_dataset_context(datamodule),
@@ -206,10 +252,34 @@ def evaluate_respiratory_event_detection(
     )
 
 
+def score(pred) -> Dict[str, Any]:
+    """Respiratory/limb event metrics from a fold's saved predictions: one
+    block per event field and threshold (a field absent from the cache, or a
+    threshold with one class, says why it was skipped)."""
+    from neuroatlas import predictions as preds
+
+    fit = pred.fit
+    out: Dict[str, Any] = {}
+    for field, entry in fit["layout"]:
+        if isinstance(entry, dict):
+            out[field] = {"skipped": True, "reason": entry.get("reason")}
+            continue
+        block: Dict[str, Any] = {}
+        for key in entry:
+            group = f"{field}/{key}"
+            if fit[group].get("skipped"):
+                block[key] = {"skipped": True, "reason": fit[group].get("reason")}
+            else:
+                block[key] = preds.score_probe(pred.group(group), fit[group])[0]
+        out[field] = block
+    return out
+
+
 TASK_SPECS = [
     TaskSpec(
         slug="respiratory_event_detection",
         description="Per-subtype respiratory-event binary probes with epoch-length-aware seconds thresholds.",
         evaluator=evaluate_respiratory_event_detection,
+        score=score,
     )
 ]

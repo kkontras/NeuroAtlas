@@ -154,6 +154,8 @@ def _train_mlp_probe(
         "best_val": val_metrics,
         "best_test": test_metrics,
         "training_log": epoch_log,
+        # an array, not a metric: saved with the fold's predictions
+        "test_predictions": test_pred_np,
     }
 
 
@@ -330,6 +332,14 @@ def _run_epoch_regression(
         },
         "subject_predictions": subject_predictions,
         "best_seed": epoch_probe.best_seed,
+        # arrays, not metrics: the epoch-level test rows, saved with the
+        # fold's predictions
+        "test_epochs": {
+            "y_true": np.asarray(test_payload.labels, dtype=np.float64),
+            "y_pred": np.asarray(test_epoch_pred),
+            "subject_id": np.asarray([str(m.get("subject_id")) for m in test_payload.metadata],
+                                     dtype=str),
+        },
     }
 
     # --- Optional MLP on epoch-level embeddings ---
@@ -468,6 +478,10 @@ def _run_ridge_nested_cv_subject(
     best_pipe = None
     best_test_metrics: Dict[str, Any] = {}
     best_test_pred: Optional[np.ndarray] = None
+    # each alpha's test predictions (None where the alpha was skipped), in
+    # alpha_values order, and which one was selected: saved with the fold
+    test_predictions: List[Optional[np.ndarray]] = []
+    selected_index: Optional[int] = None
     for alpha in alpha_values:
         try:
             pipe = _build_ridge_pipeline(alpha, use_standard_scaler)
@@ -479,6 +493,7 @@ def _run_ridge_nested_cv_subject(
         except Exception as exc:
             alphas_list.append({"alpha": alpha, "skipped": True,
                                 "reason": f"{type(exc).__name__}: {exc}"})
+            test_predictions.append(None)
             _log(f"  nested-CV outer-test: alpha={alpha:<6g} skipped "
                  f"({type(exc).__name__}: {exc})")
             continue
@@ -488,10 +503,12 @@ def _run_ridge_nested_cv_subject(
                     "mae_std": inner_curve[alpha]["std_mae"]},
             "test": t_metrics,
         })
+        test_predictions.append(np.asarray(t_pred))
         if alpha == selected_alpha:
             best_pipe = pipe
             best_test_metrics = t_metrics
             best_test_pred = t_pred
+            selected_index = len(test_predictions) - 1
     if best_pipe is None:
         raise RuntimeError(
             f"Selected alpha* = {selected_alpha} failed during outer-train test "
@@ -534,6 +551,9 @@ def _run_ridge_nested_cv_subject(
         "nested_cv_seed": int(seed),
         "n_outer_train_subjects": int(len(outer_train_subjects)),
         "n_test_subjects": int(len(test_subjects)),
+        # arrays, not metrics (saved with the fold's predictions)
+        "test_predictions": test_predictions,
+        "selected_index": selected_index,
     }
 
 
@@ -568,6 +588,10 @@ def _run_ridge_alpha_sweep(
     best_val_metrics: Dict[str, Any] = {}
     best_test_metrics: Dict[str, Any] = {}
     best_pipe = None
+    # each alpha's test (and validation) predictions, saved with the fold
+    test_predictions: List[np.ndarray] = []
+    val_predictions: List[np.ndarray] = []
+    best_index: Optional[int] = None
 
     for alpha in alpha_values:
         pipe = Pipeline([
@@ -584,12 +608,15 @@ def _run_ridge_alpha_sweep(
             "val": val_metrics,
             "test": test_metrics,
         })
+        test_predictions.append(np.asarray(test_pred))
+        val_predictions.append(np.asarray(val_pred))
         if val_metrics["mae"] < best_val_mae:
             best_val_mae = val_metrics["mae"]
             best_alpha = alpha
             best_val_metrics = val_metrics
             best_test_metrics = test_metrics
             best_pipe = pipe
+            best_index = len(test_predictions) - 1
         _log(f"  alpha={alpha:<6g}  val_mae={val_metrics['mae']:.4f}  test_mae={test_metrics['mae']:.4f}  "
              f"test_r2={test_metrics['r2']:.4f}  test_r={test_metrics['pearson_r']:.4f}")
 
@@ -601,6 +628,10 @@ def _run_ridge_alpha_sweep(
         "best_val": best_val_metrics,
         "best_test": best_test_metrics,
         "best_estimator": best_pipe,
+        # arrays, not metrics (saved with the fold's predictions)
+        "test_predictions": test_predictions,
+        "val_predictions": val_predictions,
+        "best_index": best_index,
     }
 
 
@@ -784,6 +815,7 @@ def evaluate_brain_age(
     task_config,
     seeds,
     cache_root,
+    probe_dir=None,
     **_,
 ) -> BenchmarkResult:
     aggregation = str(task_config.get("aggregation", "mean"))
@@ -1023,27 +1055,19 @@ def evaluate_brain_age(
             return out
 
         nested_subject = _strategy("ridge_subject_nested_cv", _nested)
-    ridge_subject_nested_cv_metrics = (
-        {k: v for k, v in nested_subject.items() if k != "best_estimator"}
-        if nested_subject is not None else None
-    )
 
     # --- Brain-age gap on the held-out cohort --------------------------------
     # Train on one group (the datamodule's cv_filter), then score this fold's
     # model on an age-matched cohort spanning two groups and compare their
-    # brain-age gaps: BAG = predicted - true age per subject, and
-    # delta_bag_mean = mean BAG(second group) - mean BAG(first group), groups in
-    # sorted label order (e.g. "ci_label=1" - "ci_label=0"). Uses the headline
-    # estimator: the nested-CV refit when enabled, else the validation-selected
-    # ridge. Ported from the pre-merge EEGBenchmarks task; the Cole
-    # bias-corrected variant is not.
-    holdout_metrics: Optional[Dict[str, Any]] = None
-    holdout_predictions: Optional[List[Dict[str, Any]]] = None
+    # brain-age gaps (see _holdout_metrics). Uses the headline estimator: the
+    # nested-CV refit when enabled, else the validation-selected ridge. Ported
+    # from the pre-merge EEGBenchmarks task; the Cole bias-corrected variant
+    # is not.
+    holdout_rows: Optional[Dict[str, np.ndarray]] = None
     if holdout_payload is not None and len(holdout_payload.labels) > 0:
         holdout_estimator = (
             nested_subject["best_estimator"] if run_nested_cv else ridge_estimator
         )
-        t0 = time.time()
         holdout_x, holdout_y, holdout_subjects = _aggregate_subjects_regression(
             holdout_payload, aggregation
         )
@@ -1054,55 +1078,13 @@ def evaluate_brain_age(
             grp = row.get("holdout_group", "")
             if grp and sid not in subj_to_group:
                 subj_to_group[sid] = str(grp)
-        holdout_predictions = [
-            {
-                "subject_id": s_,
-                "true_age": float(y),
-                "predicted_age": float(p_),
-                "holdout_group": subj_to_group.get(s_, ""),
-            }
-            for s_, y, p_ in zip(holdout_subjects, holdout_y, holdout_pred)
-        ]
-        group_rows: Dict[str, List[Dict[str, Any]]] = {}
-        for r in holdout_predictions:
-            group_rows.setdefault(r["holdout_group"], []).append(r)
-        by_group: Dict[str, Dict[str, Any]] = {}
-        for grp, rows in group_rows.items():
-            ys = np.array([r["true_age"] for r in rows], dtype=float)
-            ps = np.array([r["predicted_age"] for r in rows], dtype=float)
-            bag = ps - ys
-            by_group[grp] = {
-                "n": int(len(rows)),
-                "mae": float(np.mean(np.abs(bag))),
-                "mean_bag": float(np.mean(bag)),
-                "std_bag": float(np.std(bag, ddof=1)) if len(rows) > 1 else 0.0,
-                "pearson_r": (
-                    float(np.corrcoef(ys, ps)[0, 1])
-                    if len(rows) > 1 and np.std(ys) > 0 and np.std(ps) > 0
-                    else float("nan")
-                ),
-            }
-        groups = sorted(by_group)
-        delta_bag = (
-            by_group[groups[1]]["mean_bag"] - by_group[groups[0]]["mean_bag"]
-            if len(groups) == 2 else float("nan")
-        )
-        holdout_metrics = {
-            "by_group": by_group,
-            "delta_bag_groups": f"{groups[1]} - {groups[0]}" if len(groups) == 2 else None,
-            "delta_bag_mean": float(delta_bag),
-            "selected_alpha": (
-                nested_subject["selected_alpha"] if run_nested_cv else sweep_result["best_alpha"]
-            ),
-            "estimator_source": "ridge_subject_nested_cv" if run_nested_cv else "best_test",
-            "n_total": int(len(holdout_predictions)),
+        holdout_rows = {
+            "y_true": np.asarray(holdout_y, dtype=np.float64),
+            "y_pred": np.asarray(holdout_pred),
+            "subject_id": np.asarray([str(s) for s in holdout_subjects], dtype=str),
+            "holdout_group": np.asarray([subj_to_group.get(s, "") for s in holdout_subjects],
+                                        dtype=str),
         }
-        for grp in groups:
-            m = by_group[grp]
-            _log(f"  Holdout[{grp}]: n={m['n']}  MAE={m['mae']:.4f}  "
-                 f"BAG={m['mean_bag']:+.4f}+/-{m['std_bag']:.4f}  r={m['pearson_r']:.4f}")
-        _log(f"  Holdout delta BAG ({holdout_metrics['delta_bag_groups']}) = "
-             f"{delta_bag:+.4f}  ({time.time()-t0:.1f}s)")
 
     # --- Dataset age statistics ---------------------------------------------
     all_ages = np.concatenate([train_y, val_y, test_y])
@@ -1115,60 +1097,114 @@ def evaluate_brain_age(
         "n_subjects": int(len(all_ages)),
     }
 
-    # --- Assemble result ----------------------------------------------------
-    # best_test / best_val / selected_alpha are the headline strategy's, which
-    # is what `neuroatlas results` reads.
+    # --- The fold's predictions, and the metrics computed from them ---------
+    # The top level is the headline estimator on the test units; each other
+    # estimator is a group (ridge_subject, ridge_subject_nested_cv,
+    # mlp_subject, epoch_regression, holdout). What each chose on validation
+    # (alpha, epoch, seed, its validation scores) is info["fit"]. The metrics
+    # recorded are score() of the saved file, what `neuroatlas rescore` runs.
+    from neuroatlas import predictions as preds
+
     if run_nested_cv:
-        head_test = nested_subject["best_test"]
-        head_val = nested_subject["best_val"]
-        head_val_mae = nested_subject["best_val_mae"]
-        head_alpha = nested_subject["selected_alpha"]
-        subject_predictions = {"test": nested_subject["subject_predictions"]}
+        head_pred = nested_subject["test_predictions"][nested_subject["selected_index"]]
     else:
-        head_test = sweep_result["best_test"]
-        head_val = sweep_result["best_val"]
-        head_val_mae = sweep_result["best_val_mae"]
-        head_alpha = sweep_result["best_alpha"]
-        subject_predictions = {
-            "val": _get_subject_predictions(ridge_estimator, val_x, val_y, val_subjects),
-            "test": _get_subject_predictions(ridge_estimator, test_x, test_y, test_subjects),
+        head_pred = sweep_result["test_predictions"][sweep_result["best_index"]]
+    columns: Dict[str, Any] = {
+        "y_true": np.asarray(test_y, dtype=np.float64),
+        "y_pred": np.asarray(head_pred),
+        "subject_id": np.asarray([str(s) for s in test_subjects], dtype=str),
+    }
+    fit: Dict[str, Any] = {"headline": headline, "alpha_grid": list(alpha_sweep_values)}
+    groups: List[str] = []
+    if sweep_result is not None:
+        groups.append("ridge_subject")
+        best_index = sweep_result["best_index"]
+        columns["ridge_subject/alpha_y_pred"] = np.stack(sweep_result["test_predictions"])
+        fit["ridge_subject"] = {
+            "alphas": [{"alpha": a["alpha"], "val": a["val"]} for a in sweep_result["alphas"]],
+            "best_index": best_index,
+            "best_alpha": sweep_result["best_alpha"],
+            "best_val_mae": sweep_result["best_val_mae"],
+            "best_val": sweep_result["best_val"],
+            "val_predictions": [
+                {"subject_id": s, "true_age": float(y), "predicted_age": float(p)}
+                for s, y, p in zip(val_subjects, val_y, sweep_result["val_predictions"][best_index])
+            ],
         }
-    _log(f"Headline ({headline}): alpha={head_alpha}  MAE={head_test['mae']:.4f}  "
+    if nested_subject is not None:
+        groups.append("ridge_subject_nested_cv")
+        n_test = len(test_y)
+        columns["ridge_subject_nested_cv/alpha_y_pred"] = np.stack([
+            np.full(n_test, np.nan) if p is None else np.asarray(p, dtype=np.float64)
+            for p in nested_subject["test_predictions"]])
+        fit["ridge_subject_nested_cv"] = {
+            **{k: v for k, v in nested_subject.items()
+               if k not in ("best_estimator", "best_test", "test_predictions",
+                            "subject_predictions", "alphas")},
+            "alphas": [a if a.get("skipped") else {"alpha": a["alpha"], "val": a["val"]}
+                       for a in nested_subject["alphas"]],
+        }
+    if mlp_subject is not None:
+        groups.append("mlp_subject")
+        columns["mlp_subject/y_pred"] = np.asarray(mlp_subject["test_predictions"])
+        fit["mlp_subject"] = {k: v for k, v in mlp_subject.items()
+                              if k not in ("best_test", "test_predictions")}
+    if epoch_regression is not None:
+        groups.append("epoch_regression")
+        columns.update(preds.prefixed("epoch_regression", epoch_regression["test_epochs"]))
+        fit["epoch_regression"] = {
+            "epoch_level_best_val": epoch_regression["epoch_level_best_val"],
+            "subject_mean_val": epoch_regression["subject_mean"]["val"],
+            "subject_trimmed_mean_val": epoch_regression["subject_trimmed_mean"]["val"],
+            "trim_proportion": epoch_regression["subject_trimmed_mean"]["trim_proportion"],
+            "subject_predictions_val": epoch_regression["subject_predictions"]["val"],
+            "best_seed": epoch_regression["best_seed"],
+        }
+        if "mlp" in epoch_regression:
+            columns["epoch_regression/mlp_y_pred"] = np.asarray(
+                epoch_regression["mlp"]["test_predictions"])
+            fit["epoch_regression"]["mlp"] = {
+                k: v for k, v in epoch_regression["mlp"].items()
+                if k not in ("best_test", "test_predictions")}
+    if holdout_rows is not None:
+        groups.append("holdout")
+        columns.update(preds.prefixed("holdout", holdout_rows))
+        fit["holdout"] = {
+            "selected_alpha": (
+                nested_subject["selected_alpha"] if run_nested_cv else sweep_result["best_alpha"]
+            ),
+            "estimator_source": "ridge_subject_nested_cv" if run_nested_cv else "best_test",
+        }
+    if failures:
+        fit["strategy_failures"] = dict(failures)
+    record = preds.new(
+        "brain_age", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule, columns=columns,
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths, fit=fit,
+            groups=groups,
+            score={"aggregation": aggregation,
+                   "unit": (split_protocol_meta or {}).get("aggregation_group", "subject_id")}))
+    metrics, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
+
+    if "holdout_metrics" in metrics:
+        hm = metrics["holdout_metrics"]
+        for grp in sorted(hm["by_group"]):
+            m = hm["by_group"][grp]
+            _log(f"  Holdout[{grp}]: n={m['n']}  MAE={m['mae']:.4f}  "
+                 f"BAG={m['mean_bag']:+.4f}+/-{m['std_bag']:.4f}  r={m['pearson_r']:.4f}")
+        _log(f"  Holdout delta BAG ({hm['delta_bag_groups']}) = {hm['delta_bag_mean']:+.4f}")
+    head_test = metrics["best_test"]
+    _log(f"Headline ({headline}): alpha={metrics['selected_alpha']}  MAE={head_test['mae']:.4f}  "
          f"r={head_test['pearson_r']:.4f}  R2={head_test['r2']:.4f}")
     if failures:
         _log(f"Strategies that failed (recorded in metrics.strategy_failures): "
              f"{', '.join(sorted(failures))}")
     _log(f"Fold {fold} complete in {time.time()-fold_t0:.1f}s")
     _log("=" * 60)
-    metrics: Dict[str, Any] = {
-        "best_test": head_test,
-        "best_val": head_val,
-        "best_val_metric": head_val_mae,
-        "selection_metric": "mae",
-        "headline_strategy": headline,
-        "best_seed": 0,
-        "probe_type": "linear",
-        "selected_alpha": head_alpha,
-        "alpha_grid": list(alpha_sweep_values),
-        "subject_predictions": subject_predictions,
-    }
-    if sweep_result is not None:
-        metrics["ridge_alpha_sweep"] = {
-            k: v for k, v in sweep_result.items() if k != "best_estimator"
-        }
-    if ridge_subject_nested_cv_metrics is not None:
-        # Key name is load-bearing: the paper's figures and LaTeX tables read
-        # metrics.ridge_subject_nested_cv.best_test.mae — do not rename.
-        metrics["ridge_subject_nested_cv"] = ridge_subject_nested_cv_metrics
-    if mlp_subject is not None:
-        metrics["mlp_subject"] = mlp_subject
-    if epoch_regression is not None:
-        metrics["epoch_regression"] = epoch_regression
-    if failures:
-        metrics["strategy_failures"] = failures
-    if holdout_metrics is not None:
-        metrics["holdout_metrics"] = holdout_metrics
-        metrics["holdout_predictions"] = holdout_predictions
 
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
@@ -1202,10 +1238,196 @@ def evaluate_brain_age(
     )
 
 
+# ---------------------------------------------------------------------------
+# Metrics from a fold's saved predictions
+# ---------------------------------------------------------------------------
+
+def _subject_rows(subjects, true_ages, predicted) -> List[Dict[str, Any]]:
+    return [{"subject_id": str(s), "true_age": float(y), "predicted_age": float(p)}
+            for s, y, p in zip(subjects, true_ages, predicted)]
+
+
+def _holdout_metrics(rows: List[Dict[str, Any]], *, selected_alpha,
+                     estimator_source: str) -> Dict[str, Any]:
+    """The brain-age gap on the held-out cohort: BAG = predicted - true age
+    per subject, per group (MAE, mean and SD of the BAG, Pearson r), and
+    delta_bag_mean = mean BAG(second group) - mean BAG(first group), groups in
+    sorted label order (e.g. "ci_label=1" - "ci_label=0")."""
+    group_rows: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        group_rows.setdefault(r["holdout_group"], []).append(r)
+    by_group: Dict[str, Dict[str, Any]] = {}
+    for grp, members in group_rows.items():
+        ys = np.array([r["true_age"] for r in members], dtype=float)
+        ps = np.array([r["predicted_age"] for r in members], dtype=float)
+        bag = ps - ys
+        by_group[grp] = {
+            "n": int(len(members)),
+            "mae": float(np.mean(np.abs(bag))),
+            "mean_bag": float(np.mean(bag)),
+            "std_bag": float(np.std(bag, ddof=1)) if len(members) > 1 else 0.0,
+            "pearson_r": (
+                float(np.corrcoef(ys, ps)[0, 1])
+                if len(members) > 1 and np.std(ys) > 0 and np.std(ps) > 0
+                else float("nan")
+            ),
+        }
+    groups = sorted(by_group)
+    delta_bag = (
+        by_group[groups[1]]["mean_bag"] - by_group[groups[0]]["mean_bag"]
+        if len(groups) == 2 else float("nan")
+    )
+    return {
+        "by_group": by_group,
+        "delta_bag_groups": f"{groups[1]} - {groups[0]}" if len(groups) == 2 else None,
+        "delta_bag_mean": float(delta_bag),
+        "selected_alpha": selected_alpha,
+        "estimator_source": estimator_source,
+        "n_total": int(len(rows)),
+    }
+
+
+def score(pred) -> Dict[str, Any]:
+    """Brain-age metrics from a fold's saved predictions: the headline
+    estimator's test block (``best_test``, what `neuroatlas results` reads),
+    and every estimator's own block -- the ridge alpha sweep and the nested-CV
+    ridge (``ridge_subject_nested_cv``, the key the paper's tables read) with
+    every alpha's test metrics, the MLPs, the epoch-level ridge aggregated per
+    subject, and the brain-age gap on a held-out cohort."""
+    fit = pred.fit
+    top = pred.group("")
+    test_y = np.asarray(top["y_true"], dtype=np.float64)
+    units = [str(s) for s in top["subject_id"]]
+    sweep = nested = mlp_subject = epoch = None
+
+    if "ridge_subject" in fit:
+        f = fit["ridge_subject"]
+        alpha_pred = pred.group("ridge_subject")["alpha_y_pred"]
+        alphas = [{"alpha": a["alpha"], "val": a["val"],
+                   "test": compute_regression_metrics(test_y, alpha_pred[i])}
+                  for i, a in enumerate(f["alphas"])]
+        sweep = {"alphas": alphas, "best_alpha": f["best_alpha"],
+                 "best_val_mae": f["best_val_mae"], "best_val": f["best_val"],
+                 "best_test": alphas[f["best_index"]]["test"]}
+
+    if "ridge_subject_nested_cv" in fit:
+        f = fit["ridge_subject_nested_cv"]
+        alpha_pred = pred.group("ridge_subject_nested_cv")["alpha_y_pred"]
+        alphas = [a if a.get("skipped") else
+                  {"alpha": a["alpha"], "val": a["val"],
+                   "test": compute_regression_metrics(test_y, alpha_pred[i])}
+                  for i, a in enumerate(f["alphas"])]
+        chosen = f["selected_index"]
+        # Key name is load-bearing: the paper's figures and LaTeX tables read
+        # metrics.ridge_subject_nested_cv.best_test.mae -- do not rename.
+        nested = {
+            "alphas": alphas,
+            "inner_val_curve": f["inner_val_curve"],
+            "selected_alpha": f["selected_alpha"],
+            "best_val_mae": f["best_val_mae"],
+            "best_val": f["best_val"],
+            "best_test": alphas[chosen]["test"],
+            "subject_predictions": _subject_rows(units, test_y, alpha_pred[chosen]),
+            **{k: f[k] for k in ("oof_predictions", "use_standard_scaler", "n_inner_folds",
+                                 "nested_cv_seed", "n_outer_train_subjects", "n_test_subjects")
+               if k in f},
+        }
+
+    if "mlp_subject" in fit:
+        f = fit["mlp_subject"]
+        mlp_subject = {**{k: f[k] for k in ("best_epoch", "n_epochs", "hidden_dim", "lr",
+                                            "best_val")},
+                       "best_test": compute_regression_metrics(
+                           test_y, pred.group("mlp_subject")["y_pred"]),
+                       "training_log": f["training_log"]}
+
+    if "epoch_regression" in fit:
+        f = fit["epoch_regression"]
+        g = pred.group("epoch_regression")
+        trim = float(f["trim_proportion"])
+        agg = _aggregate_epoch_predictions(
+            g["y_pred"], g["y_true"], [{"subject_id": s} for s in g["subject_id"]], trim)
+        epoch = {
+            "epoch_level_best_test": compute_regression_metrics(g["y_true"], g["y_pred"]),
+            "epoch_level_best_val": f["epoch_level_best_val"],
+            "subject_mean": {
+                "val": f["subject_mean_val"],
+                "test": compute_regression_metrics(agg["true_ages"], agg["mean_predictions"]),
+            },
+            "subject_trimmed_mean": {
+                "val": f["subject_trimmed_mean_val"],
+                "test": compute_regression_metrics(agg["true_ages"],
+                                                   agg["trimmed_mean_predictions"]),
+                "trim_proportion": trim,
+            },
+            "subject_predictions": {
+                "val": f["subject_predictions_val"],
+                "test": [
+                    {"subject_id": s, "true_age": float(y), "predicted_age_mean": float(m),
+                     "predicted_age_trimmed_mean": float(t)}
+                    for s, y, m, t in zip(agg["subjects"], agg["true_ages"],
+                                          agg["mean_predictions"],
+                                          agg["trimmed_mean_predictions"])
+                ],
+            },
+            "best_seed": f["best_seed"],
+        }
+        if "mlp" in f:
+            fm = f["mlp"]
+            epoch["mlp"] = {**{k: fm[k] for k in ("best_epoch", "n_epochs", "hidden_dim", "lr",
+                                                  "best_val")},
+                            "best_test": compute_regression_metrics(g["y_true"], g["mlp_y_pred"]),
+                            "training_log": fm["training_log"]}
+
+    if fit["headline"] == "ridge_subject_nested_cv":
+        head = nested
+        subject_predictions = {"test": nested["subject_predictions"]}
+    else:
+        head = sweep
+        subject_predictions = {
+            "val": fit["ridge_subject"]["val_predictions"],
+            "test": _subject_rows(units, test_y, top["y_pred"]),
+        }
+    metrics: Dict[str, Any] = {
+        "best_test": head["best_test"],
+        "best_val": head["best_val"],
+        "best_val_metric": head["best_val_mae"],
+        "selection_metric": "mae",
+        "headline_strategy": fit["headline"],
+        "best_seed": 0,
+        "probe_type": "linear",
+        "selected_alpha": head["selected_alpha"] if head is nested else head["best_alpha"],
+        "alpha_grid": list(fit["alpha_grid"]),
+        "subject_predictions": subject_predictions,
+    }
+    if sweep is not None:
+        metrics["ridge_alpha_sweep"] = sweep
+    if nested is not None:
+        metrics["ridge_subject_nested_cv"] = nested
+    if mlp_subject is not None:
+        metrics["mlp_subject"] = mlp_subject
+    if epoch is not None:
+        metrics["epoch_regression"] = epoch
+    if fit.get("strategy_failures"):
+        metrics["strategy_failures"] = fit["strategy_failures"]
+    if "holdout" in fit:
+        g = pred.group("holdout")
+        rows = [{"subject_id": str(s), "true_age": float(y), "predicted_age": float(p),
+                 "holdout_group": str(grp)}
+                for s, y, p, grp in zip(g["subject_id"], g["y_true"], g["y_pred"],
+                                        g["holdout_group"])]
+        metrics["holdout_metrics"] = _holdout_metrics(
+            rows, selected_alpha=fit["holdout"]["selected_alpha"],
+            estimator_source=fit["holdout"]["estimator_source"])
+        metrics["holdout_predictions"] = rows
+    return metrics
+
+
 TASK_SPECS = [
     TaskSpec(
         slug="brain_age",
         description="Aggregate epoch embeddings per subject and train a subject-level age regressor.",
         evaluator=evaluate_brain_age,
+        score=score,
     )
 ]

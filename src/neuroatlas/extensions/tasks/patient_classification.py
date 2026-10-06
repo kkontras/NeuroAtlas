@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -46,6 +47,7 @@ def evaluate_patient_classification(
     task_config,
     seeds,
     cache_root,
+    probe_dir: Optional[Path] = None,
     **_,
 ) -> BenchmarkResult:
     aggregation = str(task_config.get("aggregation", "mean"))
@@ -63,6 +65,8 @@ def evaluate_patient_classification(
     val_x, val_y, val_subjects = _aggregate_subjects(val_payload, aggregation)
     test_x, test_y, test_subjects = _aggregate_subjects(test_payload, aggregation)
 
+    probe_type = str(probe_config.get("type", "linear"))
+    selection_metric = str(probe_config.get("selection_metric", "macro_f1"))
     probe_result = train_probe(
         train_x,
         train_y,
@@ -71,21 +75,44 @@ def evaluate_patient_classification(
         test_x,
         test_y,
         seeds=list(seeds),
-        probe_type=str(probe_config.get("type", "linear")),
+        probe_type=probe_type,
         max_iter=int(probe_config.get("max_iter", 1000)),
         hidden_dims=probe_config.get("hidden_dims"),
-        selection_metric=str(probe_config.get("selection_metric", "macro_f1")),
+        selection_metric=selection_metric,
     )
+    cache_paths = {
+        **{f"train_{key}": value for key, value in train_paths.items()},
+        **{f"val_{key}": value for key, value in val_paths.items()},
+        **{f"test_{key}": value for key, value in test_paths.items()},
+    }
+    # One row per test subject; the metrics recorded are score() of the
+    # fold's saved predictions, which `neuroatlas rescore` recomputes.
+    from neuroatlas import predictions as preds
+    from neuroatlas.benchmarking_helpers.probes.probe import _higher_is_better
+
+    kept = [s for s, keep in zip(test_subjects, probe_result.test_keep) if keep]
+    record = preds.new(
+        "patient_classification", dataset_name=dataset_name, checkpoint_spec=checkpoint_spec,
+        datamodule=datamodule,
+        columns={**preds.probe_columns(probe_result),
+                 "subject_id": np.asarray([str(s) for s in kept], dtype=str)},
+        info=preds.make_info(
+            datamodule=datamodule, checkpoint_spec=checkpoint_spec, probe_config=probe_config,
+            task_config=task_config, seeds=seeds, cache_paths=cache_paths,
+            fit=preds.probe_fit(probe_result, selection_metric=selection_metric,
+                                probe_type=probe_type,
+                                higher_is_better=_higher_is_better(selection_metric),
+                                hidden_dims=probe_config.get("hidden_dims")),
+            score={"aggregation": aggregation, "unit": "subject_id"}))
+    metrics, _saved, path = preds.finalize(record, probe_dir, score)
+    if path is not None:
+        cache_paths["predictions"] = str(path)
     return BenchmarkResult(
         checkpoint_id=checkpoint_spec.identifier,
         dataset_name=dataset_name,
         evaluation_mode="patient_classification_eval",
-        metrics=probe_result.metrics,
-        cache_paths={
-            **{f"train_{key}": value for key, value in train_paths.items()},
-            **{f"val_{key}": value for key, value in val_paths.items()},
-            **{f"test_{key}": value for key, value in test_paths.items()},
-        },
+        metrics=metrics,
+        cache_paths=cache_paths,
         metadata={
             **backbone.metadata(),
             **dict(getattr(datamodule, "metadata", {})),
@@ -101,10 +128,19 @@ def evaluate_patient_classification(
     )
 
 
+def score(pred) -> Dict[str, Any]:
+    """Subject-level classification metrics from a fold's saved predictions
+    (one row per test subject)."""
+    from neuroatlas import predictions as preds
+
+    return preds.score_probe(pred.group(""), pred.fit)[0]
+
+
 TASK_SPECS = [
     TaskSpec(
         slug="patient_classification",
         description="Aggregate epoch embeddings per subject and train a subject-level classifier.",
         evaluator=evaluate_patient_classification,
+        score=score,
     )
 ]

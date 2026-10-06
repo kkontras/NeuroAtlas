@@ -70,6 +70,15 @@ class ProbeResult:
     best_seed: int
     best_val_metric: float
     estimator: Any
+    # What the test metrics were computed from, for the fold's saved
+    # predictions (neuroatlas.predictions): the test labels scored, which of
+    # the test rows given they are (non-finite rows are dropped), and each
+    # seed's outputs in per_seed order -- y_pred, and y_score (binary) /
+    # y_proba (classification) where the estimator gives probabilities.
+    test_y: Optional[np.ndarray] = None
+    test_keep: Optional[np.ndarray] = None
+    test_outputs: Optional[List[Dict[str, Any]]] = None
+    classes: Optional[np.ndarray] = None
 
 
 def _build_probe_classifier(
@@ -161,14 +170,17 @@ def train_probe(
         if n_bad:
             logger.warning("probe: dropped %d of %d %s rows with non-finite features",
                            n_bad, len(feats), name)
-            return feats[finite], labs[finite]
-        return feats, labs
-    train_features, train_labels = _drop_nonfinite(train_features, train_labels, "train")
-    val_features, val_labels = _drop_nonfinite(val_features, val_labels, "val")
-    test_features, test_labels = _drop_nonfinite(test_features, test_labels, "test")
+            return feats[finite], labs[finite], finite
+        return feats, labs, finite
+    train_features, train_labels, _ = _drop_nonfinite(train_features, train_labels, "train")
+    val_features, val_labels, _ = _drop_nonfinite(val_features, val_labels, "val")
+    test_features, test_labels, test_keep = _drop_nonfinite(test_features, test_labels, "test")
 
     per_seed: List[Dict[str, Any]] = []
     estimators: Dict[int, Any] = {}
+    # each seed's test outputs, kept for the fold's predictions file
+    test_outputs: List[Dict[str, Any]] = []
+    classes = None
 
     if is_regression:
         nonlinear_early_stopping = bool(train_features.shape[0] >= 10)
@@ -218,6 +230,7 @@ def train_probe(
             val_metrics = compute_regression_metrics(val_labels, val_pred)
             test_metrics = compute_regression_metrics(test_labels, test_pred)
             estimators[seed] = estimator
+            test_outputs.append({"y_pred": np.asarray(test_pred)})
         else:
             if c_values and probe_type in ("linear", "sklearn_linear"):
                 best_clf, best_c, best_val_score = None, None, -np.inf
@@ -268,15 +281,27 @@ def train_probe(
             val_pred = estimator.predict(val_features)
             test_pred = estimator.predict(test_features)
             val_score = test_score = None
+            test_proba = None
+            if hasattr(estimator, "predict_proba"):
+                try:
+                    test_proba = np.asarray(estimator.predict_proba(test_features))
+                except Exception:
+                    test_proba = None
             if is_binary and hasattr(estimator, "predict_proba"):
                 try:
                     val_score = np.asarray(estimator.predict_proba(val_features))[:, 1]
-                    test_score = np.asarray(estimator.predict_proba(test_features))[:, 1]
+                    test_score = test_proba[:, 1] if test_proba is not None else None
                 except Exception:
                     val_score = test_score = None
+                if test_score is None:
+                    val_score = None
             val_metrics = compute_classification_metrics(val_labels, val_pred, y_score=val_score)
             test_metrics = compute_classification_metrics(test_labels, test_pred, y_score=test_score)
             estimators[seed] = estimator
+            if classes is None:
+                classes = getattr(estimator, "classes_", None)
+            test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
+                                 "y_proba": test_proba})
 
         per_seed.append({
             "seed": seed,
@@ -324,6 +349,10 @@ def train_probe(
         best_seed=best_seed,
         best_val_metric=float(best_row["val"][selection_metric]),
         estimator=estimators[best_seed],
+        test_y=np.asarray(test_labels),
+        test_keep=np.asarray(test_keep, dtype=bool),
+        test_outputs=test_outputs,
+        classes=None if classes is None else np.asarray(classes),
     )
 
 

@@ -301,6 +301,10 @@ class TaskSpec:
     slug: str
     description: str
     evaluator: Callable[..., BenchmarkResult]
+    #: The task's metrics from one fold's saved test predictions
+    #: (``neuroatlas.predictions``): the evaluator records what this returns
+    #: on the file it writes, and ``neuroatlas rescore`` calls it again.
+    score: Optional[Callable[..., Dict[str, Any]]] = None
 
 
 class DatamoduleConfigError(TypeError):

@@ -82,6 +82,10 @@ def build_submit_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true",
                    help="Write jobs for pairs whose data or weights are not found here "
                         "(the channel map is still obeyed).")
+    p.add_argument("--reprobe", action="store_true",
+                   help="The jobs fit every fold again (`run --reprobe`) instead of "
+                        "recomputing the metrics of folds whose saved predictions match. "
+                        "With --mode all to re-run jobs that finished.")
     p.add_argument("-v", "--verbose", action="store_true", help="List every skipped pair.")
     r = p.add_argument_group("resources (per job)")
     r.add_argument("--gpus", type=int, default=1)
@@ -164,7 +168,7 @@ def submit_main(argv: Optional[List[str]] = None) -> None:
         pass
     planned = sub.plan_jobs(args.benchmark, args.models, args.dataset, args.variant, out,
                             args.output_root.resolve() if args.output_root else None,
-                            force=args.force)
+                            force=args.force, reprobe=args.reprobe)
     jobs = planned["jobs"]
     queue = sub.queue_snapshot(args.backend, out, previous.get("batches"))
     states = sub.job_states(jobs, queue)
