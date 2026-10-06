@@ -190,7 +190,9 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         # keys): the headline's mean and spread, then the secondary metrics.
         head = metric_label(m.headline)
         print(f"{bench.name}" + (f" ({args.variant} variant)" if args.variant else "")
-              + f": {METRIC_NAMES.get(m.headline, head)}, {direction}; mean ± std over folds"
+              + f": {METRIC_NAMES.get(m.headline, head)}, {direction}; "
+              + ("AUC of the folds' median curve (0.1-100 FA/h) ± SD of the fold AUCs"
+                 if m.headline == "event_sens_fa_auc" else "mean ± std over folds")
               + ("; normalized: 0 = chance, 1 = perfect" if has_dummy else ""))
         names = {"mean": head, "std": "±", **{k: metric_label(k) for k in m.secondary}}
         rows = [{names.get(k, k): v for k, v in r.items()} for r in rows]

@@ -1,8 +1,10 @@
 """Seizure detection evaluation task.
 
 Extracts embeddings via the linear probe infrastructure, fits a LogisticRegression
-with balanced class weights, and reports AUROC, AUPRC, F1, sensitivity-at-FPR,
-and event-overlap metrics.
+with balanced class weights, and reports the paper's event-level Sens@FA AUC
+(the epilepsy headline; per fold its sensitivity-vs-FA/h curve, see
+_event_sens_fa.py), AUROC, AUPRC, F1, sensitivity-at-FPR, and event-overlap
+metrics.
 """
 
 from __future__ import annotations
@@ -170,6 +172,78 @@ def _event_overlap_metrics(
         "n_true_events": len(true_events),
         "n_pred_events": len(pred_events),
     }
+
+
+# ---------------------------------------------------------------------------
+# Event-level Sens@FA (the headline)
+# ---------------------------------------------------------------------------
+
+
+def _event_metric_not_applicable(dataset_name: str, datamodule, test_meta: list) -> Optional[str]:
+    """Why the event-level Sens@FA curve cannot be computed for this fold, or
+    None if it can. It needs seizures annotated per window along continuous
+    recordings (the paper's seven seizure cohorts); a cohort labelled once
+    per recording (Bonn, TUAB, NMT: the paper reports AUROC and balanced
+    accuracy for them, App. D.1.3) has no seizure events to count."""
+    try:
+        from neuroatlas.benchmarking_helpers.registry.manifest import load_manifest
+
+        labels = load_manifest(dataset_name).get("labels") or {}
+    except Exception:
+        labels = {}
+    mode = (getattr(datamodule, "metadata", None) or {}).get("label_mode") or labels.get("default")
+    granularity = ((labels.get("modes") or {}).get(mode) or {}).get("granularity") \
+        or labels.get("granularity")
+    if granularity == "recording":
+        return (f"{dataset_name} has one label per recording: no seizure events to score "
+                f"(the paper reports AUROC and balanced accuracy for it)")
+    if not test_meta or not any("recording_id" in m or "recording_idx" in m for m in test_meta):
+        return "the test windows carry no recording id, so events cannot be delimited"
+    return None
+
+
+def _temporal_order(test_meta: list) -> np.ndarray:
+    """Test windows ordered by (recording, start time), as the event metric
+    reads them. The readers already emit that order (it is then the identity);
+    this only guards a reader that does not."""
+    n = len(test_meta)
+    if not all("window_start_s" in m for m in test_meta):
+        return np.arange(n)
+    rec = np.asarray([str(m.get("recording_id", m.get("recording_idx", ""))) for m in test_meta])
+    start = np.asarray([float(m["window_start_s"]) for m in test_meta])
+    return np.lexsort((start, rec))
+
+
+def _seconds_per_window(metadata: Dict[str, Any], window_s: float) -> float:
+    """Signal time one window stands for: its length, or the stride when
+    windows overlap. The benchmark's windows do not overlap (10 s, stride
+    10 s), so this is the window length, as in the paper (10 s)."""
+    stride = metadata.get("stride_s")
+    try:
+        stride = float(stride)
+    except (TypeError, ValueError):
+        return window_s
+    return stride if 0 < stride < window_s else window_s
+
+
+def event_sens_fa_metrics(dataset_name: str, datamodule, test_y: np.ndarray,
+                          test_proba: np.ndarray, test_meta: list,
+                          window_s: float) -> Dict[str, Any]:
+    """This fold's ``event_sens_fa_auc``, ``event_sens_fa_curve`` (sensitivity
+    on ``event_sens_fa_grid``, null where the fold cannot reach that FA/h) and
+    the grid; or ``event_sens_fa_auc: None`` with the reason it does not apply.
+    ``neuroatlas results`` combines the folds' curves (median, then AUC)."""
+    from neuroatlas.extensions.tasks import _event_sens_fa
+
+    reason = _event_metric_not_applicable(dataset_name, datamodule, test_meta)
+    if reason is not None:
+        logger.info("event-level Sens@FA not computed: %s", reason)
+        return {"event_sens_fa_auc": None, "event_sens_fa_not_applicable": reason}
+    order = _temporal_order(test_meta)
+    rec_ids = np.asarray([str(m.get("recording_id", m.get("recording_idx"))) for m in test_meta])
+    return _event_sens_fa.fold_metrics(
+        np.asarray(test_y)[order], np.asarray(test_proba)[order], rec_ids[order],
+        window_s=_seconds_per_window(dict(getattr(datamodule, "metadata", {}) or {}), window_s))
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +505,10 @@ def evaluate_seizure_detection(
     3. Fit LogisticRegression(class_weight="balanced") with C-grid search on
        dev AUPRC -- the paper's settings, which --tune-c / --class-weight /
        --selection-metric / --max-iter override (see :func:`probe_settings`)
-    4. Report AUROC, AUPRC, F1, precision, recall, balanced accuracy, MCC,
-       sensitivity at FPR/h (1, 0.1, 0.01), event-overlap metrics
+    4. Report the event-level Sens@FA curve and AUC (the headline; see
+       :func:`event_sens_fa_metrics`), AUROC, AUPRC, F1, precision, recall,
+       balanced accuracy, MCC, sensitivity at FPR/h (1, 0.1, 0.01),
+       event-overlap metrics
     """
     cache_paths: Dict[str, Any] = {}
     # Refuse a flag this task cannot honour before any embedding is read.
@@ -532,6 +608,10 @@ def evaluate_seizure_detection(
 
     # Translate to the metrics schema expected by the BenchmarkRunner
     metrics: Dict[str, Any] = {
+        # the headline (configs/benchmarks/epilepsy.yaml): this fold's curve
+        # and its own AUC; `neuroatlas results` aggregates the curves
+        **event_sens_fa_metrics(dataset_name, datamodule, test_y, probe_result["test_proba"],
+                                test_meta, window_s),
         "auroc": probe_result["test_auroc"],
         "auprc": probe_result["test_auprc"],
         "f1": probe_result["test_f1"],
@@ -593,8 +673,8 @@ TASK_SPECS = [
         slug="seizure_detection",
         description=(
             "Seizure detection evaluation: extract embeddings, fit balanced "
-            "LogisticRegression with C-grid on dev AUPRC, report AUROC/AUPRC/F1/"
-            "sensitivity-at-FPR and event-overlap metrics."
+            "LogisticRegression with C-grid on dev AUPRC, report the event-level "
+            "Sens@FA AUC, AUROC/AUPRC/F1/sensitivity-at-FPR and event-overlap metrics."
         ),
         evaluator=evaluate_seizure_detection,
     )

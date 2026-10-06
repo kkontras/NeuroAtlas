@@ -11,6 +11,12 @@ of the same model and fold are two results, not a duplicate.
 
 "n/a" is never a number: a model the channel map rules out, a spread over
 one fold. It is reported as n/a, never as zero.
+
+A metric over folds is the mean of the per-fold values ± their population SD,
+except the epilepsy headline ``event_sens_fa_auc``: the AUC of the folds'
+median sensitivity-vs-FA/h curve ± the sample SD of the per-fold AUCs, as the
+paper computed it (:func:`_event_sens_fa`). ``Summary.mean``/``std`` hold
+that value and spread.
 """
 from __future__ import annotations
 
@@ -210,6 +216,39 @@ def _mean_std(values: List[float]) -> Tuple[Optional[float], Optional[float]]:
     return mean, math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
 
 
+def _event_sens_fa(records: List[Record]) -> Tuple[Optional[float], Optional[float]]:
+    """The epilepsy headline over folds, as the paper computed it (Fig. 2,
+    Tables 3-5): not the mean of the per-fold AUCs but the AUC of the
+    point-wise median (np.nanmedian) of the folds' sensitivity-vs-FA/h curves,
+    with ± the sample SD (ddof=1) of the per-fold AUCs. The folds are the
+    succeeded ones that recorded a curve (``event_sens_fa_curve``); a result
+    written before the task recorded curves has none and is not counted."""
+    from neuroatlas.extensions.tasks import _event_sens_fa as esf
+
+    curves, grids = [], []
+    for r in records:
+        curve, grid = r.metrics.get("event_sens_fa_curve"), r.metrics.get("event_sens_fa_grid")
+        if isinstance(curve, list) and isinstance(grid, list) and len(curve) == len(grid):
+            curves.append(esf.from_json(curve))
+            grids.append(esf.from_json(grid))
+    if not curves or any(g.shape != grids[0].shape or not (g == grids[0]).all() for g in grids):
+        return None, None       # nothing to aggregate, or curves on different grids
+    auc, sd = esf.aggregate(curves, grids[0])
+    return (None if math.isnan(auc) else auc), (None if math.isnan(sd) else sd)
+
+
+#: Metrics whose value over folds is not the mean ± population SD of the
+#: per-fold values (_mean_std) but the paper's own aggregate of them.
+_FOLD_AGGREGATES = {"event_sens_fa_auc": _event_sens_fa}
+
+
+def _over_folds(records: List[Record], name: str) -> Tuple[Optional[float], Optional[float]]:
+    """A metric's value and spread over the folds that succeeded."""
+    if name in _FOLD_AGGREGATES:
+        return _FOLD_AGGREGATES[name](records)
+    return _mean_std([metric(r.metrics, name) for r in records])
+
+
 def _fold_key(fold: str):
     return (0, int(fold), "") if fold.isdigit() else (1, 0, fold)
 
@@ -238,10 +277,10 @@ def summarize(records: List[Record], headline: str, secondary: Sequence[str] = (
         if skips and not oks:
             out.append(Summary(dataset, model, None, None, 0, 0, "n/a", variant=variant))
             continue
-        mean, std = _mean_std([metric(r.metrics, headline) for r in oks])
+        mean, std = _over_folds(oks, headline)
         s = Summary(dataset, model, mean, std, len(oks), len(failed),
                     "ok" if oks and not failed else "partial" if oks else "failed",
-                    secondary={m: _mean_std([metric(r.metrics, m) for r in oks])[0] for m in secondary},
+                    secondary={m: _over_folds(oks, m)[0] for m in secondary},
                     failures=sorted({r.failure or "?" for r in failed}),
                     n_expected=protocol.get((dataset, variant)),
                     errors=[{"fold": r.fold, "code": r.failure or "?", "message": r.message}
