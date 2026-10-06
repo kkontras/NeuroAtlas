@@ -395,7 +395,8 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     logging.getLogger(TRACEBACK_LOGGER).setLevel(logging.DEBUG)
 
     console = logging.StreamHandler(console_stream)
-    console.setFormatter(_msg.LogFormatter(color=_msg.use_color(console_stream)))
+    console.setFormatter(_msg.LogFormatter(color=_msg.use_color(console_stream),
+                                           clear_line=_msg.use_color(console_stream)))
     # the whole text of a message the screen shows shortened: for the log
     # (with -v the screen shows it whole in the first place)
     console.addFilter(lambda r: r.name != _msg.FULL_LOGGER)

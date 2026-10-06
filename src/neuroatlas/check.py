@@ -169,15 +169,24 @@ def check(benchmark: str, models: str, suite: str = "single",
         bench = catalog.load(bench.derived_from)
     by_id = {s.identifier: s for s in checkpoint_registry()}
     specs = [by_id[i] for i in bench.select_models(models)]
+    import sys
+
+    from neuroatlas.benchmarking_helpers.runtime.runner import _Ticker
+
     out: List[PairCheck] = []
-    for step in bench.steps(suite, variant):
-        if step.verb != "embed":
-            continue
+    steps = [st for st in bench.steps(suite, variant) if st.verb == "embed"]
+    total = len(steps) * len(specs)
+    for step in steps:
         ds = data.status(step.dataset)
         for spec in specs:
             started = time.monotonic()
-            pc = check_pair(step.dataset, spec, list(step.argv), ds, model_state.status(spec),
-                            num_workers=num_workers)
+            # A live "checking k/N" line on a terminal (stderr, cleared before
+            # the table), so a minute of loading models does not look stuck.
+            with _Ticker(f"checking {len(out) + 1}/{total}: {step.dataset} {spec.identifier}",
+                         verb="loading and running one batch", stream=sys.stderr,
+                         start_line_off_tty=False):
+                pc = check_pair(step.dataset, spec, list(step.argv), ds,
+                                model_state.status(spec), num_workers=num_workers)
             pc.seconds = time.monotonic() - started
             out.append(pc)
     return out
