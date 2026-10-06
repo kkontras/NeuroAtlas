@@ -11,6 +11,8 @@ and its Python API. Paper: [arXiv:2605.14698](https://arxiv.org/abs/2605.14698).
 - [The commands](#the-commands) and a [cheat sheet](#command-cheat-sheet) of every command
 - [Test it by hand](#test-it-by-hand): one pass through every command, with
   the output to expect
+- [Run each benchmark](#run-each-benchmark): one block per benchmark, with
+  its datasets and how to get them
 - [What is in the benchmark](#why-neuroatlas): domains, datasets, models,
   tasks
 - [docs/user_guide.md](docs/user_guide.md): every step in detail, with real
@@ -420,6 +422,171 @@ settings.
 send the command and `run.log`. Exit codes: 0 done, 1 something failed, 2
 the command was refused (a bad option, missing data or weights, a model the
 benchmark does not include).
+
+## Run each benchmark
+
+One block per benchmark. Each runs on the benchmark's quick dataset (the
+first one named, and the default of `--dataset`); `--dataset full` runs every
+dataset whose data is on this machine, and `--dataset a,b` names some.
+`neuroatlas show <benchmark>` explains the benchmark and prints the exact
+`embed` and `probe` commands. `--debug` probes fold 0 only: a quick first
+pass before the full run.
+
+How each dataset is obtained (`neuroatlas data status <benchmark>` says it per
+dataset, and `neuroatlas data download <dataset>` does it or prints how):
+**open** downloads with `data download`; **NSRR** needs a token
+(`neuroatlas config token nsrr`) and the cohort's approval on sleepdata.org;
+**TUH** needs the TUH EEG corpus credentials; **manual** prints where to get it
+and the folder layout; **authors** are files the authors hold. Point at a copy
+you already have with `neuroatlas config set <dataset>.<key> DIR` (`data
+status` names the key).
+
+Pick the models once, e.g. `M=biot_pretrained,cbramod_pretrained,reve_pretrained`,
+or an alias (`all_fm`, `all_ts`, `all_supervised`); `neuroatlas models download $M`.
+
+### Sleep staging: `sleep_stage`
+Five-stage staging of 30 s epochs; balanced accuracy. Quick: **Sleep-EDF
+Expanded** (open, 8.1 GB). Open: UCDDB (1.3 GB), HMC (15.7 GB), DOD (58 GB).
+NSRR: CFS, HomePAP, MESA, MrOS, STAGES, WSC. Manual: DCSM, ISRUC, MASS,
+PhysioNet 2026. SHHS reads the CoRe-Sleep preprocessed version (ask the
+authors).
+```bash
+neuroatlas data download sleep_edf_expanded --mirror aws
+neuroatlas check sleep_stage -m $M
+neuroatlas run sleep_stage -m $M --debug
+neuroatlas run sleep_stage -m $M
+neuroatlas results sleep_stage
+```
+
+### Hypnograms: `sleep_hypnogram`
+Sleep-architecture features (sleep efficiency, WASO, REM latency, ...)
+reconstructed from the staging results; Pearson r with the scored hypnogram.
+Run `sleep_stage` first on the same datasets.
+```bash
+neuroatlas run sleep_hypnogram -m $M
+neuroatlas results sleep_hypnogram
+```
+
+### Brain age: `brain_age`
+Age from each subject's mean embedding (ridge regression, nested CV); MAE in
+years. It reuses the 30 s sleep embeddings. Quick: **Sleep-EDF Expanded**
+(Sleep Cassette subjects). NSRR: CFS, MrOS, WSC. Manual: ISRUC, PhysioNet 2026.
+```bash
+neuroatlas check brain_age -m $M
+neuroatlas run brain_age -m $M
+neuroatlas results brain_age
+```
+
+### Sleep diagnosis: `sleep_diagnosis`
+From one night's mean embedding; balanced accuracy. Quick: **DOD** (open,
+58 GB; obstructive sleep apnea vs healthy). Manual: PhysioNet 2026 (cognitive
+impairment), ISRUC (pathology).
+```bash
+neuroatlas data download dod
+neuroatlas check sleep_diagnosis -m $M
+neuroatlas run sleep_diagnosis -m $M
+neuroatlas results sleep_diagnosis
+```
+
+### Respiratory events: `sleep_respiratory`
+Does a 30 s epoch contain an apnea or hypopnea; macro-F1. Quick: **UCDDB** (open, 1.3 GB).
+Manual: PhysioNet 2026.
+```bash
+neuroatlas data download ucddb --mirror aws
+neuroatlas check sleep_respiratory -m $M
+neuroatlas run sleep_respiratory -m $M
+neuroatlas results sleep_respiratory
+```
+
+### Arousals: `sleep_arousal`
+Does a 30 s epoch contain a microarousal; macro-F1. Quick: **MASS** (manual,
+granted on request). Manual: PhysioNet 2026.
+```bash
+neuroatlas data download mass                    # prints where to get it and the layout
+neuroatlas config set mass.data_root DIR
+neuroatlas check sleep_arousal -m $M
+neuroatlas run sleep_arousal -m $M
+neuroatlas results sleep_arousal
+```
+
+### Limb movements: `sleep_limb`
+Does a 30 s epoch contain a (periodic) limb movement; macro-F1. **PhysioNet
+2026** only (manual, 230 GB).
+```bash
+neuroatlas config set physionet2026.data_root DIR
+neuroatlas check sleep_limb -m $M
+neuroatlas run sleep_limb -m $M
+neuroatlas results sleep_limb
+```
+
+### Epilepsy: `epilepsy`
+Is a 10 s window part of a seizure; headline: the event-level Sens@FA AUC
+(area under the folds' median curve of seizure-event sensitivity against false
+alarms per hour, 0.1-100 FA/h), with window-level AUROC beside it. TUAB, NMT
+and Bonn label whole recordings (normal/abnormal): no events, so their headline
+is n/a and AUROC is the number to read. Quick: **Siena** (open, 4.5 GB). Open:
+CHB-MIT (21.7 GB), Helsinki neonatal (4.3 GB), Bonn (3 MB). TUH: TUSZ, TUAB.
+Manual: EPILEPSIAE (licensed), NMT. Authors: SeizeIT1, SeizeIT2.
+```bash
+neuroatlas data download siena
+neuroatlas check epilepsy -m $M
+neuroatlas run epilepsy -m $M
+neuroatlas results epilepsy
+```
+
+### Motor imagery: `bci_motor_imagery`
+Leave-one-subject-out; balanced accuracy. All seven come through MOABB (open;
+the BCI install lines are needed): quick **BNCI2014_001** (0.8 GB),
+BNCI2014_004, BNCI2015_001, Dreyer2023, Liu2024, Shin2017A, Weibo2014.
+`--variant per_patch` probes the per-patch embeddings instead of the pooled ones.
+```bash
+neuroatlas data download bnci2014_001
+neuroatlas check bci_motor_imagery -m $M
+neuroatlas run bci_motor_imagery -m $M --debug
+neuroatlas run bci_motor_imagery -m $M
+neuroatlas results bci_motor_imagery
+```
+
+### ERP: `bci_erp`
+Target vs non-target; leave-one-subject-out; balanced accuracy. MOABB: quick
+**BI2013a** (1.4 GB), BI2014a, BNCI2014_008 (0.2 GB), EPFLP300,
+ErpCore2021_N170.
+```bash
+neuroatlas data download bi2013a
+neuroatlas check bci_erp -m $M
+neuroatlas run bci_erp -m $M
+neuroatlas results bci_erp
+```
+
+### SSVEP: `bci_ssvep`
+Which flickering target the person looks at; leave-one-subject-out; balanced
+accuracy. MOABB: quick
+**Nakanishi2015** (0.14 GB), Kim2025BetaRange (9 GB).
+```bash
+neuroatlas data download nakanishi2015
+neuroatlas check bci_ssvep -m $M
+neuroatlas run bci_ssvep -m $M
+neuroatlas results bci_ssvep
+```
+
+### Cognitive state: `bci_cognitive`
+Emotion (DREAMER valence and arousal) and mental arithmetic (EEGMat, the
+arithmetic task); leave-one-subject-out; balanced accuracy.
+DREAMER (valence, arousal), EEGMat and the arithmetic task are read from
+preprocessed files the authors hold (`data status bci_cognitive` names each
+file); ask the authors, then point at them.
+```bash
+neuroatlas data status bci_cognitive
+neuroatlas config set eegmat.preprocessed_path FILE
+neuroatlas run bci_cognitive --dataset eegmat -m $M
+neuroatlas results bci_cognitive
+```
+
+**Everything at once.** `neuroatlas run <benchmark> --dataset full -m all_fm`
+runs every dataset you have with every EEG foundation model; on a cluster,
+`neuroatlas submit <benchmark> --dataset full -m all_fm --out runs/x` writes
+one job per dataset and model, and `neuroatlas status --out runs/x` follows
+them.
 
 ## Why NeuroAtlas
 
