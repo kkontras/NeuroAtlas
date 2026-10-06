@@ -32,7 +32,13 @@ from neuroatlas import _paths
 
 
 class SelectionError(ValueError):
-    pass
+    """A -m selection that names nothing, or something not ready. Its text is
+    what is wrong, then a ``fix:`` line; ``suggest`` maps a mistyped name to
+    the one it is close to (see :class:`neuroatlas.catalog.CatalogError`)."""
+
+    def __init__(self, message: str = "", suggest: Optional[Dict[str, str]] = None):
+        super().__init__(message)
+        self.suggest = dict(suggest or {})
 
 
 class NotInBenchmark(SelectionError):
@@ -212,10 +218,11 @@ def resolve_models(expr: str | Sequence[str], *,
             picked = [spec.identifier]
         else:
             vocabulary = [*aliases, *groups, *families, *by_id]
-            close = difflib.get_close_matches(key, vocabulary, n=3, cutoff=0.6)
-            hint = f" Did you mean {', '.join(close)}?" if close else ""
-            raise SelectionError(f"unknown model {name!r}.{hint} "
-                                 f"See `neuroatlas list models` and `neuroatlas list aliases`.")
+            close = difflib.get_close_matches(key, vocabulary, n=1, cutoff=0.6)
+            hint = f" (did you mean {', '.join(close)}?)" if close else ""
+            raise SelectionError(f"unknown model {name!r}{hint}\n"
+                                 f"fix: neuroatlas list models, or neuroatlas list aliases",
+                                 suggest={name: close[0]} if close else None)
         if exclude:
             family = key if key in families else by_id[key].model_family if key in by_id else None
             if named and family in exclude:

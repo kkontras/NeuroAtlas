@@ -53,15 +53,20 @@ def result_dir(benchmark: str, dataset: str, variant: str = "default",
     return out if variant == "default" else out / variant
 
 
+#: How a plan's note and a skipped job name a map that does not load.
+MAP_INVALID = "channel map invalid"
+
+
 def channel_map(dataset: str):
     """(map or None, error message or None). A map that fails validation is
     reported against its dataset instead of stopping a whole suite."""
     from neuroatlas.benchmarking_helpers.channels.channel_map import load_channel_map
+    from neuroatlas.cli import _msg
 
     try:
         return load_channel_map(dataset), None
     except (ValueError, KeyError) as exc:
-        return None, f"channel map invalid: {str(exc).split(': ', 1)[-1]}"
+        return None, f"{MAP_INVALID}: {_msg.brief(str(exc).split(': ', 1)[-1])}"
 
 
 def map_states(cmap, specs) -> Tuple[List[str], Dict[str, str]]:
@@ -84,14 +89,16 @@ def map_states(cmap, specs) -> Tuple[List[str], Dict[str, str]]:
 
 
 def invalid_note(dataset: str, invalid: Dict[str, str]) -> str:
-    """The line a plan carries for its invalid pairs: which, why, the fix."""
+    """The message a plan carries for its invalid pairs: which and why, then
+    the fix on its own line (:mod:`neuroatlas.cli._msg`)."""
     from neuroatlas.benchmarking_helpers.channels.channel_map import _default_yaml_path
 
     families = sorted(set(invalid.values()))
-    return (f"invalid, not run: {', '.join(invalid)} -- the channel map has no entry for "
-            f"{'family' if len(families) == 1 else 'families'} {', '.join(families)}; add a "
-            f"mapping, `mode: label_pass_through` or `skip` to "
-            f"configs/channel_maps/{_default_yaml_path(dataset).name}")
+    return (f"invalid, not run: {', '.join(invalid)} (the channel map has no entry for "
+            f"{'family' if len(families) == 1 else 'families'} {', '.join(families)})\n"
+            f"fix: add {'it' if len(families) == 1 else 'them'} to "
+            f"configs/channel_maps/{_default_yaml_path(dataset).name}: a mapping, "
+            f"`mode: label_pass_through` or `skip`")
 
 
 class PlanError(CatalogError):
@@ -173,6 +180,7 @@ def plan(benchmark: str, models: str, suite: str = "single", variant: str = "def
     jobs, one per (dataset, model), never write the same results.json."""
     from neuroatlas import catalog, data
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
+    from neuroatlas.cli import _msg
 
     bench = catalog.load(benchmark)
     ids = bench.select_models(models)
@@ -227,11 +235,12 @@ def plan(benchmark: str, models: str, suite: str = "single", variant: str = "def
                                  embed_argv(embeds[slug], probe_argv, fold_list),
                                  probe_argv, output_base=base, invalid=list(invalid)))
         if map_error:
-            plans[-1].notes.append(f"{map_error}; not run")
+            plans[-1].notes += _msg.lines("error", f"{map_error}; not run")
         if invalid:
-            plans[-1].notes.append(invalid_note(slug, invalid))
+            plans[-1].notes += _msg.lines("warning", invalid_note(slug, invalid))
         if not st.found and st.state != "fetched on first use":
-            plans[-1].notes.append(f"data {st.state}: `neuroatlas data status {slug}`")
+            plans[-1].notes += _msg.lines("warning", f"data {st.state}",
+                                          f"neuroatlas data status {slug}")
     return plans
 
 
@@ -250,7 +259,9 @@ def _call(verb: str, argv: List[str]) -> int:
         if exc.code in (None, 0):
             return 0
         if isinstance(exc.code, str):
-            print(exc.code, file=sys.stderr)
+            from neuroatlas.cli import _msg
+
+            _msg.error(exc.code)
             return 1
         return int(exc.code)
     return 0
@@ -276,8 +287,9 @@ def _checkpoint_paths(extra: Optional[List[str]]) -> Dict[str, str]:
 
 def weights_problems(model_ids: List[str], checkpoint_paths: Optional[Dict[str, str]] = None
                      ) -> Dict[str, str]:
-    """Models whose weights this run cannot load, with why -- the same test
-    ``check`` makes (``models.status``) before it forwards a batch.
+    """Models whose weights this run cannot load, with why (and the fix on a
+    ``fix:`` line) -- the same test ``check`` makes (``models.status``)
+    before it forwards a batch.
 
     Without it a manual model with no weights (REVE, gated on Hugging Face)
     died deep in transformers (``'NoneType' object has no attribute
@@ -302,14 +314,10 @@ def weights_problems(model_ids: List[str], checkpoint_paths: Optional[Dict[str, 
         st = model_state.status(spec)
         if st.ready or st.state in fetchable:
             continue
-        why = f"weights {st.state}"
-        if st.notes:
-            why += f" ({'; '.join(st.notes)})"
+        what, fix = model_state.weights_problem(st) or (f"weights {st.state}", None)
         if st.state in ("auto", "hub"):
-            why += f"; `neuroatlas models download {ident}`, or pass --online"
-        elif st.state == "manual":
-            why += f"; see `neuroatlas models status {ident}`"
-        out[ident] = why
+            fix = f"{fix}, or add --online"
+        out[ident] = what + (f"\nfix: {fix}" if fix else "")
     return out
 
 
@@ -342,6 +350,7 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
     import contextlib
 
     from neuroatlas import config
+    from neuroatlas.cli import _msg
 
     # "kept": records already in results.json that this run did not write;
     # "invalid": pairs the channel map has no entry for (never run)
@@ -372,12 +381,15 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
             summary["ok" if status == 0 else "failed"] += 1
             continue
         if not p.models:
-            reason = "; ".join(p.notes) or f"channel map skips {', '.join(p.skipped)}"
-            print(f"\n{p.dataset}: nothing to run ({reason})")
-            if any(n.startswith("channel map invalid") for n in p.notes):
+            if any(MAP_INVALID in n for n in p.notes):
+                _msg.error(f"{p.dataset}: "
+                           + next(_msg.strip_kind(n) for n in p.notes if MAP_INVALID in n))
                 summary["datasets_failed"].append(p.dataset)
                 summary["failed"] += 1
             else:
+                ruled_out = [*p.skipped, *p.invalid]
+                print(f"\n{p.dataset}: nothing to run (the channel map rules out "
+                      f"{', '.join(ruled_out)})")
                 summary["n/a"] += len(p.skipped)
                 summary["invalid"] += len(p.invalid)
             continue
@@ -390,7 +402,7 @@ def execute(plans: List[DatasetPlan], *, cache_root: Optional[Path] = None,
             # weights are not here fails now, by name, not inside the job.
             blocked = weights_problems(runnable, ckpt_paths)
             for ident, why in blocked.items():
-                print(f"\n{p.dataset}/{ident}: not run: {why}", file=sys.stderr)
+                _msg.error(f"{p.dataset}/{ident}: not run: {why}")
                 summary["failed"] += max(1, len(p.folds))
             runnable = [m for m in runnable if m not in blocked]
             if not runnable:
@@ -468,9 +480,11 @@ def _run_hypnogram(p: DatasetPlan) -> int:
     # per model under it; both are read (it used to look at the first only).
     sources = staging_results(p.dataset, root)
     if not sources:
+        from neuroatlas.cli import _msg
+
         where = ", ".join(str(c) for c in hyp.candidate_results_dirs(p.dataset, root))
-        print(f"\n{p.dataset}: no staging results in {where}; run `neuroatlas run {source.name} "
-              f"--dataset {p.dataset}` first", file=sys.stderr)
+        _msg.error(f"{p.dataset}: no {source.name} results in {where}",
+                   f"neuroatlas run {source.name} --dataset {p.dataset}")
         return 1
     p.output.mkdir(parents=True, exist_ok=True)
     hypno = p.output / "hypnograms.json"
@@ -481,7 +495,9 @@ def _run_hypnogram(p: DatasetPlan) -> int:
                                     compute_metrics=True, merge=i > 0)
     rows = hyp.rows_from_hypnograms(hypno, p.dataset)
     if not rows:
-        print(f"{p.dataset}: no hypnograms reconstructed", file=sys.stderr)
+        from neuroatlas.cli import _msg
+
+        _msg.error(f"{p.dataset}: no hypnograms reconstructed")
         return 1
     hyp.write_csv(rows, p.output / "hypnogram_features.csv")
     summary = hyp.compute_summary(rows)

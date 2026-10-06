@@ -23,8 +23,10 @@ cohort:
 acquisition:
   kind: internal
   prepared_only: >
-    Not publicly released. The benchmark reads the authors' preprocessed pickle
-    (ArithmeticTask_preprocessed_*.pkl); set arithmetic_task.preprocessed_path to it.
+    the benchmark reads the authors' preprocessed pickle
+    (ArithmeticTask_preprocessed_*.pkl), which is not publicly released.
+    fix: ask the authors for it, then
+    neuroatlas config set arithmetic_task.preprocessed_path FILE
 
 signal:
   notch_freq: 50.0

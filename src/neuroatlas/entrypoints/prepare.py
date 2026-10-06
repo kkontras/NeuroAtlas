@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
+from neuroatlas.cli import ErrorParser
 from neuroatlas.entrypoints._common import (
     expand_dataset_paths,
     parse_embed_chunk,
@@ -65,10 +66,9 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     block = builder_for(slug)
     if block is None:
         raise SystemExit(
-            f"error: {slug} has no build step: it reads its raw corpus directly, so "
-            f"there is nothing to prepare. Run it as it is (`neuroatlas run <benchmark> "
-            f"--dataset {slug}`); `neuroatlas data status {slug}` says whether its "
-            f"data is there."
+            f"error: {slug} has no build step: `neuroatlas run <benchmark> --dataset {slug}` "
+            f"reads its raw data directly\n"
+            f"fix: neuroatlas data status {slug} says whether that is here"
         )
     args = block.get("args") or {}
     spec = _spec(slug)
@@ -93,8 +93,8 @@ def build_argv(slug: str, overrides: Dict[str, Any],
         raw = next((defaults[k] for k in _RAW_KEYS if defaults.get(k)), None)
         if not raw:
             raise SystemExit(
-                f"error: {slug} has no raw corpus path in its manifest "
-                f"(looked for {', '.join(_RAW_KEYS)}). Pass --set raw_root=..."
+                f"error: {slug}: no raw data path in its manifest "
+                f"(looked for {', '.join(_RAW_KEYS)})\nfix: --set raw_root=DIR"
             )
         argv += [args["raw"], str(raw)]
     out = dest or next((defaults[k] for k in _OUT_KEYS if defaults.get(k)), None)
@@ -119,7 +119,7 @@ def build_argv(slug: str, overrides: Dict[str, Any],
         if not shard_args:
             raise SystemExit(
                 f"error: {slug}'s builder does not support sharding "
-                f"(no pipeline.preprocessor.shard in its manifest)."
+                f"(no pipeline.preprocessor.shard in its manifest)"
             )
         index, count = shard
         argv += [shard_args["index"], str(index), shard_args["count"], str(count)]
@@ -136,7 +136,7 @@ def build_argv(slug: str, overrides: Dict[str, Any],
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     from neuroatlas.entrypoints import _help
 
-    parser = argparse.ArgumentParser(
+    parser = ErrorParser(
         prog="neuroatlas prepare",
         description="Build a dataset's optional cache: a fast path for a few "
                     "epilepsy cohorts, or dataio/bci.py's pickle for five MOABB "

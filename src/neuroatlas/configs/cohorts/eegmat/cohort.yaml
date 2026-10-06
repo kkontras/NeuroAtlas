@@ -29,10 +29,11 @@ acquisition:
   dest: ${EEG_DATA_ROOT}/eegmat             # where `data download` puts the raw EDFs
   expect: {glob: "Subject*.edf", count: 72} # RECORDS: 36 subjects x (rest, task)
   prepared_only: >
-    The benchmark reads the preprocessed pickle (4 s windows at 128 Hz) the
+    the benchmark reads the preprocessed pickle (4 s windows at 128 Hz) the
     published embeddings were built from; no script in this repository builds
-    it from the raw EDFs. Ask the authors for EEGMat_preprocessed_*.pkl and set
-    eegmat.preprocessed_path to it.
+    it from the raw EDFs.
+    fix: ask the authors for EEGMat_preprocessed_*.pkl, then
+    neuroatlas config set eegmat.preprocessed_path FILE
 
 signal:
   notch_freq: 50.0

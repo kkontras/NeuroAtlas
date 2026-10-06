@@ -25,20 +25,23 @@ class PairCheck:
     error: bool = False
     seconds: Optional[float] = None      # wall time of this pair's check
     #: The whole error message of a failed forward pass (the JSON ``error``
-    #: field); the table note carries its first line.
+    #: field); the table note carries its first sentence.
     message: Optional[str] = None
 
 
-def _error_note(exc: BaseException) -> str:
-    """The table note for a failed pair: the message's whole first line, and
-    how many lines follow it. It used to be cut at 300 characters, which left
-    BIOT's state_dict mismatch as its header line alone."""
-    text = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-    lines = text.splitlines() or [text]
-    if len(lines) > 1:
-        return (f"{lines[0]} (+{len(lines) - 1} more line{'s' if len(lines) > 2 else ''}: "
-                f"`--format json` shows the whole message)")
-    return lines[0]
+def _error_note(exc: BaseException) -> List[str]:
+    """The lines under a failed pair: ``error:`` and the message's first
+    sentence (whole with -v); `--format json` carries the whole message."""
+    from neuroatlas.cli import _msg
+
+    return _msg.lines("error", _msg.brief(_msg.exception_text(exc)))
+
+
+def data_fix(slug: str, st) -> str:
+    """The commands that bring a dataset here: download it, or point at a copy."""
+    fix = f"neuroatlas data download {slug}"
+    setting = getattr(st, "setting", None)
+    return fix + (f", or neuroatlas config set {setting} DIR" if setting else "")
 
 
 def _dataset_config(slug: str, embed_argv, model: str, num_workers: Optional[int] = None):
@@ -79,7 +82,9 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status,
                num_workers: Optional[int] = None) -> PairCheck:
     import numpy as np
 
+    from neuroatlas import models as model_weights
     from neuroatlas.benchmarking_helpers.channels.channel_map import load_channel_map
+    from neuroatlas.cli import _msg
     from neuroatlas.benchmarking_helpers.runtime.runner import BenchmarkRunner
 
     pc = PairCheck(slug, spec.identifier, data_status.state, model_status.state, "none")
@@ -87,7 +92,7 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status,
         cmap = load_channel_map(slug)
     except (ValueError, KeyError) as exc:
         pc.channel_map, pc.error = "invalid", True
-        pc.notes.append(str(exc).split(": ", 1)[-1])
+        pc.notes += _msg.lines("error", "channel map: " + _msg.brief(str(exc).split(": ", 1)[-1]))
         return pc
     if cmap is not None:
         # The pair's map state, decided before any data is read (values:
@@ -96,24 +101,23 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status,
         state, detail = cmap.state_for(spec.model_family)
         if state == "skip":
             pc.channel_map = "n/a (skip)"
-            pc.notes.append(f"not applicable: {detail}" if detail else "not applicable to this dataset")
+            pc.notes += _msg.lines("n/a", _msg.brief(detail) if detail
+                                   else "the channel map skips this model")
             return pc
         if state == "invalid":
             pc.channel_map, pc.error = "invalid", True
-            pc.notes.append(detail)
+            pc.notes += _msg.lines("error", detail)
             return pc
         pc.channel_map = f"applied ({detail})" if detail else "applied"
 
     if not data_status.found and data_status.state != "fetched on first use":
-        pc.notes.append(f"data {data_status.state}: forward skipped"
-                        + (f" ({data_status.path})" if data_status.path else ""))
+        pc.notes += _msg.lines("skipped", f"data {data_status.state}"
+                               + (f" ({data_status.path})" if data_status.path else ""),
+                               data_fix(slug, data_status))
         return pc
-    load_weights = model_status.ready
-    if not load_weights:
-        pc.notes.append(f"weights {model_status.state}: forward skipped"
-                        + (f" ({'; '.join(model_status.notes)})" if model_status.notes else "")
-                        + (f"; `neuroatlas models download {spec.identifier}`"
-                           if model_status.state in ("auto", "hub") else ""))
+    problem = model_weights.weights_problem(model_status)
+    if problem:
+        pc.notes += _msg.lines("skipped", *problem)
         return pc
 
     try:
@@ -133,18 +137,21 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status,
         shape = "(" + ", ".join(map(str, emb.shape)) + ")"
         if n_bad:
             pc.forward, pc.error = f"{shape} {n_bad} non-finite", True
+            pc.notes += _msg.lines("error", f"{n_bad} non-finite values in the embeddings")
         elif emb.ndim >= 2 and emb.shape[0] > 1 and np.allclose(emb, emb[:1]):
             pc.forward = f"{shape} constant"
-            pc.notes.append("every window embedded identically: the input may be empty or flat")
+            pc.notes += _msg.lines("error", "every window embedded identically: "
+                                            "the input may be empty or flat")
             pc.error = True
         else:
             pc.forward = f"{shape} finite"
     except StopIteration:
         pc.forward, pc.error = "no batch", True
-        pc.notes.append("the loader yielded nothing: no windows survived the dataset's filters")
+        pc.notes += _msg.lines("error", "the loader yielded nothing: no windows survived "
+                                        "the dataset's filters")
     except Exception as exc:
         pc.forward, pc.error = "error", True
-        pc.notes.append(_error_note(exc))
+        pc.notes += _error_note(exc)
         pc.message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
     return pc
 

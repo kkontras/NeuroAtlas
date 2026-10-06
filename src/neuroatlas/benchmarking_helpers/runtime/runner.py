@@ -348,12 +348,12 @@ class BenchmarkRunner:
         if abs(window - float(checkpoint_spec.expected_epoch_seconds)) < 1e-9:
             return checkpoint_spec
         if verbose:
-            print(
-                f"[runner] {getattr(datamodule, 'name', '?')}/{checkpoint_spec.identifier}: "
-                f"windows are the dataset's {window:g} s trials; the backbone is told "
-                f"{window:g} s instead of its {float(checkpoint_spec.expected_epoch_seconds):g} s.",
-                flush=True,
-            )
+            # detail for -v and the --log file, not for every run's screen
+            logging.getLogger(__name__).info(
+                "%s/%s: windows are the dataset's %g s trials; the backbone is told %g s "
+                "instead of its %g s", getattr(datamodule, "name", "?"),
+                checkpoint_spec.identifier, window, window,
+                float(checkpoint_spec.expected_epoch_seconds))
         import dataclasses
 
         return dataclasses.replace(checkpoint_spec, expected_epoch_seconds=window)
@@ -389,12 +389,9 @@ class BenchmarkRunner:
         precomputed = _precomputed_cache_available(datamodule, checkpoint_spec)
         seq_len = getattr(checkpoint_spec, "expected_sequence_length", 1)
         if seq_len > 1 and precomputed:
-            print(
-                f"[runner] {dataset_name}/{checkpoint_spec.identifier}: skipping "
-                f"sequential wrapper (expected_sequence_length={seq_len}) — this "
-                f"datamodule serves precomputed embeddings.",
-                flush=True,
-            )
+            logging.getLogger(__name__).info(
+                "%s/%s: no sequential wrapper (expected_sequence_length=%d): this datamodule "
+                "serves precomputed embeddings", dataset_name, checkpoint_spec.identifier, seq_len)
         if seq_len > 1 and not precomputed:
             from .sequential_epochs import SequentialDataModuleWrapper
             overrides = getattr(checkpoint_spec, "runtime_overrides", {}) or {}
@@ -495,12 +492,14 @@ class BenchmarkRunner:
                 result.metadata.setdefault("channel_map_applied", True)
             return result
         except Exception as exc:
-            print(
-                f"\n[WARN] {dataset_name}/{checkpoint_spec.identifier} "
-                f"(fold {dataset_config.get('fold', '?')}): {exc}"
-            )
-            # The message above and in results.json says what failed; the
-            # traceback is for a bug report: the --log file, or -v on screen.
+            from neuroatlas.cli import _msg
+
+            # The pair failed and the run goes on: one line now, its first
+            # sentence (-v and --log: the whole message; results.json keeps it).
+            _msg.error(f"{dataset_name}/{checkpoint_spec.identifier} "
+                       f"(fold {dataset_config.get('fold', '?')}): "
+                       + _msg.brief(_msg.exception_text(exc)))
+            # The traceback is for a bug report: the --log file, or -v on screen.
             logging.getLogger("neuroatlas.traceback").debug(
                 "%s/%s failed", dataset_name, checkpoint_spec.identifier, exc_info=True)
             return BenchmarkResult(

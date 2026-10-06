@@ -144,8 +144,25 @@ global options (`--online`, `--log FILE`, `-v`) may stand before or after
 the command. On screen every command shows its own output, progress bars
 and warnings; the libraries' INFO lines (each model's loading banner, the
 loader's per-dataset line, weight reports) and Python warnings appear only
-with `-v`, and a closing line says how many were left out. `--log FILE`
-keeps all of it. With `--online`, `run` fetches a missing Hugging Face or
+with `-v`, and a closing `note:` line says how many were left out. `--log FILE`
+keeps all of it.
+
+Every message that is not ordinary output starts with what it is, on stderr:
+
+| first word | meaning |
+|---|---|
+| `error:` | the command, or one pair or row of it, failed or was refused (exit 1, or 2 for a refusal or a usage error) |
+| `warning:` | the command goes on, but results may be affected |
+| `note:` | information, neither of the two |
+
+The remedy, when there is one, is on its own line below, the command to run
+first: `  fix: neuroatlas models download neurorvq_eeg_pretrained`. A mistyped
+command, option or name gets the corrected command as its fix
+(`neuroatlas chek epilepsy` -> `fix: neuroatlas check epilepsy`). A long
+message from a library (a CUDA out-of-memory error, an HTTP error, a list of
+channel labels) is cut to its first sentence, `(-v: full message)`; `-v` and
+the `--log FILE` keep it whole. Colour (red `error:`, yellow `warning:`) only
+on a terminal, and never with `NO_COLOR` set or in a `--log` file. With `--online`, `run` fetches a missing Hugging Face or
 release checkpoint itself; `check` still downloads nothing.
 
 The rule covers MOABB too: offline, a MOABB dataset that is not all in the
@@ -194,7 +211,8 @@ id, is refused (exit 2):
 
 ```
 $ neuroatlas run epilepsy -m sleepyco_shhs_fold0 --dry-run
-error: sleepyco_shhs_fold0 is not part of the epilepsy benchmark (sleepyco: sleep-staging sequence models, built on sequences of 30 s sleep epochs; their wrappers refuse the benchmark's 10 s windows). `neuroatlas list models --benchmark epilepsy` lists the checkpoints it evaluates.
+error: sleepyco_shhs_fold0 is not part of the epilepsy benchmark (sleepyco: sleep-staging sequence models, built on sequences of 30 s sleep epochs; their wrappers refuse the benchmark's 10 s windows)
+  fix: neuroatlas list models --benchmark epilepsy
 ```
 
 `neuroatlas list models --benchmark epilepsy` lists the 38 it evaluates;
@@ -214,10 +232,12 @@ neuroatlas data download sleep_edf_expanded --mirror aws
 columns: `access`; `state`; `download`, what `data download` would do
 (`automatic`, `with NSRR token`, `instructions`, `from the authors`,
 `refused`); and `map`, whether a channel map ships for the dataset. Under
-the table it defines `$DATA` (your data root) and lists, for each dataset it
-did not find, the folder it looked in and the `config set` line that moves
-it. `-v` adds the path and the key as columns; `--format json` always has
-them.
+the table it counts the states, lists, for each dataset it did not find, the
+folder it looked in and the setting that points it at your copy
+(`neuroatlas config set <setting> DIR`), and defines `$DATA` (your data
+root); one `note:` names the NSRR cohorts that cannot be downloaded without
+a token. `-v` adds the path and the key as columns; `--format json` always
+has them.
 
 | state | meaning |
 |---|---|
@@ -374,16 +394,21 @@ run uses, then it stops: nothing trained, cached or downloaded. On Sleep-EDF:
 dataset             model               data                   weights          channel_map  forward           time
 sleep_edf_expanded  biot_pretrained     found (197/197 files)  found            applied      (32, 256) finite  2.8s
 sleep_edf_expanded  labram_pretrained   found (197/197 files)  auto             applied      -                 0.0s
-      weights auto: forward skipped; `neuroatlas models download labram_pretrained`
+      skipped: weights not downloaded
+        fix: neuroatlas models download labram_pretrained
 sleep_edf_expanded  cbramod_pretrained  found (197/197 files)  hub (cached)     applied      (32, 200) finite  1.0s
 sleep_edf_expanded  reve_pretrained     found (197/197 files)  hub (cached)     applied      (32, 512) finite  6.1s
 sleep_edf_expanded  moment_small        found (197/197 files)  package missing  applied      -                 0.0s
-      weights package missing: forward skipped (momentfm is not installed: pip install --no-deps "momentfm==0.1.4" (weights: hub))
-pairs: 5   forward passes: 3   errors: 0   skipped: 2   n/a: 0   time: 9.9s
+      skipped: momentfm is not installed
+        fix: pip install --no-deps "momentfm==0.1.4"
+5 pairs: 3 ok, 0 error, 2 skipped, 0 n/a (9.9 s)
 ```
 
-- `data` and `weights` are the states of sections 4 and 5. A pair whose
-  data or weights are not ready is skipped, with the reason under it.
+- `data` and `weights` are the states of sections 4 and 5. A pair that did
+  not run says why on the line under it: `skipped:` (data or weights not
+  ready, with the `fix:` that gets them; a fix the table already gave is not
+  repeated), `n/a:` (the channel map rules the pair out) or `error:` (it
+  failed: the message's first sentence, all of it with `-v`).
 - `forward`: `(32, 256) finite` is a batch of 32 windows turned into 32
   embeddings of 256 numbers, none NaN or infinite. `constant` (every window
   embedded identically) and `N non-finite` are errors.
@@ -400,8 +425,10 @@ pairs: 5   forward passes: 3   errors: 0   skipped: 2   n/a: 0   time: 9.9s
 - `time` is the pair's wall time; the footer adds them up. A cohort that
   indexes every window first takes longer (CHB-MIT: about 20 s for two
   models).
-- With `--format json` or `csv`, anything a model prints while it loads
-  goes to stderr, so the output parses.
+- With `--format json` or `csv` the lines under a row are each row's `note`
+  (joined with `; `), and a failed pair's whole message is its `error`
+  field. What a model prints while it loads (REVE's `flash_attn not found`)
+  is a log line: `-v` shows it, `--log` keeps it, the output stays clean.
 
 Exit status: 0 when at least one pair went through and none errored; 1 if a
 pair errored, or if nothing could be checked (every pair skipped); with
@@ -431,16 +458,20 @@ $ neuroatlas run sleep_stage -m biot_pretrained
 
 $ neuroatlas embed --dataset sleep_edf_expanded --models biot_pretrained
 [extract-only] global cache already exists at <cache root>/sleep_edf_expanded/biot_pretrained/all/644ef899f1fb53b6
-[embed] dataset=sleep_edf_expanded models=['biot_pretrained'] cells=1 failed=0 cache=<cache root>
+embed: 1 ok, 0 failed (cache: <cache root>)
 
 $ neuroatlas probe --dataset sleep_edf_expanded --task sleep_staging --models biot_pretrained --output-root <output root>/sleep_stage/sleep_edf_expanded
 [probe] fitting linear classification probe on train=265039 val=95642 test=96971 with 1 seed(s)
 ...
-[probe] rows=5 failed=0 output=<output root>/sleep_stage/sleep_edf_expanded
+probe: 5 ok, 0 failed (results: <output root>/sleep_stage/sleep_edf_expanded)
 
-runs this time: ok 5   failed 0   n/a 0
+5 runs: 5 ok, 0 failed, 0 n/a
 results: <output root>/sleep_stage  (`neuroatlas results sleep_stage`)
 ```
+
+A pair that fails says so the moment it does, in one line (`error:
+sleep_edf_expanded/biot_pretrained (fold 2): CUDA out of memory. (-v: full
+message)`); the whole message is in `results.json` and in `--log`.
 
 How long it takes, measured on Sleep-EDF with BIOT: extraction 29 min on an
 RTX 4500 Ada another job was also using (17 min on an idle GPU, in the
@@ -458,11 +489,11 @@ that succeeds leaves no failure behind. Each row records when it was
 written (`metadata.written_at`).
 
 The closing lines count this run's work, not the file's:
-`runs this time: ok N   failed M   n/a K` (and `invalid J`, with the pairs
-named, when the channel map has no entry for some model: those are not run
-and do not count as failed), plus how many earlier results the file also
-keeps, then where the results are and the `neuroatlas results` line that
-reads them.
+`N runs: N ok, M failed, K n/a` (and `J invalid` when the channel map has no
+entry for some model: those are not run, do not count as failed, and a
+`warning:` names them and the map to edit), plus how many earlier results
+the file also keeps, then where the results are and the `neuroatlas results`
+line that reads them.
 
 ### What is reused
 
@@ -600,13 +631,13 @@ On a machine with only Sleep-EDF, BIOT's weights and not LaBraM's:
 
 ```
 $ neuroatlas submit sleep_stage -m biot_pretrained,labram_pretrained --out runs/ss
-jobs: skipped 29   missing 1   queued (mode=cached) 1
-  skipped 29: data missing 28, weights auto 1  (`neuroatlas check` says more; --force writes the data- and weights-blocked ones anyway)
-  GPUs: compute capability >= 7.0 (torch 2.8.0+cu128 is built for sm_70 sm_75 sm_80 sm_86 sm_90 sm_100 sm_120); written as a requirement
-  (`condor_submit -dry-run` checks the file's syntax only, not the pool's policy -- e.g. a required RequestWalltime)
-submit with:  condor_submit /.../runs/ss/jobs.job
+1 job: 1 queued (mode cached), 1 missing
+29 pairs skipped: 28 data missing, 1 weights auto (-v lists them)
+  --force writes jobs for the 29 blocked by data or weights
+GPUs: compute capability >= 7.0 (the lowest torch 2.8.0+cu128 supports), a requirement in jobs.job
+queue them: condor_submit /.../runs/ss/jobs.job  (-dry-run checks the file's syntax only, not the pool's policy)
 $ neuroatlas status --out runs/ss
-sleep_stage (full, default): missing 1   skipped 29
+sleep_stage (full, default): 1 job: 1 missing; 29 pairs skipped
 ```
 
 The `--out` folder holds `jobs.json` (what was planned and skipped),
@@ -684,12 +715,14 @@ folders and quoted globs you name. One row per dataset × variant × model; a
   table; `--format json` and `csv` keep the metric keys (`balanced_accuracy`,
   `auroc`, ...) and the fields `mean` and `std`.
 - `folds`: succeeded / the protocol's folds, e.g. `5/5`, or `1/5` after
-  `--debug`. A footer says when a mean covers fewer folds than the protocol
-  and is not comparable with a full run.
+  `--debug`. A `warning:` says when a mean covers fewer folds than the
+  protocol and is not comparable with a full run.
 - `normalized` (0 = dummy, 1 = perfect), only for benchmarks with a fixed
   dummy; then the secondary metrics.
-- `-v` shows, under each row, why its failed folds failed: the message each
-  one recorded.
+- A row whose headline is `n/a` says why on the line under it (`n/a: the
+  channel map skips this model`, or the reason the metric does not apply).
+  `-v` also shows why its failed folds failed (`error: folds 0, 1: <the
+  message each recorded> [code]`); without `-v`, a `warning:` counts them.
 - In JSON a missing number is `null`, and every row also has `benchmark`,
   `metric`, `variant`, `status`, `n_folds`, `n_expected`, `n_failed`,
   `failures`, `errors` and `note`.
@@ -711,7 +744,7 @@ esf.fold_metrics(z["y_true"], z["y_score"], z["recording_id"], window_s=float(z[
 
 A result recorded twice -- a quick `run` and later a cluster job of the same
 dataset, variant, model, fold and task -- counts once: the newest file wins,
-and `results` says how many duplicates it dropped. Two variants of the same
+and a `warning:` says how many duplicates it dropped. Two variants of the same
 model and fold are two results, not a duplicate. The same embeddings probed
 on two machines can differ by about 1e-3 (BIOT × Sleep-EDF fold 0: 0.6624
 and 0.6619), so the newest copy is not always the same number.

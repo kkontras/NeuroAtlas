@@ -25,10 +25,11 @@ acquisition:
   kind: nsrr
   ref: shhs
   unusable_download: >
-    The SHHS reader reads the CoRe-Sleep preprocessed version of SHHS, not the
-    raw EDFs NSRR serves, and no script in this repository builds it. The raw
-    download (about 50 GB) would sit unused; ask the authors for the
-    preprocessed copy and set shhs.data_root to it.
+    the SHHS reader reads the CoRe-Sleep preprocessed SHHS, not the raw EDFs
+    NSRR serves (about 50 GB that would sit unused), and no script in this
+    repository builds it.
+    fix: ask the authors for the preprocessed copy, then
+    neuroatlas config set shhs.data_root DIR
 
 signal:
   notch_freq: null

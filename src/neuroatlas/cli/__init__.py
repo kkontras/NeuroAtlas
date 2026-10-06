@@ -186,10 +186,74 @@ class _SubParsers(argparse._SubParsersAction):
         return super().add_parser(name, **kwargs)
 
 
-class Parser(argparse.ArgumentParser):
+#: The words after ``neuroatlas`` of the command being run (set by
+#: :func:`main`), so a usage error can print the corrected command.
+_COMMAND_LINE: List[str] = []
+#: mistyped word -> the word it is close to, gathered while parsing
+_SUGGEST: dict = {}
+
+
+def corrected_command(replacements: dict) -> Optional[str]:
+    """The command line being run with each mistyped word replaced, or None
+    when it is not known or a word is not in it."""
+    if not _COMMAND_LINE or not replacements:
+        return None
+    import shlex
+
+    out, done = [], set()
+    for token in _COMMAND_LINE:
+        flag, eq, value = token.partition("=")
+        items = token.split(",")
+        if token in replacements and token not in done:
+            out.append(replacements[token])
+            done.add(token)
+        elif eq and flag in replacements and flag not in done:
+            out.append(f"{replacements[flag]}={value}")
+            done.add(flag)
+        elif len(items) > 1 and any(i in replacements and i not in done for i in items):
+            # one name of a comma list (-m biot_pretraind,reve)
+            fixed = []
+            for item in items:
+                if item in replacements and item not in done:
+                    fixed.append(replacements[item])
+                    done.add(item)
+                else:
+                    fixed.append(item)
+            out.append(",".join(fixed))
+        else:
+            out.append(token)
+    if len(done) < len(replacements):
+        return None
+    return "neuroatlas " + " ".join(shlex.quote(t) for t in out)
+
+
+class ErrorParser(argparse.ArgumentParser):
+    """argparse whose errors read like every other message: ``error: ...``,
+    then the corrected command (a mistyped flag or choice) or ``<prog>
+    --help`` on a ``fix:`` line, instead of the whole usage block; exit 2.
+    The verbs (embed, probe, ...) use it as it is; :class:`Parser` adds the
+    rest."""
+
+    def error(self, message):
+        from neuroatlas.cli import _msg
+
+        suggestions = dict(_SUGGEST)
+        _SUGGEST.clear()
+        fix = corrected_command(suggestions)
+        if fix is None:
+            fix = f"{self.prog} --help"
+            if suggestions:      # not run through `neuroatlas`: name the word instead
+                message += " (did you mean " + ", ".join(suggestions.values()) + "?)"
+        _msg.error(message, fix)
+        raise SystemExit(2)
+
+
+class Parser(ErrorParser):
     """argparse, plus: descriptions from docstrings (:func:`describe`), a
-    "did you mean" for every mistyped choice or flag, and unknown arguments
-    reported by the sub-command that received them, not by its parent."""
+    "did you mean" for every mistyped choice or flag -- printed as the
+    corrected command -- unknown arguments reported by the sub-command that
+    received them, not by its parent, and errors as ``error: ...`` with a
+    ``fix:`` line instead of the whole usage block (:class:`ErrorParser`)."""
 
     def __init__(self, *args, **kwargs):
         if kwargs.get("description"):
@@ -201,9 +265,12 @@ class Parser(argparse.ArgumentParser):
         if action.choices is not None and value not in action.choices:
             choices = [str(c) for c in action.choices]
             close = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)
-            hint = f" -- did you mean {close[0]!r}?" if close else ""
+            if close:
+                _SUGGEST[str(value)] = close[0]
+            text = f"invalid choice {value!r} (choose from {', '.join(choices)})"
+            # a sub-command's own name has no flag to name it by
             raise argparse.ArgumentError(
-                action, f"invalid choice: {value!r}{hint} (choose from {', '.join(choices)})")
+                None if isinstance(action, argparse._SubParsersAction) else action, text)
 
     def _leaf(self, namespace) -> "argparse.ArgumentParser":
         parser = self
@@ -224,19 +291,16 @@ class Parser(argparse.ArgumentParser):
 
 
 def unrecognized_message(parser: argparse.ArgumentParser, extras: Sequence[str]) -> str:
+    """``unrecognized argument: --datset siena``; a close flag is remembered
+    for the corrected command (:meth:`Parser.error`)."""
     known = [s for s in parser._option_string_actions if s.startswith("--")]
-    hints = []
     for extra in extras:
         flag = extra.split("=", 1)[0]
         if flag.startswith("-"):
             close = difflib.get_close_matches(flag, known, n=1, cutoff=0.6)
             if close:
-                hints.append((flag, close[0]))
-    if len(hints) == 1:
-        hint = f" -- did you mean {hints[0][1]}?"
-    else:
-        hint = "".join(f"; {flag}: did you mean {close}?" for flag, close in hints)
-    return f"unrecognized arguments: {' '.join(extras)}{hint}"
+                _SUGGEST[flag] = close[0]
+    return f"unrecognized argument{'s' if len(extras) > 1 else ''}: {' '.join(extras)}"
 
 
 def command_parser(name: str) -> argparse.ArgumentParser:
@@ -269,14 +333,16 @@ def _leaf_for(parser: argparse.ArgumentParser, tokens: Sequence[str]) -> argpars
 # --------------------------------------------------------------------------
 
 class _Tee:
-    """Write to a stream and a log file at once."""
+    """Write to a stream and a log file at once; the log gets no colour."""
 
     def __init__(self, stream, log):
         self._stream, self._log = stream, log
 
     def write(self, text):
+        from neuroatlas.cli._msg import ANSI
+
         self._stream.write(text)
-        self._log.write(text)
+        self._log.write(ANSI.sub("", text))
         return len(text)
 
     def flush(self):
@@ -287,8 +353,10 @@ class _Tee:
         return getattr(self._stream, name)
 
 
-def _usage_error(message: str) -> "SystemExit":
-    print(f"neuroatlas: {message}", file=sys.stderr)
+def _usage_error(message: str, fix: str = "neuroatlas --help") -> "SystemExit":
+    from neuroatlas.cli import _msg
+
+    _msg.error(message, fix)
     return SystemExit(2)
 
 
@@ -312,8 +380,11 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     """Console: WARNING and no library warnings, for every command, unless
     -v (then DEBUG and everything): the per-model INFO lines of a long run
     (backbone banners, loader lines, weight reports) are for -v and the log.
-    The --log file always gets everything at INFO, plus every traceback."""
-    fmt = logging.Formatter("%(levelname)s: %(message)s")
+    The --log file always gets everything at INFO, plus every traceback.
+    Both say ``error:`` and ``warning:`` as every other message does
+    (:class:`neuroatlas.cli._msg.LogFormatter`); only the console is coloured."""
+    from neuroatlas.cli import _msg
+
     root = logging.getLogger()
     for h in [h for h in root.handlers if getattr(h, "_neuroatlas", False)]:
         root.removeHandler(h)
@@ -324,7 +395,10 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     logging.getLogger(TRACEBACK_LOGGER).setLevel(logging.DEBUG)
 
     console = logging.StreamHandler(console_stream)
-    console.setFormatter(fmt)
+    console.setFormatter(_msg.LogFormatter(color=_msg.use_color(console_stream)))
+    # the whole text of a message the screen shows shortened: for the log
+    # (with -v the screen shows it whole in the first place)
+    console.addFilter(lambda r: r.name != _msg.FULL_LOGGER)
     if verbose:
         console.setLevel(logging.DEBUG)
     else:
@@ -334,11 +408,11 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     handlers = [console]
     if not verbose:
         hidden = _HiddenCount()
-        hidden.addFilter(lambda r: r.name != TRACEBACK_LOGGER)
+        hidden.addFilter(lambda r: r.name not in (TRACEBACK_LOGGER, _msg.FULL_LOGGER))
         handlers.append(hidden)
     if log is not None:
         to_file = logging.StreamHandler(log)
-        to_file.setFormatter(fmt)
+        to_file.setFormatter(_msg.LogFormatter(color=False))
         to_file.setLevel(logging.DEBUG)
         handlers.append(to_file)
     for h in handlers:
@@ -346,6 +420,9 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
         root.addHandler(h)
     logging.captureWarnings(True)
     return handlers
+
+
+_LOG_FIX = "neuroatlas --log FILE <command> ..."
 
 
 def _take_global_options(rest: List[str], state: dict) -> List[str]:
@@ -361,13 +438,13 @@ def _take_global_options(rest: List[str], state: dict) -> List[str]:
             state["online"] = True
         elif token == "--log":
             if i + 1 >= len(rest):
-                raise _usage_error("--log needs a file")
+                raise _usage_error("--log needs a file", _LOG_FIX)
             state["log"] = rest[i + 1]
             i += 1
         elif token.startswith("--log="):
             state["log"] = token.split("=", 1)[1]
             if not state["log"]:
-                raise _usage_error("--log needs a file")
+                raise _usage_error("--log needs a file", _LOG_FIX)
         else:
             out.append(token)
         i += 1
@@ -395,6 +472,10 @@ def _route_verbose(name: str, rest: List[str], state: dict) -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    import shlex
+
+    from neuroatlas.cli import _msg
+
     argv = list(sys.argv[1:] if argv is None else argv)
 
     state = {"verbose": False, "online": False, "log": None}
@@ -413,12 +494,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         elif flag == "--log" or flag.startswith("--log="):
             state["log"] = flag.split("=", 1)[1] if "=" in flag else (argv.pop(0) if argv else None)
             if not state["log"]:
-                raise _usage_error("--log needs a file")
+                raise _usage_error("--log needs a file", _LOG_FIX)
         else:
             close = difflib.get_close_matches(flag, ["--verbose", "--log", "--online", "--version",
                                                      "--help"], n=1)
-            hint = f" -- did you mean {close[0]}?" if close else ""
-            raise _usage_error(f"unknown option {flag!r}{hint}\n\n{USAGE}")
+            fixed = " ".join(["neuroatlas", close[0], *(shlex.quote(t) for t in argv)]) \
+                if close else "neuroatlas --help"
+            raise _usage_error(f"unknown option {flag!r}", fixed)
 
     if not argv:
         print(_help())
@@ -429,8 +511,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     if command is None:
         close = difflib.get_close_matches(name, COMMANDS, n=1) or (
             [REMOVED[name]] if name in REMOVED else [])
-        hint = f" -- did you mean `{close[0]}`?" if close else ""
-        raise _usage_error(f"unknown command {name!r}{hint}\n\n{USAGE}")
+        fixed = " ".join(["neuroatlas", close[0], *(shlex.quote(t) for t in rest)]) \
+            if close else "neuroatlas --help"
+        raise _usage_error(f"unknown command {name!r}", fixed)
     rest = _take_global_options(rest, state)
 
     from neuroatlas import catalog, config, selectors
@@ -446,6 +529,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         if not (state["online"] or command.downloads(rest)):
             config.set_offline()
         rest = _route_verbose(name, rest, state)
+        _msg.set_verbose(state["verbose"])
+        _COMMAND_LINE[:] = [name, *rest]
         if state["log"]:
             log = open(state["log"], "a", encoding="utf-8")
         handlers = _setup_logging(state["verbose"], command.report(rest), sys.stderr, log)
@@ -453,47 +538,70 @@ def main(argv: Optional[List[str]] = None) -> None:
             sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
         importlib.import_module(command.module).main(rest)
     except config.ConfigError as exc:
-        print(exc, file=sys.stderr)
+        _msg.error(exc.code if isinstance(exc.code, str) else str(exc))
         raise SystemExit(2) from None
     except (catalog.CatalogError, selectors.SelectionError, UsageError) as exc:
-        # a benchmark, dataset or model name that does not exist, a bad value: a usage error
-        print(f"error: {exc}", file=sys.stderr)
+        # a benchmark, dataset or model name that does not exist, a bad value:
+        # a usage error; a mistyped name gets the corrected command as its fix
+        corrected = corrected_command(getattr(exc, "suggest", None) or {})
+        if corrected:
+            _, lines, _ = _msg.split(str(exc))
+            _msg.error("\n".join(lines), corrected)
+        else:
+            _msg.error(str(exc))
         raise SystemExit(2) from None
     except SystemExit as exc:
         if isinstance(exc.code, str):
             # SystemExit("error: ...") from a verb: print it here, where it can
             # be captured, and exit 1 as Python itself would.
-            print(exc.code, file=sys.stderr)
+            _msg.error(exc.code)
             raise SystemExit(1) from None
         if isinstance(exc.code, int) and exc.code not in (0, 1, 2, 130):
             # a tool's own status (wget 8, nsrr 3): not part of our contract
-            print(f"neuroatlas: a step exited with status {exc.code}; reporting it as 1 "
-                  f"(a run failed)", file=sys.stderr)
+            _msg.error(f"a step exited with status {exc.code}")
             raise SystemExit(1) from None
         raise
     except KeyboardInterrupt:
-        print("\ninterrupted", file=sys.stderr)
+        print(file=sys.stderr)
+        _msg.error("interrupted")
         raise SystemExit(130) from None
+    except BrokenPipeError:
+        # `neuroatlas results ... | head`: the reader stopped reading; not an error
+        import os
+
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.__stdout__.fileno())
+        except (OSError, ValueError, AttributeError):
+            pass
+        raise SystemExit(0) from None
     except Exception as exc:
         if state["verbose"]:
             raise
         logging.getLogger(TRACEBACK_LOGGER).debug("uncaught", exc_info=True)
-        where = f"in {state['log']}" if state["log"] else "with -v or --log FILE"
-        print(f"error: {type(exc).__name__}: {exc}\n(the traceback is {where})", file=sys.stderr)
+        text = _msg.exception_text(exc)
+        head = _msg.first_sentence(text)
+        whole = " ".join(head.split()) == " ".join(text.split())
+        if state["log"]:
+            where = f"traceback in {state['log']}"
+            if not whole:
+                logging.getLogger(_msg.FULL_LOGGER).info("full message: %s", text)
+        else:
+            where = "-v: traceback" if whole else "-v: full message and traceback"
+        _msg.error(f"{head} ({where})")
         raise SystemExit(1) from None
     finally:
         root = logging.getLogger()
         hidden = sum(h.count for h in handlers if isinstance(h, _HiddenCount))
         if hidden and not command.report(rest):
-            where = f"; all of them are in {state['log']}" if state["log"] else \
-                "; --log FILE keeps them"
-            print(f"({hidden} log line(s) and library warning(s) not shown: -v shows them{where})",
-                  file=saved[1])
+            where = f"they are in {state['log']}" if state["log"] else "-v shows them"
+            _msg.note(f"{_msg.plural(hidden, 'log line')} not shown: {where}", file=saved[1])
         for h in handlers:
             root.removeHandler(h)
         for logger_name, level in levels.items():
             logging.getLogger(logger_name).setLevel(level)
         logging.captureWarnings(False)
+        _msg.set_verbose(False)
+        _COMMAND_LINE.clear()
         sys.stdout, sys.stderr = saved
         if log is not None:
             log.close()

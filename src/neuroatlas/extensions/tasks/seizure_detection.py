@@ -63,7 +63,7 @@ def _filter_nonfinite(features: np.ndarray, labels: np.ndarray, metadata: list, 
     n_dropped = int((~finite_mask).sum())
     if n_dropped > 0:
         logger.warning(
-            "Filtered %d non-finite feature rows from %s (keeping %d)",
+            "dropped %d non-finite feature rows from %s (kept %d)",
             n_dropped, split_name, int(finite_mask.sum()),
         )
     return (
@@ -195,8 +195,7 @@ def _event_metric_not_applicable(dataset_name: str, datamodule, test_meta: list)
     granularity = ((labels.get("modes") or {}).get(mode) or {}).get("granularity") \
         or labels.get("granularity")
     if granularity == "recording":
-        return (f"{dataset_name} has one label per recording: no seizure events to score "
-                f"(the paper reports AUROC and balanced accuracy for it)")
+        return f"{dataset_name} has one label per recording: no seizure events to score"
     if not test_meta or not any("recording_id" in m or "recording_idx" in m for m in test_meta):
         return "the test windows carry no recording id, so events cannot be delimited"
     return None
@@ -344,8 +343,13 @@ def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if max_iter is None:
         max_iter = PAPER_MAX_ITER
     elif int(max_iter) == _CLI_DEFAULT_MAX_ITER:
+        # Every `neuroatlas run epilepsy` hands the probe command's default
+        # here, and keeping the protocol's value is what should happen: detail
+        # for -v and the --log file, not a warning on every run.
+        logger.info("max_iter %s is the probe command's default; seizure detection keeps "
+                    "its protocol's %s (--max-iter N changes it)", max_iter, PAPER_MAX_ITER)
         notes.append(f"max_iter {max_iter} is the probe command's default; seizure detection "
-                     f"keeps its protocol's {PAPER_MAX_ITER} (pass --max-iter N to change it)")
+                     f"keeps its protocol's {PAPER_MAX_ITER} (--max-iter N changes it)")
         max_iter = PAPER_MAX_ITER
     else:
         max_iter = int(max_iter)
@@ -353,7 +357,8 @@ def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ProbeSettingsError(f"--max-iter must be 1 or more, got {max_iter}")
 
     for note in notes:
-        logger.warning(note)
+        if not note.startswith("max_iter"):
+            logger.warning(note)
     return {"c_values": c_values, "class_weight": class_weight,
             "selection_metric": metric, "max_iter": max_iter, "notes": notes}
 
@@ -560,8 +565,8 @@ def evaluate_seizure_detection(
         train_payload, val_payload, test_payload = splits["train"], splits["val"], splits["test"]
     else:
         if embed_chunk is not None:
-            print(f"[embed-chunk] {dataset_name!r} has no global embedding cache; "
-                  f"--embed-chunk ignored")
+            logger.warning("%s has no global embedding cache: --embed-chunk is ignored",
+                           dataset_name)
         payloads = {}
         for split in ("train", "val", "test"):
             payloads[split], paths = _split_payload(

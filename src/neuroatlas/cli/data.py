@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from neuroatlas.cli import Parser
+from neuroatlas.cli import Parser, _msg
 from neuroatlas.cli._table import add_format_arg, render
 
 DOMAINS = ("epilepsy", "sleep", "brain_age", "bci", "all")
@@ -42,9 +42,12 @@ def expand_targets(targets: List[str]) -> List[str]:
         else:
             import difflib
 
-            close = difflib.get_close_matches(target, [*catalog.catalog(), *DOMAINS, *specs], n=3)
-            hint = f" Did you mean {', '.join(close)}?" if close else ""
-            raise catalog.CatalogError(f"{target!r} is not a benchmark, domain or dataset.{hint}")
+            close = difflib.get_close_matches(target, [*catalog.catalog(), *DOMAINS, *specs], n=1)
+            hint = f" (did you mean {close[0]}?)" if close else ""
+            raise catalog.CatalogError(
+                f"{target!r} is not a benchmark, domain or dataset{hint}\n"
+                f"fix: neuroatlas list benchmarks, or neuroatlas list datasets",
+                suggest={target: close[0]} if close else None)
         out.extend(s for s in slugs if s not in out)
     return out
 
@@ -84,12 +87,17 @@ def cmd_status(args) -> int:
 
     slugs = expand_targets(args.targets)
     machine = args.format in ("json", "csv")
-    rows, notes, missing = [], {}, []
+    rows, notes, missing, tokenless = [], {}, [], []
     for slug in slugs:
         st = data.status(slug)
         rows.append(_row(st, args.verbose, machine))
-        if st.notes:
-            notes[len(rows) - 1] = st.notes
+        lines = list(st.notes)
+        if args.format == "table" and data.NO_NSRR_TOKEN in lines:
+            # one line under the table for all of them, not one per row
+            lines.remove(data.NO_NSRR_TOKEN)
+            tokenless.append(slug)
+        if lines:
+            notes[len(rows) - 1] = lines
         if not st.found and st.path is not None:
             missing.append(st)
     columns = ["dataset", "access", "state", "download", "map"]
@@ -104,29 +112,30 @@ def cmd_status(args) -> int:
         return 0
     counts = Counter(str(r["state"]).split(" (")[0] for r in rows)
     if len(rows) > 1:
-        print("\n" + "   ".join(f"{k} {v}" for k, v in counts.most_common()))
+        print("\n" + _msg.counts(len(rows), "datasets", counts.most_common()))
     # Explain only what is not obvious: "found" needs no legend (-v shows all).
     explain = [s for s in counts if s in data.STATES and (args.verbose or s != "found")]
-    if explain:
-        print()
-        for state in explain:
-            print(f"  {state:<14} {data.STATES[state]}")
+    for state in explain:
+        print(f"  {state:<14} {data.STATES[state]}")
     root = config.get("data_root")
     if args.verbose:
-        print("map: yes = a channel map ships for the dataset (configs/channel_maps/<dataset>.yaml)")
+        print("  map: yes      a channel map ships for it (configs/channel_maps/<dataset>.yaml)")
+    if missing and not args.verbose:
+        # where each was looked for, and the setting that points it at a copy
+        print("\nnot found here (to use your own copy: neuroatlas config set <setting> DIR):")
+        width = max(len(st.slug) for st in missing)
+        places = [_data_rel(st.path) for st in missing]
+        wide = max(len(w) for w in places)
+        for st, where in zip(missing, places):
+            key = (st.setting or ("$MNE_DATA (export MNE_DATA=DIR moves it)"
+                                  if st.kind == "moabb" else ""))
+            print(f"  {st.slug:<{width}}  {where:<{wide}}  {key}".rstrip())
     shown = [_data_rel(st.path) for st in missing] if not args.verbose else []
     if args.verbose or any(w.startswith("$DATA") for w in shown):
-        print(f"$DATA = your data root: "
-              f"{root if root else '(not set: neuroatlas config init --data-root DIR)'}")
-    if missing and not args.verbose:
-        print("\nnot found (where it was looked for; the setting points it at your copy):")
-        width = max(len(st.slug) for st in missing)
-        for st in missing:
-            where = _data_rel(st.path)
-            move = (f"   neuroatlas config set {st.setting} /your/copy" if st.setting
-                    else "   (MOABB: export MNE_DATA=/your/mne_data to move it)"
-                    if st.kind == "moabb" else "")
-            print(f"  {st.slug:<{width}}  {where}{move}")
+        print(f"$DATA = {root if root else '(no data root: neuroatlas config init --data-root DIR)'}")
+    if tokenless:
+        _msg.note(f"no NSRR token: {', '.join(tokenless)} cannot be downloaded yet",
+                  "neuroatlas config token nsrr")
     return 0
 
 
@@ -138,17 +147,18 @@ def cmd_download(args) -> int:
         plan = data.plan_download(slug, mirror=args.mirror, keep_archive=args.keep_archive)
         if args.dry_run:
             if plan.handler in ("manual", "internal"):
-                print(f"{slug}: {plan.handler} — {plan.message}")
+                for line in data.describe_manual(plan):
+                    print(line)
                 continue
             why = data.refusal(plan)
             for line in data.describe(plan):
                 print(line)
             if why:
-                print(f"error: {slug}: {why}")
+                _msg.error(f"{slug}: {why}")
                 status = max(status, 2)
             else:
                 size = f", about {plan.size_gb:g} GB" if plan.size_gb else ""
-                print(f"{slug}: dry-run{size}; nothing was transferred")
+                print(f"{slug}: dry run{size}; nothing was transferred")
             continue
         status = max(status, data.run_download(plan))
     return status
@@ -162,24 +172,20 @@ def cmd_prepare(args) -> int:
         prepare.main(["--list"])
         return 0
     if not args.dataset:
-        print("error: name a dataset, e.g. `neuroatlas data prepare bnci2014_001`, "
-              "or --list", file=sys.stderr)
+        _msg.error("name a dataset", "neuroatlas data prepare --list names those with a "
+                                     "build step")
         return 2
     slug = expand_targets([args.dataset])
     if len(slug) != 1:
-        print(f"error: `data prepare` takes one dataset; {args.dataset!r} is "
-              f"{len(slug)} of them", file=sys.stderr)
+        _msg.error(f"data prepare takes one dataset; {args.dataset!r} is {len(slug)} of them")
         return 2
     slug = slug[0]
     acq = data.acquisition(slug)
     if prepare.builder_for(slug) is None:
         if acq.get("prepared_only"):
-            print(f"error: {slug} cannot be prepared here. "
-                  + " ".join(str(acq["prepared_only"]).split()), file=sys.stderr)
+            _msg.error(f"{slug} cannot be prepared here: " + data.manifest_text(acq["prepared_only"]))
             return 2
-        print(f"nothing to prepare: {slug} reads its raw corpus directly, with no build "
-              f"step. Run it as it is (`neuroatlas run <benchmark> --dataset {slug}`); "
-              f"`neuroatlas data status {slug}` says whether its data is there.")
+        print(f"nothing to prepare: {slug} reads its raw data directly (no build step)")
         return 0
 
     raw = data.status(slug)
@@ -191,10 +197,9 @@ def cmd_prepare(args) -> int:
     if not raw.found and not args.dry_run:
         # Refuse before the builder runs: a MOABB builder would otherwise
         # download the corpus itself, as a side effect of `prepare`.
-        print(f"error: {slug}'s raw data is not there ({raw.state}: {_data_rel(raw.path)}). "
-              f"Run `neuroatlas data download {slug}` first"
-              + (f", or point at your copy with `neuroatlas config set {raw.setting} DIR`"
-                 if raw.setting else "") + ".", file=sys.stderr)
+        _msg.error(f"{slug}: no raw data to prepare from ({raw.state}: {_data_rel(raw.path)})",
+                   f"neuroatlas data download {slug}"
+                   + (f", or neuroatlas config set {raw.setting} DIR" if raw.setting else ""))
         return 2
     # Quiet MNE's per-file INFO lines (O-8); the builder prints its own
     # progress. MNE reads the variable when imported, which status() may
@@ -212,8 +217,8 @@ def cmd_prepare(args) -> int:
     if args.dry_run:
         argv.append("--dry-run")
         if not raw.found:
-            print(f"note: the raw data is not there yet ({raw.state}); the real run would "
-                  f"refuse until `neuroatlas data download {slug}` has run")
+            _msg.warning(f"{slug}: no raw data yet ({raw.state}); the real run refuses",
+                         f"neuroatlas data download {slug}")
     prepare.main(argv)
     if not args.dry_run:
         after = data.status(slug)

@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
+from neuroatlas.cli import ErrorParser
 from neuroatlas.benchmarking_helpers import BenchmarkRunner, seed_everything
 from neuroatlas.benchmarking_helpers.runtime.cache import SHARED_EMBEDDING_CACHE_ROOT
 from neuroatlas.benchmarking_helpers.registry.discovery import (
@@ -154,7 +155,7 @@ def _parse_checkpoints(pairs: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ErrorParser(
         prog="neuroatlas embed",
         description="Extract frozen-backbone embeddings for any registered dataset.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -273,8 +274,8 @@ def _resolve_dataset(slug: str):
         near = [s for s in slugs if slug.lower() in s.lower()][:8]
         near = near or difflib.get_close_matches(slug, slugs, n=5, cutoff=0.6)
         if near and "--dataset" not in message:
-            message += "\nDid you mean: " + ", ".join(near)
-        raise SystemExit(f"error: {message}\nRun with --list-datasets to see them all.")
+            message += " (did you mean " + ", ".join(near) + "?)"
+        raise SystemExit(f"error: {message}\nfix: neuroatlas embed --list-datasets names them all")
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
@@ -391,13 +392,9 @@ def main(argv: List[str] | None = None) -> None:
     with embedding_pooling(args.pooling):
         results = runner.run()
 
-    failures = [r for r in results if r.failure is not None]
-    for r in failures:
-        print(f"FAIL {r.dataset_name}/{r.checkpoint_id}: "
-              f"{r.failure.code}: {r.failure.message}", file=sys.stderr)
-    print(f"[embed] dataset={args.dataset} models={benchmark['models'] or 'ALL'} "
-          f"cells={len(results)} failed={len(failures)} cache={benchmark['cache_root']}")
-    if failures:
+    from neuroatlas.entrypoints._common import report_results
+
+    if report_results("embed", results, f"cache: {benchmark['cache_root']}"):
         sys.exit(1)
 
 

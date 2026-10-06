@@ -64,9 +64,8 @@ def load_sleepyco_model(checkpoint_path: str | Path, device: str | None = None) 
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
         raise FileNotFoundError(
-            f"SleePyCo checkpoint not found at {checkpoint_path}. Fetch it with "
-            "`neuroatlas models download sleepyco_shhs_fold0` (ckpt_fold-01.pth "
-            "from the authors' Google Drive zip)."
+            f"no SleePyCo weights at {checkpoint_path}\n"
+            "fix: neuroatlas models download sleepyco_shhs_fold0"
         )
     state_dict = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     if isinstance(state_dict, dict) and "model_state_dict" in state_dict:

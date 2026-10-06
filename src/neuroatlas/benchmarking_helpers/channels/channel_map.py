@@ -109,10 +109,11 @@ class ChannelMap:
         if self.is_skip(model_family):
             return "skip", self.notes.get(model_family, "")
         if not self.has_entry(model_family):
+            # what is wrong, then (its own line) the fix: neuroatlas.cli._msg
             return "invalid", (
-                f"channel map {self.dataset!r} has no entry for model {model_family!r}: "
-                f"add a mapping, `mode: label_pass_through` or `skip` to "
-                f"configs/channel_maps/{self.dataset}.yaml")
+                f"the {self.dataset} channel map has no entry for the {model_family} family\n"
+                f"fix: add one to configs/channel_maps/{self.dataset}.yaml: a mapping, "
+                f"`mode: label_pass_through` or `skip`")
         if model_family in self.pass_through:
             return "applied", "pass-through"
         return "applied", ""

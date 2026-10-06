@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import contextlib
 import re
-import sys
 from typing import Any, Dict, List, Optional
 
 from neuroatlas.cli import MODELS_HELP, Parser
 from neuroatlas.cli._table import add_format_arg, render
 
 _FORWARD = re.compile(r"^\(([\d, ]*)\) (finite|constant|(\d+) non-finite)$")
+#: a row's fix that is only a weights download (gathered under the table)
+_DOWNLOAD_FIX = re.compile(r"^\s*fix: neuroatlas models download (\S+)$")
 
 
 def build_parser() -> Parser:
@@ -60,19 +61,56 @@ def _row(pair) -> Dict[str, Any]:
             "error": getattr(pair, "message", None)}
 
 
+class _LogLines:
+    """A stdout for the models while they load: what they print (REVE's hub
+    code: "flash_attn not found ...") becomes INFO log lines -- shown with
+    -v, kept by --log -- instead of landing in the table or the JSON."""
+
+    def __init__(self, logger):
+        self._logger, self._buffer = logger, ""
+
+    def write(self, text):
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self._logger.info("%s", line)
+        return len(text)
+
+    def flush(self):
+        if self._buffer.strip():
+            self._logger.info("%s", self._buffer)
+        self._buffer = ""
+
+
 def main(argv: Optional[List[str]] = None) -> None:
+    import logging
+
     from neuroatlas.check import check
+    from neuroatlas.cli import _msg
 
     args = build_parser().parse_args(argv)
-    # JSON and CSV must parse: whatever the models print while they load
-    # (REVE's hub code prints "flash_attn not found ...") goes to stderr.
-    quiet = contextlib.redirect_stdout(sys.stderr) if args.format != "table" \
-        else contextlib.nullcontext()
-    with quiet:
+    printed = _LogLines(logging.getLogger("neuroatlas.check"))
+    with contextlib.redirect_stdout(printed):
         pairs = check(args.benchmark, args.models, args.dataset, args.variant,
                       num_workers=args.num_workers)
+    printed.flush()
     rows = [_row(p) for p in pairs]
     notes = {i: list(p.notes) for i, p in enumerate(pairs) if p.notes}
+    downloads: List[str] = []
+    if args.format == "table":
+        # one `models download` for every pair skipped for its weights, under
+        # the table, rather than one fix line per row (JSON keeps each row's)
+        for lines in notes.values():
+            for line in list(lines):
+                match = _DOWNLOAD_FIX.match(line)
+                if match:
+                    downloads += [i for i in match.group(1).split(",") if i not in downloads]
+        if len(downloads) > 1:
+            for i, lines in notes.items():
+                notes[i] = [line for line in lines if not _DOWNLOAD_FIX.match(line)]
+        else:
+            downloads = []
     render(rows, ["dataset", "model", "data", "weights", "channel_map", "forward", "time"],
            args.format, notes, extra=["result", "shape", "finite", "seconds", "error"])
     counts: Dict[str, int] = {}
@@ -82,18 +120,24 @@ def main(argv: Optional[List[str]] = None) -> None:
     nothing = ok == 0 and errors == 0 and skipped > 0
     if args.format == "table":
         total = sum(p.seconds or 0 for p in pairs)
-        print(f"pairs: {len(pairs)}   forward passes: {ok}   errors: {errors}   "
-              f"skipped: {skipped}   n/a: {counts.get('n/a', 0)}   time: {total:.1f}s")
+        print(_msg.counts(len(pairs), "pair" if len(pairs) == 1 else "pairs",
+                          [("ok", ok), ("error", errors), ("skipped", skipped),
+                           ("n/a", counts.get("n/a", 0))],
+                          keep_zero=("ok", "error", "skipped", "n/a"))
+              + f" ({total:.1f} s)")
+        if downloads:
+            print(f"download the {len(downloads)} missing weights: "
+                  f"neuroatlas models download {','.join(downloads)}")
         from neuroatlas import catalog
 
         left_out = catalog.load(args.benchmark).left_out_note(args.models)
         if left_out:
-            print(left_out)
+            _msg.note(left_out)
     if nothing:
-        print(f"nothing was checked: no pair could be pushed through ({skipped} skipped for "
-              f"missing data or weights; the indented lines under each say what to fetch)", file=sys.stderr)
+        _msg.error(f"nothing was checked: {'the' if skipped == 1 else 'all'} "
+                   f"{_msg.plural(skipped, 'pair')} skipped (the lines above say what "
+                   f"to fetch)")
     elif args.strict and skipped and not errors:
-        print(f"--strict: {skipped} pair(s) skipped for missing data or weights",
-              file=sys.stderr)
+        _msg.error(f"{_msg.plural(skipped, 'pair')} skipped (--strict)")
     if errors or nothing or (args.strict and skipped):
         raise SystemExit(1)

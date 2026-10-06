@@ -52,18 +52,16 @@ PACKAGES = {
 _NOTES = {
     "reve_pretrained": "REVE Responsible Use License v1.0 (https://huggingface.co/brain-bzh/reve-base): "
                        "downloading it accepts the licence",
-    "core_sleep_shhs_fold0": "a release asset of a private repository: needs a GitHub token that can "
-                             "read kkontras/NeuroAtlas ($GITHUB_TOKEN or ~/.neuroatlas/github_token)",
-    "sleep_transformer_shhs_fold0": "a release asset of a private repository: needs a GitHub token that "
-                                    "can read kkontras/NeuroAtlas ($GITHUB_TOKEN or "
-                                    "~/.neuroatlas/github_token)",
+    "core_sleep_shhs_fold0": "a private release asset: needs a GitHub token that can read "
+                             "kkontras/NeuroAtlas (neuroatlas config token github)",
     "seizure_transformer_pretrained": "pulled out of the authors' Docker image yujjio/seizure_transformer "
                                       "(streams up to 3.4 GB of image layers; keeps the 168 MB model.pth)",
-    "eegpt_pretrained": "upstream's Figshare share is browser-only; fetched from the bit-identical hub "
-                        "copy eeg-telecom-paris/eegpt-large-official",
+    "eegpt_pretrained": "fetched from the bit-identical hub copy eeg-telecom-paris/eegpt-large-official "
+                        "(upstream's Figshare share is browser-only)",
 }
 _NOTES["core_sleep_shhs_fold0_seq1"] = _NOTES["core_sleep_shhs_fold0"]
-_NOTES["sleep_transformer_shhs_fold0_seq1"] = _NOTES["sleep_transformer_shhs_fold0"]
+_NOTES["sleep_transformer_shhs_fold0"] = _NOTES["core_sleep_shhs_fold0"]
+_NOTES["sleep_transformer_shhs_fold0_seq1"] = _NOTES["core_sleep_shhs_fold0"]
 
 
 @dataclass
@@ -213,6 +211,37 @@ def status(spec) -> ModelStatus:
         st.notes.insert(0, f"{package} is not installed: {PACKAGES[spec.model_family][2]}"
                            f" (weights: {st.weights})")
     return st
+
+
+#: Checkpoints whose download needs a GitHub token (private release assets).
+_GITHUB_TOKEN_NEEDED = ("core_sleep_shhs_fold0", "core_sleep_shhs_fold0_seq1",
+                        "sleep_transformer_shhs_fold0", "sleep_transformer_shhs_fold0_seq1")
+
+
+def weights_problem(st: ModelStatus) -> Optional[tuple]:
+    """``(what, fix)`` when this checkpoint cannot be loaded here, else None:
+    what `check`, `run` and `submit` say for a pair they do not run."""
+    if st.ready:
+        return None
+    if st.state == "package missing":
+        dist, command = PACKAGES[st.family][1], PACKAGES[st.family][2]
+        return f"{dist} is not installed", command
+    state = getattr(st, "weights", None) or st.state
+    incomplete = next((n for n in st.notes if n.startswith("incomplete")), None)
+    if state in ("auto", "hub"):
+        what = "weights not downloaded" + (f" ({incomplete})" if incomplete else "")
+        ident = getattr(st, "identifier", None) or "<checkpoint>"
+        fix = f"neuroatlas models download {ident}"
+        if ident in _GITHUB_TOKEN_NEEDED:
+            fix = f"neuroatlas config token github, then {fix} (a private release asset)"
+        return what, fix
+    if state == "manual":
+        manual = next((n for n in st.notes if n.startswith(("get it from", "no public source"))),
+                      None)
+        return "weights not here (no automatic download)", manual
+    if state == "planned":
+        return "the wrapper is not ready", None
+    return f"weights {state}", None
 
 
 def download(spec) -> ModelStatus:

@@ -51,6 +51,26 @@ def resolve_models_arg(value: Optional[str]) -> List[str]:
         raise SystemExit(f"error: {exc}") from None
 
 
+def report_results(verb: str, results, where: str) -> bool:
+    """The closing lines of `embed` and `probe`: one ``error:`` line per failed
+    (dataset, model, fold) -- its message's first sentence, whole with -v --
+    then a line of counts. A failure the runner already reported as it
+    happened (``runtime_failure``) is counted, not repeated. Returns whether
+    any failed."""
+    from neuroatlas.cli import _msg
+
+    failures = [r for r in results if r.failure is not None]
+    for r in failures:
+        if r.failure.code == "runtime_failure":
+            continue
+        fold = (r.metadata or {}).get("fold")
+        where_pair = f"{r.dataset_name}/{r.checkpoint_id}" + (
+            f" (fold {fold})" if fold not in (None, "all") else "")
+        _msg.error(f"{where_pair}: {_msg.brief(r.failure.message)} [{r.failure.code}]")
+    print(f"{verb}: {len(results) - len(failures)} ok, {len(failures)} failed ({where})")
+    return bool(failures)
+
+
 def apply_task_override(config: Dict[str, Any], args: argparse.Namespace) -> None:
     if getattr(args, "task", None):
         config["task"] = {"name": args.task}

@@ -27,9 +27,10 @@ acquisition:
     DREAMER (Katsigiannis & Ramzan 2018) is a restricted Zenodo record: access
     is granted on request by its owners.
   prepared_only: >
-    The benchmark reads the preprocessed pickle the published embeddings were
-    built from; no script in this repository builds it from DREAMER.mat. Ask
-    the authors for DREAMER_valence_preprocessed_*.pkl and set dreamer_valence.preprocessed_path to it.
+    the benchmark reads the preprocessed pickle the published embeddings were
+    built from; no script in this repository builds it from DREAMER.mat.
+    fix: ask the authors for DREAMER_valence_preprocessed_*.pkl, then
+    neuroatlas config set dreamer_valence.preprocessed_path FILE
 
 signal:
   notch_freq: 50.0

@@ -3,7 +3,6 @@ extract embeddings where missing, fit the probes, write the results."""
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -78,9 +77,10 @@ _HUB_ID = re.compile(r"^[\w.-]+/[\w.-]+$")
 def _overrides(pairs: List[str], selected: List[str]) -> List[str]:
     """ID.KEY=VALUE -> the verbs' ``--checkpoint ID=PATH``, every value
     checked before any work starts: a bad one is a usage error (exit 2)."""
-    from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
-
     import difflib
+
+    from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
+    from neuroatlas.cli import _msg
 
     specs = {s.identifier: s for s in checkpoint_registry()}
     families = {s.model_family: s for s in specs.values()}
@@ -89,21 +89,21 @@ def _overrides(pairs: List[str], selected: List[str]) -> List[str]:
         target, sep, value = text.partition("=")
         ident, dot, key = target.partition(".")
         if not (sep and dot and ident and key and value):
-            raise UsageError(f"--checkpoint-override wants ID.KEY=VALUE, got {text!r}")
+            raise UsageError(f"--checkpoint-override wants ID.KEY=VALUE, got {text!r}\n"
+                             f"fix: --checkpoint-override ID.checkpoint_path=/my/weights")
         if key != "checkpoint_path":
             raise UsageError(f"--checkpoint-override {text}: only checkpoint_path can be "
-                             f"overridden per run for now (got {key!r}); edit the registry "
-                             f"for anything else")
+                             f"overridden, not {key!r}")
         spec = specs.get(ident) or families.get(ident)
         if spec is None:
             close = difflib.get_close_matches(ident, [*specs, *families], n=1)
-            hint = f" Did you mean {close[0]}?" if close else ""
+            hint = f" (did you mean {close[0]}?)" if close else ""
             raise UsageError(f"--checkpoint-override {text}: no checkpoint or family "
-                             f"{ident!r}.{hint}")
+                             f"{ident!r}{hint}")
         hits = [m for m in selected if m == ident or specs[m].model_family == ident]
         if not hits:
-            print(f"warning: --checkpoint-override {text}: {ident} is not among the selected "
-                  f"models ({', '.join(selected)}), so it changes nothing", file=sys.stderr)
+            _msg.warning(f"--checkpoint-override {text} changes nothing: {ident} is not "
+                         f"among the selected models ({', '.join(selected)})")
         path = Path(value).expanduser()
         if not path.exists():
             if not (spec.source_type == "huggingface" and _HUB_ID.match(value)):
@@ -166,22 +166,41 @@ def plan_notes(p, refused_partial: bool) -> List[str]:
     """The lines a plan's row carries (its `note` in machine formats). The
     plan's own notes come first: a map that fails to load, the pairs the map
     has no entry for (invalid, not run), data that is not here."""
+    from neuroatlas.cli import _msg
+
     lines = list(p.notes)
     if refused_partial:
-        lines.append("a half-finished download: `run` refuses it unless --allow-partial")
+        lines += _msg.lines("warning", "a half-finished download: run refuses it",
+                            f"neuroatlas data download {p.dataset}, or add --allow-partial")
     if p.skipped:
-        lines.append(f"not applicable (the channel map skips them): {', '.join(p.skipped)}")
+        lines += _msg.lines("n/a", f"{name_ids(p.skipped)} (the channel map skips them)")
     return lines
+
+
+def name_ids(ids: List[str]) -> str:
+    """Checkpoint ids for a message: themselves when few, else by family
+    (``eegnetv4 (12 checkpoints)``); JSON keeps every id."""
+    if len(ids) <= 3:
+        return ", ".join(ids)
+    from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
+
+    family = {s.identifier: s.model_family for s in checkpoint_registry()}
+    groups: dict = {}
+    for i in ids:
+        groups.setdefault(family.get(i, i), []).append(i)
+    return ", ".join(f"{f} ({len(members)} checkpoints)" if len(members) > 1 else members[0]
+                     for f, members in groups.items())
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     from neuroatlas import catalog, run as runmod
+    from neuroatlas.cli import _msg
 
     args = build_parser().parse_args(argv)
     if args.checkpoint_override and not args.cache_root:
-        raise UsageError("--checkpoint-override needs --cache-root: embeddings are cached "
-                         "by checkpoint id, so the old cache would be read as if it came from "
-                         "the new weights")
+        raise UsageError("--checkpoint-override needs --cache-root (the embedding cache is "
+                         "keyed by checkpoint id, not by its weights)\n"
+                         "fix: add --cache-root DIR, a folder for this run's embeddings")
     output_root = Path(args.output_root).expanduser().resolve() if args.output_root else None
     bench = catalog.load(args.benchmark)
     selected = bench.select_models(args.models)
@@ -193,11 +212,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     incomplete = _incomplete(plans)
     if incomplete and not args.allow_partial and not args.dry_run:
+        names = " ".join(p.dataset for p in incomplete)
         raise UsageError(
-            "refusing to run on a half-finished download: "
+            "half-finished download: "
             + "; ".join(f"{p.dataset} is {p.data}" for p in incomplete)
-            + ". Finish it (`neuroatlas data download <dataset>`, then `neuroatlas data status "
-              "<dataset>`), or pass --allow-partial to run on what is there.")
+            + f"\nfix: neuroatlas data download {names}, or add --allow-partial to run on "
+              f"what is there")
     restricted = bool(args.debug or args.folds)
     rows: List[dict] = []
     notes = {}
@@ -217,14 +237,14 @@ def main(argv: Optional[List[str]] = None) -> None:
                       "embed_command", "probe_command"],
                labels={"n_not_applicable": "n/a", "n_invalid": "invalid"})
     if left_out and args.format == "table":
-        print(f"\n{left_out}")
+        _msg.note(left_out)
     if args.dry_run:
         if args.format == "table":
             if any(r["folds"] == FIXED_SPLIT for r in rows):
-                print(f"\n{FIXED_SPLIT}: the cohort ships one train/val/test split rather than "
-                      f"folds, so it runs once per model and has no spread.")
+                print(f"\n{FIXED_SPLIT}: one train/val/test split, so one run per model "
+                      f"and no spread")
             if any(r["folds"].startswith("LOSO") for r in rows):
-                print("LOSO (N): leave-one-subject-out, one fold per subject.")
+                print("LOSO (N): leave-one-subject-out, one fold per subject")
             print()
             for p, r in zip(plans, rows):
                 if r["embed_command"]:
@@ -241,15 +261,23 @@ def main(argv: Optional[List[str]] = None) -> None:
         extra_embed=overrides, extra_probe=overrides, num_workers=args.num_workers)
     kept = summary.get("kept", 0)
     invalid = summary.get("invalid", 0)
-    print(f"\nruns this time: ok {summary['ok']}   failed {summary['failed']}   "
-          f"n/a {summary['n/a']}" + (f"   invalid {invalid}" if invalid else "")
-          + (f"   (results.json also keeps {kept} earlier result(s), not re-run)" if kept else ""))
+    total = summary["ok"] + summary["failed"] + summary["n/a"] + invalid
+    print("\n" + _msg.counts(total, "run" if total == 1 else "runs",
+                             [("ok", summary["ok"]), ("failed", summary["failed"]),
+                              ("n/a", summary["n/a"]), ("invalid", invalid)],
+                             keep_zero=("ok", "failed", "n/a"))
+          + (f"; results.json also keeps {_msg.plural(kept, 'earlier result')}" if kept else ""))
     if invalid:
         pairs = [f"{p.dataset}/{m}" for p in plans for m in p.invalid]
-        print(f"invalid, not run (the dataset's channel map has no entry for the model's "
-              f"family; `neuroatlas check` reports them too): {', '.join(pairs)}")
+        from neuroatlas.benchmarking_helpers.channels.channel_map import _default_yaml_path
+
+        maps = sorted({_default_yaml_path(p.dataset).name for p in plans if p.invalid})
+        _msg.warning(f"invalid, not run: {', '.join(pairs)} (the channel map has no entry "
+                     f"for the model's family)",
+                     f"add the family to configs/channel_maps/{', '.join(maps)}: a mapping, "
+                     f"`mode: label_pass_through` or `skip`")
     if summary["datasets_failed"]:
-        print(f"datasets that failed before any result: {', '.join(summary['datasets_failed'])}")
+        _msg.error(f"failed before any result: {', '.join(summary['datasets_failed'])}")
     if plans:
         from neuroatlas import _paths
 

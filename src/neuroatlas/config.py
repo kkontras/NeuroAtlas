@@ -22,7 +22,6 @@ every loader without each one learning about it.
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -83,7 +82,9 @@ _WARNED: set = set()
 def _warn_once(message: str) -> None:
     if message not in _WARNED:
         _WARNED.add(message)
-        print(f"warning: {message}", file=sys.stderr)
+        from neuroatlas.cli import _msg
+
+        _msg.warning(message)
 
 
 def unknown_settings(data: Dict[str, Any]) -> List[str]:
@@ -98,18 +99,19 @@ def _unknown_text(path: Path, unknown: List[str]) -> str:
     for key in unknown:
         close = difflib.get_close_matches(key, [*SETTINGS, *_OTHER_KEYS], n=1)
         hints.append(f"{key} (did you mean {close[0]}?)" if close else key)
-    return (f"{path} has unknown settings: {', '.join(hints)}. Remove "
-            f"{'it' if len(unknown) == 1 else 'them'} with `neuroatlas config unset "
-            f"{unknown[0]}`{' (one per key)' if len(unknown) > 1 else ''}")
+    return (f"{path}: unknown setting{'s' if len(unknown) > 1 else ''} {', '.join(hints)}\n"
+            f"fix: " + "; ".join(f"neuroatlas config unset {key}" for key in unknown))
 
 
-def load_file(path: Optional[Path] = None, strict: bool = True) -> Dict[str, Any]:
+def load_file(path: Optional[Path] = None, strict: bool = True,
+              warn: bool = True) -> Dict[str, Any]:
     """The config file as written, or ``{}`` when there is none.
 
     ``strict`` (every command but ``config``): an unknown setting is an error,
     because a run that silently ignored a misspelt ``cahce_root`` would write
     somewhere the user did not ask for. The ``config`` commands load it
     leniently -- warn and carry on -- since they are how it gets fixed.
+    ``warn=False``: not even that (``config show`` reports it itself).
     """
     import yaml
 
@@ -119,28 +121,35 @@ def load_file(path: Optional[Path] = None, strict: bool = True) -> Dict[str, Any
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as exc:
-        raise ConfigError(f"error: {path} is not valid YAML: {exc}") from None
+        where = getattr(exc, "problem_mark", None)
+        line = f" (line {where.line + 1})" if where is not None else ""
+        raise ConfigError(f"error: {path} is not valid YAML{line}: "
+                          f"{getattr(exc, 'problem', None) or exc}") from None
     if not isinstance(data, dict):
-        raise ConfigError(f"error: {path} must be a mapping of settings, got {type(data).__name__}")
+        raise ConfigError(f"error: {path} must be a mapping of settings, not a "
+                          f"{type(data).__name__}\nfix: neuroatlas config init --force "
+                          f"--data-root DIR rewrites it")
     unknown = unknown_settings(data)
     if unknown:
         if strict:
             raise ConfigError(f"error: {_unknown_text(path, unknown)}")
-        _warn_once(_unknown_text(path, unknown))
+        if warn:
+            _warn_once(_unknown_text(path, unknown))
     paths = data.get("dataset_paths") or {}
     if not isinstance(paths, dict) or not all(isinstance(v, dict) for v in paths.values()):
-        message = (f"{path}: dataset_paths must map a dataset to its keys, e.g.\n"
-                   f"  dataset_paths:\n    ucddb:\n      data_root: /mnt/ucddb")
+        message = (f"{path}: dataset_paths must map each dataset to its keys\n"
+                   f"fix: write it as dataset_paths: {{ucddb: {{data_root: /mnt/ucddb}}}}, "
+                   f"or neuroatlas config set ucddb.data_root /mnt/ucddb")
         if strict:
             raise ConfigError(f"error: {message}")
-        _warn_once(message + "\n  (ignored until fixed)")
+        _warn_once(message.replace("\n", " (ignored until fixed)\n", 1))
         data = {k: v for k, v in data.items() if k != "dataset_paths"}
         paths = {}
     for slug, block in paths.items():
         problem = dataset_key_problem(str(slug), [str(k) for k in block])
         if problem:
-            _warn_once(f"{path}: {problem} -- it has no effect; "
-                       f"`neuroatlas config unset {slug}.{next(iter(block), 'KEY')}` removes it")
+            _warn_once(f"{path}: {problem}; it has no effect\n"
+                       f"fix: neuroatlas config unset {slug}.{next(iter(block), 'KEY')}")
     return data
 
 
@@ -192,17 +201,16 @@ def dataset_key_problem(slug: str, keys: List[str]) -> Optional[str]:
     valid = dataset_path_keys(slug)
     if valid is None:
         close = difflib.get_close_matches(slug, known_dataset_slugs(), n=3)
-        hint = f" Did you mean {', '.join(close)}?" if close else ""
-        return f"{slug!r} is not a dataset NeuroAtlas knows.{hint}"
+        hint = f" (did you mean {', '.join(close)}?)" if close else ""
+        return f"no dataset {slug!r}{hint}"
     for key in keys:
         if key in valid:
             continue
         if not valid:
-            return (f"{slug} reads no path from the settings (MOABB datasets live under "
-                    f"$MNE_DATA; see `neuroatlas data status {slug}`)")
+            return f"{slug} reads no path from the settings (a MOABB dataset: it lives under $MNE_DATA)"
         close = difflib.get_close_matches(key, valid, n=1)
-        hint = f" Did you mean {close[0]}?" if close else ""
-        return f"{slug} has no path key {key!r}.{hint} Its keys: {', '.join(valid)}"
+        hint = f" (did you mean {close[0]}?)" if close else ""
+        return f"{slug} has no path key {key!r}{hint}; its keys: {', '.join(valid)}"
     return None
 
 
