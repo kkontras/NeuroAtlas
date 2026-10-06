@@ -141,7 +141,11 @@ every cluster job, runs with downloads switched off
 at once, by name, with the command that fetches it, instead of stalling a
 job halfway. `neuroatlas --online <command>` lifts that for one invocation;
 global options (`--online`, `--log FILE`, `-v`) may stand before or after
-the command. With `--online`, `run` fetches a missing Hugging Face or
+the command. On screen every command shows its own output, progress bars
+and warnings; the libraries' INFO lines (each model's loading banner, the
+loader's per-dataset line, weight reports) and Python warnings appear only
+with `-v`, and a closing line says how many were left out. `--log FILE`
+keeps all of it. With `--online`, `run` fetches a missing Hugging Face or
 release checkpoint itself; `check` still downloads nothing.
 
 The rule covers MOABB too: offline, a MOABB dataset that is not all in the
@@ -661,9 +665,9 @@ neuroatlas results sleep_stage 'runs/old/**/results.json' --format md
 
 ```
 $ neuroatlas results sleep_stage
-sleep_stage: balanced_accuracy, mean ± std (population, as in the paper) over the folds that succeeded; folds = succeeded/protocol; normalized: 0 = dummy, 1 = perfect
-dataset             model            mean   std    folds  normalized  cohen_kappa  macro_f1
-sleep_edf_expanded  biot_pretrained  0.657  0.014  5/5    0.571       0.749        0.661
+sleep_stage: balanced accuracy, higher is better; mean ± std over folds; normalized: 0 = chance, 1 = perfect
+dataset             model            bal_acc  ±      folds  normalized  kappa  macro_F1
+sleep_edf_expanded  biot_pretrained  0.657    0.014  5/5    0.571       0.749  0.661
 ```
 
 `results` reads every `results.json` under `<output root>/<benchmark>/`
@@ -673,9 +677,12 @@ folders and quoted globs you name. One row per dataset × variant × model; a
 (`run --variant per_patch` writes to `<dataset>/per_patch/`), and
 `--variant NAME` shows that variant's rows only:
 
-- `mean`, `std`: the headline metric over the folds that succeeded. `std`
-  is the population standard deviation (n, numpy's default), the convention
-  of every ± in the paper; with one fold it is n/a.
+- The first two numbers are the headline metric over the folds that
+  succeeded: its mean, under the metric's name (`bal_acc`, `AUROC(window)`,
+  `MAE(years)`, ...), and `±`, the population standard deviation (numpy's
+  default); with one fold it is n/a. Columns are named by metric in the
+  table; `--format json` and `csv` keep the metric keys (`balanced_accuracy`,
+  `auroc`, ...) and the fields `mean` and `std`.
 - `folds`: succeeded / the protocol's folds, e.g. `5/5`, or `1/5` after
   `--debug`. A footer says when a mean covers fewer folds than the protocol
   and is not comparable with a full run.
