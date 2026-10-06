@@ -4,6 +4,7 @@ import fcntl
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -126,6 +127,24 @@ class _ChannelMapDataloaderWrapper:
 
     def __len__(self):
         return len(self._loader)
+
+
+# The metric a progress line shows for a fold, first one present.
+_PROGRESS_METRICS = ("event_sens_fa_auc", "auroc", "balanced_accuracy", "mae", "pearson_r")
+
+
+def _progress_line(done: int, total: int, result, seconds: float) -> str:
+    fold = (result.metadata or {}).get("fold")
+    where = f"{result.dataset_name} {result.checkpoint_id}" + ("" if fold is None else f" fold {fold}")
+    if not result.ok:
+        what = "failed"
+    else:
+        value = next(((m, (result.metrics or {}).get(m)) for m in _PROGRESS_METRICS
+                      if isinstance((result.metrics or {}).get(m), (int, float))), None)
+        what = "ok" + (f", {value[0]} {value[1]:.3f}" if value else "")
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f"[{done}/{total}] {where}: {what} ({minutes}m {secs:02d}s)" if minutes else \
+        f"[{done}/{total}] {where}: {what} ({secs}s)"
 
 
 def _wrap_datamodule_with_channel_map(datamodule, cmap: ChannelMap, model_family: str):
@@ -531,15 +550,25 @@ class BenchmarkRunner:
         # for a (dataset, model) once one fold reports a fold-independent
         # cache: the other folds would only rebuild the datamodule to find it.
         extracted_for_every_fold: set = set()
-        for dataset_name, dataset_config in self._dataset_runs():
+        runs = list(self._dataset_runs())
+        probing = not (self.extract_only or self.embed_chunk is not None)
+        total, done = len(runs) * len(specs), 0
+        for dataset_name, dataset_config in runs:
             for spec in specs:
                 pair = (dataset_name, spec.identifier)
                 if self.extract_only and pair in extracted_for_every_fold:
                     continue
+                started = time.monotonic()
                 result = self._run_one(dataset_name, dataset_config, spec)
                 results.append(result)
                 if self.extract_only and _serves_every_fold(result):
                     extracted_for_every_fold.add(pair)
+                if probing:
+                    # One line per probed fold, whatever the log level: a probe
+                    # over many models runs for hours with nothing else to show.
+                    done += 1
+                    print(_progress_line(done, total, result, time.monotonic() - started),
+                          flush=True)
         if not (self.extract_only or self.embed_chunk is not None):
             self._write_outputs(results)
         return results
