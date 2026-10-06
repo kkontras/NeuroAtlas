@@ -876,7 +876,10 @@ def evaluate_linear_probe(
         cache_paths.update({f"global_{key}": value for key, value in full_paths.items()})
     else:
         if embed_chunk is not None:
-            print(f"[embed-chunk] dataset {dataset_name!r} does not support global embedding cache; ignoring --embed-chunk")
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "%s has no global embedding cache: --embed-chunk is ignored", dataset_name)
         train_payload, train_paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "train", checkpoint_spec, backbone, datamodule.train_dataloader(), datamodule
         )

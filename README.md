@@ -309,12 +309,27 @@ The last one ends like this:
 dataset       model               data                 weights       channel_map  forward           time
 bnci2014_001  biot_pretrained     found (18/18 files)  found         none         (64, 256) finite  29.1s
 bnci2014_001  cbramod_pretrained  found (18/18 files)  hub (cached)  none         (64, 200) finite  19.8s
-pairs: 2   forward passes: 2   errors: 0   skipped: 0   n/a: 0   time: 48.9s
+2 pairs: 2 ok, 0 error, 0 skipped, 0 n/a (48.9 s)
 ```
 
-A pair that cannot run says why on an indented line under it: missing data or
-weights with the command that fetches them, a model that is not part of
-the benchmark, or a channel map that rules it out (`n/a`).
+A pair that did not run says why on an indented line under it, starting with
+`error:` (it failed), `skipped:` (data or weights missing; a `fix:` line
+below gives the command that fetches them) or `n/a:` (the channel map rules
+it out). Every other message starts the same way, on stderr: `error:` (the
+command or a pair failed or was refused), `warning:` (it goes on, but you
+should know) or `note:`, with the remedy on its own `fix:` line:
+
+```
+$ neuroatlas check epilepsy --dataset siena -m neurorvq_eeg_pretrained
+...
+siena    neurorvq_eeg_pretrained  found (41/41 files)  auto     applied (pass-through)  -        0.0s
+      skipped: weights not downloaded
+        fix: neuroatlas models download neurorvq_eeg_pretrained
+```
+
+A long message from a library (a CUDA out-of-memory error, an HTTP error) is
+cut to its first sentence, `(-v: full message)`; `-v` and a `--log FILE`
+keep it whole. Colour only on a terminal, and never with `NO_COLOR` set.
 
 **7. A one-fold run** (`--debug` = fold 0 only), and a plan without running:
 
@@ -323,8 +338,8 @@ neuroatlas run bci_motor_imagery --dataset bnci2014_001 -m biot_pretrained --deb
 neuroatlas run epilepsy --dataset siena -m cbramod_pretrained --dry-run
 ```
 
-Every `run` ends with a line like `runs this time: ok 1   failed 0   n/a 0`
-and the folder its results went to.
+Every `run` ends with a line like `5 runs: 5 ok, 0 failed, 0 n/a` and the
+folder its results went to.
 
 **8. Full runs.** Embeddings are extracted once per dataset × model and
 reused by every fold and by every benchmark that reads the same windows.

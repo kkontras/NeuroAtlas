@@ -230,8 +230,8 @@ class EEGNetv4Backbone(BenchmarkModelWrapper):
         path = Path(self.spec.checkpoint_path or "")
         if not path.is_dir():
             raise FileNotFoundError(
-                f"EEGNetv4 checkpoint folder not found: {path}. Fetch it with "
-                f"`neuroatlas models download {self.spec.identifier}`."
+                f"no EEGNetv4 checkpoint folder at {path}\n"
+                f"fix: neuroatlas models download {self.spec.identifier}"
             )
         return path
 

@@ -82,6 +82,6 @@ per_model:
 
 notes:
   biot: "Bipolar: BIOT was pretrained on 16-18 bipolar channels (paper Table 1), so it gets the 20-pair TCP montage derived from Siena's referential electrodes. The renames are exact, not approximations: T3=T7, T4=T8, T5=P7, T6=P8 in the 10-10 system, so F7-T3 is BIOT's F7-T7 slot. All 16 slots are filled directly; the four central-chain pairs feed no slot."
-  eegnetv4: "Not run on epilepsy: the EEGNetv4 checkpoints are motor-imagery models, and the paper includes EEGNet in the motor-imagery comparison only (App. 'Supervised BCI/MI Model')."
+  eegnetv4: "Not run on epilepsy: the EEGNetv4 checkpoints are motor-imagery models, evaluated on the motor-imagery benchmark only."
   cbramod: "Label pass-through (index-based ACPE) of the 19 unipolar electrodes."
   reve: "Label pass-through: REVE places each of the 19 unipolar electrodes by name in its position bank."

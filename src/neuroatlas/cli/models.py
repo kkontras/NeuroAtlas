@@ -6,11 +6,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections import Counter
 from typing import List, Optional
 
-from neuroatlas.cli import Parser
+from neuroatlas.cli import Parser, _msg
 from neuroatlas.cli._table import add_format_arg, render
 
 
@@ -36,7 +35,7 @@ def _specs(selector: Optional[str], include_planned: bool = True):
             [by_id[i] for i in selectors.resolve_models([name])]
         out.extend(s for s in picked if s not in out)
     if not out:
-        raise selectors.SelectionError("no models selected")
+        raise selectors.SelectionError("no models selected\nfix: neuroatlas list aliases")
     return out
 
 
@@ -60,10 +59,11 @@ def cmd_status(args) -> int:
     render(rows, columns, args.format, notes)
     if args.format == "table":
         counts = Counter(r["state"] for r in rows)
-        print("\nstates: " + "   ".join(f"{k} {v}" for k, v in counts.most_common()))
+        print("\n" + _msg.counts(len(rows), "checkpoint" if len(rows) == 1 else "checkpoints",
+                                 counts.most_common()))
         if missing:
             target = ",".join(missing) if len(missing) <= 6 else (args.selector or "all")
-            print(f"fetch the {len(missing)} missing with `neuroatlas models download {target}`")
+            print(f"download the {len(missing)} missing: neuroatlas models download {target}")
     return 0
 
 
@@ -71,32 +71,43 @@ def cmd_download(args) -> int:
     """Fetch what the selection lacks; exit 1 unless every one ends up usable."""
     from neuroatlas import models
 
-    failed = unobtained = 0
-    for spec in _specs(args.selector):
+    failed = unobtained = done = 0
+    specs = _specs(args.selector)
+    for spec in specs:
         before = models.status(spec)
-        note = "; ".join(before.notes)
         if before.ready:
             print(f"{spec.identifier}: {before.state}")
+            done += 1
             continue
         if not before.fetchable:
+            # nothing `models download` can fetch: say why, and what to do
             unobtained += 1
-            print(f"{spec.identifier}: {before.state} -- {note or 'nothing to download'}")
+            what, fix = models.weights_problem(before) or (before.state, None)
+            _msg.error(f"{spec.identifier}: {what}", fix)
             continue
-        print(f"{spec.identifier}: downloading ({before.source})"
-              + (f" -- {note}" if note and before.state != "package missing" else ""), flush=True)
+        print(f"{spec.identifier}: downloading ({before.source})", flush=True)
+        for note in before.notes:
+            # what the download means: a licence it accepts (REVE, DeepSOZ's
+            # GPL-3.0), a token it needs, a big image it streams
+            if before.state != "package missing":
+                print(f"  {note}", flush=True)
         try:
             after = models.download(spec)
         except Exception as exc:                       # report and carry on
             failed += 1
-            print(f"  failed: {exc}", file=sys.stderr)
+            _msg.error(f"{spec.identifier}: " + _msg.brief(_msg.exception_text(exc)))
             continue
-        print(f"  {after.state}" + (f" -- {after.notes[0]}" if after.state == "package missing" else ""))
-        if not after.ready:
+        if after.ready:
+            done += 1
+            print(f"{spec.identifier}: {after.state}")
+        else:
             unobtained += 1
-    if failed or unobtained:
-        print(f"\n{failed} failed, {unobtained} not usable yet (see the lines above)", file=sys.stderr)
-        return 1
-    return 0
+            what, fix = models.weights_problem(after) or (after.state, None)
+            _msg.error(f"{spec.identifier}: downloaded, but {what}", fix)
+    if len(specs) > 1 or failed or unobtained:
+        print(_msg.counts(len(specs), "checkpoint" if len(specs) == 1 else "checkpoints",
+                          [("ready", done), ("failed", failed), ("not usable", unobtained)]))
+    return 1 if failed or unobtained else 0
 
 
 def build_parser() -> argparse.ArgumentParser:

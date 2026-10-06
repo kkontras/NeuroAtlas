@@ -426,7 +426,7 @@ def queue_snapshot(backend: str, out: Path, batches: Optional[Dict[str, List[str
 
 
 def count_parts(states: List[JobState], include=VERDICTS) -> List[str]:
-    """['done 3', 'exited 2 (code 1, 127)', 'running 1'] in VERDICTS order."""
+    """['3 done', '2 exited (exit codes 1, 127)', '1 running'] in VERDICTS order."""
     from collections import Counter
 
     kinds = Counter(s.kind for s in states)
@@ -434,7 +434,7 @@ def count_parts(states: List[JobState], include=VERDICTS) -> List[str]:
     for v in include:
         if not kinds.get(v):
             continue
-        text = f"{v} {kinds[v]}"
+        text = f"{kinds[v]} {v}"
         if v == "exited":
             codes = sorted({s.verdict.split(" ", 1)[1] for s in states if s.kind == "exited"},
                            key=lambda c: (not c.isdigit(), int(c) if c.isdigit() else 0, c))
@@ -602,13 +602,13 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
 
 
 def skip_summary(skipped: List[Dict[str, str]]) -> str:
-    """'skipped 171: data missing 165, weights manual 6'."""
+    """'171 pairs skipped: 165 data missing, 6 weights manual'."""
     from collections import Counter
 
     counts = Counter(s.get("reason", "n/a (channel map)") for s in skipped)
-    text = f"skipped {len(skipped)}"
+    text = f"{len(skipped)} pair{'s' if len(skipped) != 1 else ''} skipped"
     if counts:
-        text += ": " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        text += ": " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
     return text
 
 
@@ -793,7 +793,8 @@ def save_manifest(out: Path, planned: Dict[str, Any], backend: str, mode: str,
 def load_manifest(out: Path) -> Dict[str, Any]:
     path = out / "jobs.json"
     if not path.is_file():
-        raise FileNotFoundError(f"{path} does not exist: run `neuroatlas submit ... --out {out}` first")
+        raise FileNotFoundError(f"{out} holds no jobs ({path.name} does not exist)\n"
+                                f"fix: neuroatlas submit <benchmark> -m MODELS --out {out}")
     data = json.loads(path.read_text())
     known = set(Job.__dataclass_fields__)
     data["jobs"] = [Job(**{k: v for k, v in j.items() if k in known}) for j in data["jobs"]]

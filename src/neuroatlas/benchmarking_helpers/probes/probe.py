@@ -159,7 +159,8 @@ def train_probe(
         finite = np.isfinite(feats).all(axis=1)
         n_bad = int((~finite).sum())
         if n_bad:
-            print(f"[probe] dropping {n_bad}/{len(feats)} non-finite {name} rows")
+            logger.warning("probe: dropped %d of %d %s rows with non-finite features",
+                           n_bad, len(feats), name)
             return feats[finite], labs[finite]
         return feats, labs
     train_features, train_labels = _drop_nonfinite(train_features, train_labels, "train")
@@ -182,7 +183,7 @@ def train_probe(
 
         # Log class distribution and weighting decision.
         dist = dict(zip(unique_labels.tolist(), label_counts.tolist()))
-        print(f"[probe] class distribution: {dist}")
+        logger.info("[probe] class distribution: %s", dist)
         if class_weight == "balanced":
             n_samples = int(label_counts.sum())
             n_classes = len(unique_labels)
@@ -190,12 +191,12 @@ def train_probe(
                 int(lab): round(n_samples / (n_classes * cnt), 4)
                 for lab, cnt in zip(unique_labels.tolist(), label_counts.tolist())
             }
-            print(f"[probe] class_weight=balanced — effective weights: {effective}")
+            logger.info("[probe] class_weight=balanced, effective weights: %s", effective)
         else:
-            print("[probe] class_weight=None — no reweighting applied")
+            logger.info("[probe] class_weight=None, no reweighting")
         probe_class_weight = class_weight
 
-    print(
+    print(  # progress: one line per fit, ordinary output
         f"[probe] fitting {probe_type} {mode} probe on "
         f"train={len(train_labels)} val={len(val_labels)} test={len(test_labels)} "
         f"with {len(seeds)} seed(s)"
@@ -220,6 +221,7 @@ def train_probe(
         else:
             if c_values and probe_type in ("linear", "sklearn_linear"):
                 best_clf, best_c, best_val_score = None, None, -np.inf
+                unconverged = set()
                 for C in c_values:
                     clf = Pipeline([
                         ("scaler", StandardScaler()),
@@ -232,14 +234,21 @@ def train_probe(
                         warnings.simplefilter("always", ConvergenceWarning)
                         clf.fit(train_features, train_labels)
                     if any(issubclass(w.category, ConvergenceWarning) for w in caught):
-                        logger.warning("[probe] C=%.4g seed=%d did not converge within max_iter=%d", C, seed, max_iter)
+                        unconverged.add(C)
+                        logger.info("[probe] C=%.4g seed=%d did not converge within max_iter=%d",
+                                    C, seed, max_iter)
                     val_pred = clf.predict(val_features)
                     val_m = compute_classification_metrics(val_labels, val_pred)
                     score = float(val_m["cohen_kappa"])
                     if score > best_val_score:
                         best_val_score, best_clf, best_c = score, clf, C
                 estimator = best_clf
-                print(f"[probe] seed={seed} best C={best_c} val_cohen_kappa={best_val_score:.6f}")
+                if best_c in unconverged:
+                    # only the C that is kept can change the result
+                    logger.warning("probe: the selected C=%.4g (seed %d) did not converge within "
+                                   "max_iter=%d\nfix: --max-iter N, larger", best_c, seed, max_iter)
+                logger.info("[probe] seed=%d best C=%s val_cohen_kappa=%.6f",
+                            seed, best_c, best_val_score)
             else:
                 estimator = _build_probe_classifier(
                     probe_type=probe_type,
@@ -254,10 +263,8 @@ def train_probe(
                     estimator.fit(train_features, train_labels)
                 if any(issubclass(w.category, ConvergenceWarning) for w in caught):
                     logger.warning(
-                        "[probe] solver did not converge within max_iter=%d iterations. "
-                        "Results may be unreliable — consider increasing --max-iter.",
-                        max_iter,
-                    )
+                        "probe: the solver did not converge within max_iter=%d\n"
+                        "fix: --max-iter N, larger", max_iter)
             val_pred = estimator.predict(val_features)
             test_pred = estimator.predict(test_features)
             val_score = test_score = None
@@ -278,7 +285,7 @@ def train_probe(
         })
         primary_test_metric = "test_mae" if is_regression else "test_accuracy"
         primary_test_key = "mae" if is_regression else "accuracy"
-        print(
+        print(  # progress: the seed's validation and test score
             f"[probe] seed={seed} "
             f"val_{selection_metric}={_selection_value(val_metrics, selection_metric, 'val'):.6f} "
             f"{primary_test_metric}={float(test_metrics[primary_test_key]):.6f}"
@@ -287,7 +294,7 @@ def train_probe(
     comparator = max if _higher_is_better(selection_metric) else min
     best_row = comparator(per_seed, key=lambda row: float(row["val"][selection_metric]))
     best_seed = int(best_row["seed"])
-    print(
+    logger.info(
         f"[probe] selected best_seed={best_seed} "
         f"best_val_{selection_metric}={float(best_row['val'][selection_metric]):.6f}"
     )

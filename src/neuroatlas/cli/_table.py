@@ -8,8 +8,11 @@ One schema for every format:
 * a field that does not apply is :data:`NOT_APPLICABLE`: ``-`` in a table,
   ``null`` in JSON;
 * the indented lines a table prints under a row are its ``note``, a column
-  of CSV/Markdown and a field of JSON, so a machine reads the same reasons a
-  person does;
+  of CSV/Markdown and a field of JSON (the lines joined by ``; ``), so a
+  machine reads the same reasons a person does. A line that says why a row
+  did not run starts with ``error:``, ``skipped:`` or ``n/a:``, its remedy on
+  a ``fix:`` line below it (:mod:`neuroatlas.cli._msg`); on a terminal the
+  first word is coloured;
 * JSON may carry more fields than the table shows (``extra``), never fewer.
 """
 from __future__ import annotations
@@ -85,7 +88,7 @@ def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],
     # on every row, so CSV columns do not depend on the data
     with_note = fmt != "table" and notes is not None
     notes = notes or {}
-    note_of = lambda i: "; ".join(notes.get(i, [])) or None        # noqa: E731
+    note_of = lambda i: "; ".join(n.strip() for n in notes.get(i, [])) or None  # noqa: E731
     if fmt == "json":
         payload = []
         wanted = [*columns, *(c for c in extra if c not in columns)]
@@ -122,11 +125,19 @@ def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],
         for row in cells:
             out.write("| " + " | ".join(c.replace("|", "\\|") for c in row) + " |\n")
         return
+    from neuroatlas.cli._msg import paint_row_note, use_color
+
+    color = use_color(out)
     heads = [(labels or {}).get(c, c) for c in columns]
     widths = [max([len(h)] + [len(row[i]) for row in cells]) for i, h in enumerate(heads)]
     line = lambda values: "  ".join(v.ljust(w) for v, w in zip(values, widths)).rstrip()  # noqa: E731
     out.write(line(heads) + "\n")
+    fixes = set()       # a fix the table already gave is not repeated under every row
     for i, row in enumerate(cells):
         out.write(line(row) + "\n")
         for note in notes.get(i, []):
-            out.write(f"      {note}\n")
+            if note.strip().startswith("fix:"):
+                if note.strip() in fixes:
+                    continue
+                fixes.add(note.strip())
+            out.write(f"      {paint_row_note(note, color)}\n")

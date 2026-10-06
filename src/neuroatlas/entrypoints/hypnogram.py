@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 from neuroatlas import config as user_config
+from neuroatlas.cli import ErrorParser
 from neuroatlas.benchmarking_helpers.probes.metrics import compute_classification_metrics
 from neuroatlas._paths import output_dir
 
@@ -636,7 +637,7 @@ def _add_features_args(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ErrorParser(
         prog="neuroatlas hypnogram",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -759,14 +760,20 @@ def main(argv: Optional[List[str]] = None) -> None:
     user_config.apply_to_environ()
     argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if not logging.getLogger().handlers:          # run on its own, not by `neuroatlas`
+        from neuroatlas.cli._msg import LogFormatter, use_color
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(LogFormatter(color=use_color(sys.stderr)))
+        logging.getLogger().addHandler(handler)
+        logging.getLogger().setLevel(logging.INFO)
 
     datasets = args.datasets or sorted(DATASET_HYPNO_PATHS)
     unknown = [d for d in datasets if d not in DATASET_HYPNO_PATHS]
     if unknown:
         raise SystemExit(
-            f"error: no staging-results layout known for {', '.join(unknown)}.\n"
-            f"Known: {', '.join(sorted(DATASET_HYPNO_PATHS))}"
+            f"error: no staging-results layout known for {', '.join(unknown)} "
+            f"(known: {', '.join(sorted(DATASET_HYPNO_PATHS))})"
         )
 
     step = getattr(args, "step", None)

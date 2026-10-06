@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
+from neuroatlas.cli import ErrorParser
 from neuroatlas.entrypoints._common import (
     check_dataset_paths,
     expand_dataset_paths,
@@ -139,7 +140,7 @@ def load_task_preset(name: str) -> Dict[str, Any]:
     if path.is_file():
         preset = json.loads(path.read_text(encoding="utf-8"))
         if "task" not in preset:
-            raise SystemExit(f"task preset {path} has no 'task' block")
+            raise SystemExit(f"error: task preset {path} has no 'task' block")
         return preset
 
     from neuroatlas.benchmarking_helpers.registry.discovery import task_specs
@@ -149,9 +150,8 @@ def load_task_preset(name: str) -> Dict[str, Any]:
         return {"task": {"name": name}}
 
     raise SystemExit(
-        f"Unknown task {name!r}.\n"
-        f"  registered tasks: {', '.join(sorted(registered))}\n"
-        f"  presets: {', '.join(available_tasks()) or '(none)'}"
+        f"error: unknown task {name!r}\n"
+        f"fix: neuroatlas list tasks names the registered tasks and presets"
     )
 
 
@@ -160,7 +160,7 @@ def load_task_preset(name: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ErrorParser(
         prog="neuroatlas probe",
         description="Fit a probe on extracted embeddings for any dataset/model/task.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -250,8 +250,8 @@ def _resolve_dataset(slug: str):
         near = [s for s in slugs if slug.lower() in s.lower()][:8]
         near = near or difflib.get_close_matches(slug, slugs, n=5, cutoff=0.6)
         if near and "--dataset" not in message:
-            message += "\nDid you mean: " + ", ".join(near)
-        raise SystemExit(f"error: {message}\nRun with --list-datasets to see them all.")
+            message += " (did you mean " + ", ".join(near) + "?)"
+        raise SystemExit(f"error: {message}\nfix: neuroatlas probe --list-datasets names them all")
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
@@ -427,13 +427,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     with embedding_pooling(args.pooling), threads:
         results = runner.run()
 
-    failures = [r for r in results if r.failure is not None]
-    for r in failures:
-        print(f"FAIL {r.dataset_name}/{r.checkpoint_id}: "
-              f"{r.failure.code}: {r.failure.message}", file=sys.stderr)
-    print(f"[probe] rows={len(results)} failed={len(failures)} "
-          f"output={runner.output_root}")
-    if failures:
+    from neuroatlas.entrypoints._common import report_results
+
+    if report_results("probe", results, f"results: {runner.output_root}"):
         sys.exit(1)
 
 

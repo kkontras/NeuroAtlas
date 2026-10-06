@@ -10,7 +10,7 @@ import csv
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from neuroatlas.cli import Parser, UsageError
+from neuroatlas.cli import Parser, UsageError, _msg
 from neuroatlas.cli._table import add_format_arg, render
 
 
@@ -93,21 +93,34 @@ def _folds_text(s) -> str:
     return f"{s.n_folds}/{s.n_expected}" if s.n_expected else str(s.n_folds)
 
 
-def _failure_lines(s) -> List[str]:
-    """One line per distinct failure: the folds it hit, its code, the first
-    line of the message the run stored in results.json."""
+def _na_lines(s) -> List[str]:
+    """Why a row has no headline value: the channel map rules the pair out,
+    the metric does not apply to the dataset, or no fold recorded what it is
+    computed from (shown without -v: they are short)."""
     if s.status == "n/a":
-        return ["not applicable: the channel map skips this model on this dataset"]
+        return _msg.lines("n/a", "the channel map skips this model on this dataset")
+    if s.na_reason:
+        return _msg.lines("n/a", s.na_reason)
+    return []
+
+
+def _failure_lines(s, machine: bool = False) -> List[str]:
+    """One ``error:`` line per distinct failure: the folds it hit, the first
+    sentence of the message the run stored in results.json (whole with -v),
+    its code; then the folds not run yet."""
     groups: Dict[Tuple[str, str], List[str]] = {}
     for e in s.errors:
-        first = (e.get("message") or "").strip().splitlines()
-        groups.setdefault((e["code"], first[0] if first else ""), []).append(str(e["fold"]))
+        groups.setdefault((e["code"], (e.get("message") or "").strip()), []).append(str(e["fold"]))
     lines = []
     for (code, message), folds in groups.items():
         label = "fold" if len(folds) == 1 else "folds"
-        lines.append(f"{label} {', '.join(folds)} failed: {code}" + (f": {message}" if message else ""))
+        text = _msg.brief(message, keep_fix=False, hint=not machine) if message else "failed"
+        first, *rest = text.splitlines() or [""]        # -v: the whole message
+        lines += _msg.lines("error", "\n".join([f"{label} {', '.join(folds)}: {first} [{code}]",
+                                                *rest]))
     if s.n_expected and s.n_folds + s.n_failed < s.n_expected:
-        lines.append(f"{s.n_expected - s.n_folds - s.n_failed} of {s.n_expected} folds not run yet")
+        lines += _msg.lines("warning", f"{s.n_expected - s.n_folds - s.n_failed} of "
+                                       f"{s.n_expected} folds not run yet")
     return lines
 
 
@@ -116,23 +129,24 @@ def results_main(argv: Optional[List[str]] = None) -> None:
 
     args = build_results_parser().parse_args(argv)
     if args.all_metrics and not args.reference:
-        raise UsageError("--all-metrics compares every metric with the paper's, so it needs "
-                         "--reference; without it the table already shows every metric")
+        raise UsageError("--all-metrics needs --reference (without it the table already "
+                         "shows every metric)")
     bench = catalog.load(args.benchmark)
     left_out: List[str] = []
     summaries, dropped = res.benchmark_summary(bench.name, args.paths or None, args.output_root,
                                                variant=args.variant, left_out=left_out)
     m = bench.metrics
     left_out_line = (f"not shown: results of {', '.join(left_out)}, which the {bench.name} "
-                     f"benchmark leaves out (`neuroatlas show {bench.name}`)") if left_out else None
+                     f"benchmark leaves out") if left_out else None
     if not summaries:
         where = ", ".join(args.paths) if args.paths else str(
             (args.output_root or res._paths.output_dir()) / bench.name)
         which = f" (variant {args.variant})" if args.variant else ""
-        again = f"neuroatlas run {bench.name} ..." + (
+        again = f"neuroatlas run {bench.name} -m MODELS" + (
             f" --variant {args.variant}" if args.variant and args.variant != "default" else "")
-        raise SystemExit(f"error: no results for {bench.name}{which} in {where}. "
-                         f"Run `{again}` first." + (f"\n{left_out_line}" if left_out_line else ""))
+        if left_out_line:
+            _msg.note(left_out_line)
+        raise SystemExit(f"error: no results for {bench.name}{which} in {where}\nfix: {again}")
     # the variant column: always in machine formats, in the table once a
     # variant other than the default has results
     show_variant = any(s.variant != res.DEFAULT_VARIANT for s in summaries)
@@ -140,7 +154,7 @@ def results_main(argv: Optional[List[str]] = None) -> None:
     if args.reference:
         ref = _reference(bench.name)
         if ref is None:
-            raise SystemExit(f"error: no reference table ships for {bench.name} "
+            raise SystemExit(f"error: no reference numbers ship for {bench.name} "
                              f"(configs/reference/{bench.name}.csv)")
         tol = m.tolerance
         metrics = [m.headline, *m.secondary] if args.all_metrics else [m.headline]
@@ -169,6 +183,8 @@ def results_main(argv: Optional[List[str]] = None) -> None:
     direction = "higher is better" if m.higher_is_better else "lower is better"
     has_dummy = m.higher_is_better and any(m.dummy_for(e.slug) is not None for e in bench.datasets)
     rows, notes = [], {}
+    run = f"neuroatlas run {bench.name}" + (
+        f" --output-root {args.output_root}" if args.output_root else "")
     for s in summaries:
         row = {"benchmark": bench.name, "metric": m.headline,
                "dataset": s.dataset, "variant": s.variant, "model": s.model, "status": s.status,
@@ -178,7 +194,9 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         for name in m.secondary:
             row[name] = s.secondary.get(name)
         rows.append(row)
-        lines = _failure_lines(s)
+        # n/a lines always; failed folds' lines with -v (a footer counts them)
+        machine = args.format != "table"
+        lines = _na_lines(s) + (_failure_lines(s, machine) if args.verbose or machine else [])
         if lines:
             notes[len(rows) - 1] = lines
     columns = ["dataset", *(["variant"] if show_variant else []), "model", "mean", "std", "folds",
@@ -197,19 +215,27 @@ def results_main(argv: Optional[List[str]] = None) -> None:
         names = {"mean": head, "std": "±", **{k: metric_label(k) for k in m.secondary}}
         rows = [{names.get(k, k): v for k, v in r.items()} for r in rows]
         columns = [names.get(c, c) for c in columns]
-    render(rows, columns, args.format,
-           notes if args.verbose or args.format != "table" else None, extra=extra)
+    render(rows, columns, args.format, notes, extra=extra)
     if args.format == "table":
         failed = sum(1 for s in summaries if s.n_failed)
         short = sum(1 for s in summaries if s.status != "n/a" and not s.n_failed and not s.complete)
         if dropped:
-            print(f"{dropped} result(s) recorded more than once (same dataset, variant, model, "
-                  f"fold and task); counted the newest copy of each")
+            _msg.warning(f"{_msg.plural(dropped, 'result')} recorded more than once (same "
+                         f"dataset, variant, model, fold and task): the newest copy of each "
+                         f"is counted")
         if left_out_line:
-            print(left_out_line)
-        if failed and not args.verbose:
-            print(f"{failed} row(s) have failed folds; -v says why")
+            _msg.note(left_out_line)
+        if failed:
+            _msg.warning(f"{_msg.plural(failed, 'row')} with failed folds"
+                         + ("" if args.verbose else " (-v: why)"))
         if short:
-            print(f"{short} row(s) cover fewer folds than the protocol (k/N): "
-                  f"not comparable with a full run")
+            _msg.warning(f"{_msg.plural(short, 'row')} with fewer folds than the protocol "
+                         f"(k/N): not comparable with a full run")
+        curveless = [s for s in summaries if s.na_reason == res.NO_CURVE]
+        if curveless:
+            # probing again from the saved embeddings records it
+            datasets = ",".join(dict.fromkeys(s.dataset for s in curveless))
+            models = ",".join(dict.fromkeys(s.model for s in curveless))
+            _msg.warning(f"{_msg.plural(len(curveless), 'row')} without {metric_label(m.headline)}: "
+                         f"{res.NO_CURVE}", f"{run} --dataset {datasets} -m {models} --skip-embed")
 

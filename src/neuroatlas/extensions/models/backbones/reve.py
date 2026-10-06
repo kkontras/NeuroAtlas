@@ -89,8 +89,8 @@ class REVEBackbone(BenchmarkBackbone):
         sources = reve_sources(local_dir, random_init)
         if sources.lacking and (downloads_off() or os.environ.get("HF_HUB_OFFLINE") == "1"):
             raise FileNotFoundError(
-                f"REVE needs {', '.join(sources.lacking)}, and downloads are off. Fetch them "
-                f"with `neuroatlas models download {spec.identifier}`, or pass --online."
+                f"REVE needs {', '.join(sources.lacking)} (downloads are off)\n"
+                f"fix: neuroatlas models download {spec.identifier}, or add --online"
             )
 
         # CPU init for the same reason as the trunk below.

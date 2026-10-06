@@ -196,6 +196,10 @@ class Summary:
     # one {"fold", "code", "message"} per failed fold, as results.json has it
     errors: List[Dict[str, Any]] = field(default_factory=list)
     variant: str = DEFAULT_VARIANT
+    # why the headline has no value although folds succeeded, as the task
+    # recorded it (``<metric stem>_not_applicable``, e.g. a recording-level
+    # cohort has no seizure events for event_sens_fa_auc)
+    na_reason: Optional[str] = None
 
     @property
     def complete(self) -> bool:
@@ -240,6 +244,10 @@ def _event_sens_fa(records: List[Record]) -> Tuple[Optional[float], Optional[flo
 #: Metrics whose value over folds is not the mean ± population SD of the
 #: per-fold values (_mean_std) but the paper's own aggregate of them.
 _FOLD_AGGREGATES = {"event_sens_fa_auc": _event_sens_fa}
+
+#: Why such a metric is n/a when no fold says it does not apply (the n/a
+#: line under a `results` row).
+NO_CURVE = "no fold recorded the curve this metric is computed from"
 
 
 def _over_folds(records: List[Record], name: str) -> Tuple[Optional[float], Optional[float]]:
@@ -286,6 +294,11 @@ def summarize(records: List[Record], headline: str, secondary: Sequence[str] = (
                     errors=[{"fold": r.fold, "code": r.failure or "?", "message": r.message}
                             for r in sorted(failed, key=lambda r: _fold_key(r.fold))],
                     variant=variant)
+        if mean is None and oks:
+            key = headline.rsplit("_", 1)[0] + "_not_applicable"
+            reasons = sorted({str(r.metrics.get(key)) for r in oks if r.metrics.get(key)})
+            s.na_reason = "; ".join(reasons) or (NO_CURVE if headline in _FOLD_AGGREGATES
+                                                  else None)
         dummy = dummy_for(dataset) if dummy_for else None
         if mean is not None and dummy is not None and higher_is_better and dummy < 1:
             s.normalized = (mean - dummy) / (1 - dummy)

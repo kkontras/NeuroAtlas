@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from neuroatlas import config as user_config
+from neuroatlas.cli import ErrorParser
 
 
 # How each acquisition.kind is obtained. `auto` means `data download` (and so
@@ -142,8 +143,10 @@ def download(p: Dict[str, Any]) -> int:
     from neuroatlas import data
 
     if p["mode"] != "auto" or not p["url"]:
+        from neuroatlas.cli import _msg
+
         print(render(p))
-        print(f"\nerror: {p['slug']} cannot be fetched automatically.", file=sys.stderr)
+        _msg.error(f"{p['slug']} cannot be fetched automatically")
         return 2
     root = Path(p["data_root"]) if p.get("data_root") else None
     with _data_root(root):
@@ -153,7 +156,7 @@ def download(p: Dict[str, Any]) -> int:
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     from neuroatlas.entrypoints import _help
 
-    parser = argparse.ArgumentParser(
+    parser = ErrorParser(
         prog="neuroatlas fetch",
         description="Obtain a dataset's raw corpus, or say exactly how to. The old name "
                     "of `neuroatlas data download`; it runs the same code.",

@@ -35,7 +35,14 @@ SUITES = ("single", "full")
 
 
 class CatalogError(ValueError):
-    """A benchmark file that does not say what it must."""
+    """A benchmark file that does not say what it must, or a name that is not
+    in the catalog. Its text is what is wrong, then a ``fix:`` line
+    (:mod:`neuroatlas.cli._msg`); ``suggest`` maps a mistyped word to the
+    one it is close to, so the command can print the corrected command."""
+
+    def __init__(self, message: str = "", suggest: Optional[Dict[str, str]] = None):
+        super().__init__(message)
+        self.suggest = dict(suggest or {})
 
 
 @dataclass(frozen=True)
@@ -140,17 +147,21 @@ class Benchmark:
         if unknown:
             import difflib
 
-            hints = []
+            hints, suggest = [], {}
             for slug in unknown:
                 close = difflib.get_close_matches(slug, known, n=1)
                 planned = [p for p in self.planned if p["name"] == slug]
                 if planned:
                     hints.append(f"{slug} (planned: {planned[0]['reason']})")
+                elif close:
+                    hints.append(f"{slug} (did you mean {close[0]}?)")
+                    suggest[slug] = close[0]
                 else:
-                    hints.append(f"{slug} (did you mean {close[0]}?)" if close else slug)
+                    hints.append(slug)
             raise CatalogError(
-                f"{self.name} does not include {', '.join(hints)}. "
-                f"Its datasets: {', '.join(known) or 'none yet'}; or use --dataset single|full.")
+                f"the {self.name} benchmark has no dataset {', '.join(hints)}\n"
+                f"fix: --dataset single, full, or some of: {', '.join(known) or 'none yet'}",
+                suggest=suggest)
         return [known[s] for s in wanted]
 
     # -- variants -------------------------------------------------------------
@@ -159,7 +170,8 @@ class Benchmark:
             return Variant(DEFAULT_VARIANT, "the paper's headline protocol", self.embed, self.probe)
         if name not in self.variants:
             options = ", ".join([DEFAULT_VARIANT, *self.variants])
-            raise CatalogError(f"{self.name} has no variant {name!r}; it has: {options}")
+            raise CatalogError(f"the {self.name} benchmark has no variant {name!r}\n"
+                               f"fix: --variant {options.replace(', ', ' | ')}")
         return self.variants[name]
 
     def variant_names(self) -> List[str]:
@@ -196,8 +208,7 @@ class Benchmark:
                                             scope=f"the {self.name} benchmark")
         except selectors.NotInBenchmark as exc:
             raise selectors.NotInBenchmark(
-                f"{exc}. `neuroatlas list models --benchmark {self.name}` lists the "
-                f"checkpoints it evaluates.") from None
+                f"{exc}\nfix: neuroatlas list models --benchmark {self.name}") from None
 
     def left_out(self, expr) -> List[str]:
         """The checkpoint ids *expr* selects outside this benchmark that the
@@ -217,17 +228,10 @@ class Benchmark:
         ids = self.left_out(expr)
         if not ids:
             return None
-        excluded = self.excluded_families()
         by_id = {s.identifier: s for s in selectors._registry()}
-        why: Dict[str, List[str]] = {}
-        for i in ids:
-            family = by_id[i].model_family
-            why.setdefault(excluded[family], [])
-            if family not in why[excluded[family]]:
-                why[excluded[family]].append(family)
-        reasons = "; ".join(f"{', '.join(fams)}: {reason}" for reason, fams in why.items())
-        return (f"left out, not part of the {self.name} benchmark ({reasons}): "
-                f"{', '.join(ids)}")
+        families = list(dict.fromkeys(by_id[i].model_family for i in ids))
+        n = f"{len(ids)} checkpoint{'s' if len(ids) != 1 else ''}"
+        return f"left out {', '.join(families)} ({n}): not in the {self.name} benchmark"
 
     def models_arg(self, expr: str = "all") -> str:
         """*expr* as the verbs' ``--models`` must spell it for this benchmark:
@@ -433,9 +437,10 @@ def load(name: str) -> Benchmark:
         return benches[name]
     import difflib
 
-    close = difflib.get_close_matches(name, benches, n=3)
-    hint = f" Did you mean {', '.join(close)}?" if close else ""
-    raise CatalogError(f"no benchmark {name!r}.{hint} See `neuroatlas list benchmarks`.")
+    close = difflib.get_close_matches(name, benches, n=1)
+    hint = f" (did you mean {', '.join(close)}?)" if close else ""
+    raise CatalogError(f"no benchmark {name!r}{hint}\nfix: neuroatlas list benchmarks",
+                       suggest={name: close[0]} if close else None)
 
 
 def benchmarks_using(slug: str) -> List[str]:

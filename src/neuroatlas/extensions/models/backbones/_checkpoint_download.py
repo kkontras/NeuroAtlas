@@ -162,9 +162,9 @@ def check_commit_files(folder, reference: str, names, identifier: str) -> None:
         got, want = _sha256(path), pinned.sha256(name)
         if got != want:
             raise FileNotFoundError(
-                f"{path} has SHA-256 {got}, not that of {name} in {pinned.repo} at commit "
-                f"{pinned.commit[:7]} ({want}). Delete it and run "
-                f"`neuroatlas models download {identifier}`.")
+                f"{path} is not {name} of {pinned.repo} at commit {pinned.commit[:7]} "
+                f"(SHA-256 {got}, expected {want})\n"
+                f"fix: rm {path} && neuroatlas models download {identifier}")
 
 
 def hub_repo(reference: str) -> str:
@@ -278,8 +278,9 @@ def _verify(path: Path, expected: Optional[str], what: str) -> None:
     got = _sha256(path)
     if got != expected:
         raise FileNotFoundError(
-            f"{what} has SHA-256 {got}, not the recorded {expected}: the upstream file "
-            f"changed or the download was truncated. Nothing was put in place.")
+            f"{what}: SHA-256 {got}, not the recorded {expected} (a cut-short download, or "
+            f"the upstream file changed); nothing was put in place\n"
+            f"fix: run the download again")
 
 
 def downloads_off() -> bool:
@@ -302,10 +303,11 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
     if downloads_off():
         detail = (f" (missing {', '.join(Path(p).name for p in lacking)})"
                   if path.is_dir() else "")
-        command = f"neuroatlas models download {identifier}" if identifier else "neuroatlas models download"
+        command = (f"neuroatlas models download {identifier}" if identifier
+                   else "neuroatlas models download <checkpoint>")
         raise FileNotFoundError(
-            f"Checkpoint not found at {path}{detail}, and downloads are off. "
-            f"Fetch it with `{command}`, or pass --online."
+            f"no weights at {path}{detail} (downloads are off)\n"
+            f"fix: {command}, or add --online"
         )
 
     logger.info("Checkpoint not found at %s — attempting auto-download (source_type=%s)", path, source_type)
@@ -324,12 +326,12 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
     if handler is None:
         if source_type in ("github_figshare", "github", "local", "local_artifact"):
             raise FileNotFoundError(
-                f"Checkpoint not found at {path}. It cannot be downloaded automatically: "
-                f"get it from {source_reference} and place it at {path}."
+                f"no weights at {path} (no automatic download)\n"
+                f"fix: get them from {source_reference} and place them at {path}"
             )
         raise FileNotFoundError(
-            f"Checkpoint not found at {path}, and source_type={source_type!r} has no "
-            f"download handler. Get it from {source_reference} and place it at {path}."
+            f"no weights at {path} (source_type={source_type!r} has no download handler)\n"
+            f"fix: get them from {source_reference} and place them at {path}"
         )
     try:
         return handler(path, source_reference)
@@ -340,11 +342,11 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
         if source_type == "huggingface" and (
                 type(exc).__name__ in ("GatedRepoError", "RepositoryNotFoundError")
                 or any(f" {code} " in f" {exc} " for code in ("401", "403"))):
-            hint = (f" The repository needs a Hugging Face token with access: accept its terms on "
-                    f"https://huggingface.co/{hub_repo(source_reference)}, then save the token with "
-                    f"`neuroatlas config token hf` (or set $HF_TOKEN).")
+            hint = (f"\nfix: accept the terms on https://huggingface.co/"
+                    f"{hub_repo(source_reference)}, then neuroatlas config token hf "
+                    f"(a token with access)")
         raise FileNotFoundError(
-            f"Download failed for {path} from {source_reference}: "
+            f"download from {source_reference} failed: "
             f"{type(exc).__name__}: {str(exc).strip()}{hint}"
         ) from exc
 
@@ -389,9 +391,8 @@ def resolve_hf_token() -> str | None:
                 return token
 
     logger.warning(
-        "No Hugging Face token found (looked at $HF_TOKEN, then %s). "
-        "Gated models will fail to download; the open ones are unaffected. "
-        "`neuroatlas config token hf` saves one.",
+        "no Hugging Face token (looked at $HF_TOKEN, %s): gated models cannot be "
+        "downloaded\nfix: neuroatlas config token hf",
         ", ".join(_HF_TOKEN_SOURCES[1:]),
     )
     return None
@@ -464,8 +465,8 @@ def _download_huggingface(local_path: Path, repo_id: str) -> Path:
         from huggingface_hub import hf_hub_download
     except ImportError:
         raise FileNotFoundError(
-            f"Checkpoint not found at {local_path}. Install `huggingface_hub` "
-            f"to download it, or get it from https://huggingface.co/{repo_id}."
+            f"no weights at {local_path}, and huggingface_hub is not installed\n"
+            f"fix: pip install huggingface_hub, or get them from https://huggingface.co/{repo_id}"
         )
 
     token = resolve_hf_token()
@@ -557,8 +558,8 @@ def _download_github(local_path: Path, repo_url: str) -> Path:
 
     if internal_path is None:
         raise FileNotFoundError(
-            f"Checkpoint not found at {local_path}. No known file path for "
-            f"GitHub repo {repo_slug}: get it from {repo_url} and place it at {local_path}."
+            f"no weights at {local_path} (no known file in the GitHub repository {repo_slug})\n"
+            f"fix: get them from {repo_url} and place them at {local_path}"
         )
 
     with tempfile.TemporaryDirectory(prefix="eegbench_dl_") as tmpdir:
@@ -628,10 +629,9 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
         # the asset id and retry there before giving up.
         if not token:
             raise FileNotFoundError(
-                f"{asset_url} returned HTTP {exc.code}. If the repository is still "
-                f"private, save a GitHub token that can read it with `neuroatlas config "
-                f"token github` (or set $GITHUB_TOKEN), or download the asset by hand "
-                f"and place it at {local_path}."
+                f"HTTP {exc.code} from {asset_url} (a private repository needs a GitHub token)\n"
+                f"fix: neuroatlas config token github (or $GITHUB_TOKEN), "
+                f"then download again; or place the file at {local_path}"
             ) from exc
         try:
             _, _, rest = asset_url.partition("github.com/")
@@ -645,9 +645,10 @@ def _download_release_asset(local_path: Path, asset_url: str) -> Path:
             return local_path
         except Exception as inner:
             raise FileNotFoundError(
-                f"{asset_url} returned HTTP {exc.code}, and the API fallback with your "
-                f"GitHub token failed ({inner}). Download the asset by hand and place it "
-                f"at {local_path}."
+                f"HTTP {exc.code} from {asset_url}, and from the GitHub API with your token "
+                f"({inner})\n"
+                f"fix: check that the token can read the repository, or place the file at "
+                f"{local_path}"
             ) from exc
 
 
@@ -708,8 +709,9 @@ def _download_google_drive_zip(local_path: Path, drive_url: str) -> Path:
             # Drive serves an HTML consent page instead of the file when the
             # object is large enough to trigger its virus-scan interstitial.
             raise FileNotFoundError(
-                f"{drive_url} did not return a zip. Open it in a browser, unzip it, "
-                f"and place {member or 'the .pth inside'} at {local_path}."
+                f"{drive_url} did not return a zip\n"
+                f"fix: open it in a browser, unzip it, and place "
+                f"{member or 'the .pth inside'} at {local_path}"
             )
         with zipfile.ZipFile(archive) as zf:
             names = zf.namelist()
@@ -811,6 +813,6 @@ def _download_figshare_private_share(local_path: Path, share_url: str) -> Path:
     files. Say what to do instead.
     """
     raise FileNotFoundError(
-        f"{share_url} is a Figshare private share, which only a browser can open. "
-        f"Download {local_path.name} from it and place it at {local_path}."
+        f"{share_url} is a Figshare private share, which only a browser can open\n"
+        f"fix: download {local_path.name} from it and place it at {local_path}"
     )

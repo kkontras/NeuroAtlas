@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from neuroatlas.cli import MODELS_HELP, Parser
+from neuroatlas.cli import MODELS_HELP, Parser, _msg
 from neuroatlas.cli._table import add_format_arg, render
 
 # options whose value is a raw submit-file line: it may itself start with "-"
@@ -125,8 +125,8 @@ def _join_raw_values(argv: List[str]) -> List[str]:
     return out
 
 
-def _warn(msg: str) -> None:
-    print(f"warning: {msg}", file=sys.stderr)
+def _warn(msg: str, fix: Optional[str] = None) -> None:
+    _msg.warning(msg, fix)
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -153,8 +153,8 @@ def submit_main(argv: Optional[List[str]] = None) -> None:
             _warn(f"{flag} has no effect with --backend {args.backend}")
 
     for p in sub.node_local_paths():
-        _warn(f"jobs run {p}, which is on this machine's local disk: other machines will not "
-              f"find it (use an environment on a shared filesystem)")
+        _warn(f"jobs run {p}, on this machine's local disk: other machines will not find it",
+              "run submit from a Python environment on a shared filesystem")
 
     out = args.out.resolve()
     previous: Dict = {}
@@ -197,52 +197,58 @@ def submit_main(argv: Optional[List[str]] = None) -> None:
     sub.save_manifest(out, planned, args.backend, args.mode, batch)
 
     order = [v for v in sub.VERDICTS if v != "skipped"]
-    parts = [f"skipped {len(planned['skipped'])}"] + sub.count_parts(list(states.values()), order)
-    print("jobs: " + "   ".join(parts) + f"   queued (mode={args.mode}) {len(queued)}")
-    if planned["skipped"]:
-        print("  " + sub.skip_summary(planned["skipped"])
-              + ("" if args.force or not any(sub.forceable(s) for s in planned["skipped"])
-                 else "  (`neuroatlas check` says more; --force writes the data- and "
-                      "weights-blocked ones anyway)"))
+    parts = [f"{len(queued)} queued (mode {args.mode})",
+             *sub.count_parts(list(states.values()), order)]
+    print(f"{_plural(len(jobs), 'job', 'jobs')}: {', '.join(parts)}")
+    skipped = planned["skipped"]
+    if skipped:
+        blocked = [s for s in skipped if sub.forceable(s)]
+        print(sub.skip_summary(skipped) + ("" if args.verbose else " (-v lists them)"))
         if args.verbose:
-            for s in planned["skipped"]:
-                print(f"    {s['dataset']} / {s['model']}: {s.get('reason', '')}"
-                      + (f" -- {s['detail']}" if s.get("detail") else ""))
+            for s in skipped:
+                kind = "n/a" if s.get("reason", "").startswith("n/a") else \
+                    "warning" if s.get("reason", "").startswith("invalid") else "skipped"
+                detail = _msg.split(s.get("detail") or "")[1][:1]
+                print(f"  {kind}: {s['dataset']}/{s['model']}: {s.get('reason', '')}"
+                      + (f" ({detail[0]})" if detail else ""))
+        if blocked and not args.force:
+            print(f"  --force writes jobs for the {len(blocked)} blocked by data or weights")
     for bad in planned.get("invalid", []):
-        print(f"  {bad['dataset']}: no jobs -- {bad['error']}")
+        _msg.warning(f"{bad['dataset']}: no jobs: {bad['error']}")
     from neuroatlas import catalog
 
     left_out = catalog.load(args.benchmark).left_out_note(args.models)
     if left_out:
-        print(f"  {left_out}")
+        _msg.note(left_out)
     if capability and args.gpus:
-        where = "requirement" if args.backend == "condor" else "hint (SLURM: not enforced)"
-        print(f"  GPUs: compute capability >= {capability} ({how}); written as a {where}")
+        where = f"a requirement in {path.name}" if args.backend == "condor" else \
+            "a hint only (SLURM has no standard attribute)"
+        # "torch 2.8.0+cu128 is built for sm_70 ... sm_120" -> the version alone
+        source = (f"the lowest {how.split(' is built for')[0]} supports"
+                  if " is built for" in how else how)
+        print(f"GPUs: compute capability >= {capability} ({source}), {where}")
     active = {k: verdicts[k] for k in sub.ACTIVE if verdicts.get(k)}
     if active:
         n = sum(active.values())
-        print(f"  {_plural(n, 'job is', 'jobs are')} still in the queue "
-              f"({', '.join(f'{k} {v}' for k, v in active.items())}) and "
-              f"{'was' if n == 1 else 'were'} not queued again")
+        print(f"{_plural(n, 'job is', 'jobs are')} still in the queue "
+              f"({', '.join(f'{k} {v}' for k, v in active.items())}), not queued again")
     if not queue.ok:
-        print(f"  note: the scheduler was not asked ({queue.note}); a running job is known "
-              f"only by its status file")
+        _msg.note(f"the scheduler was not asked ({queue.note}): a running job is known only "
+                  f"by its status file")
     waiting = verdicts.get("waiting")
     if waiting:
-        print(f"  {_plural(waiting, 'job waits', 'jobs wait')} for another benchmark's results "
-              f"and {'was' if waiting == 1 else 'were'} not queued; run this submit again once "
-              f"they exist")
+        print(f"{_plural(waiting, 'job waits', 'jobs wait')} for another benchmark's results, "
+              f"not queued; run this submit again once they exist")
     if not queued:
         if not jobs:
-            print("nothing to queue: no pair can run here (see skipped above).")
+            _msg.warning("nothing to queue: no pair can run here")
         else:
-            print("nothing to queue for this mode. `neuroatlas status --out " + str(args.out)
-                  + "` shows every job.")
+            print(f"nothing to queue in mode {args.mode}; neuroatlas status --out {args.out} "
+                  f"shows every job")
         return
-    if args.backend == "condor":
-        print("  (`condor_submit -dry-run` checks the file's syntax only, not the pool's "
-              "policy -- e.g. a required RequestWalltime)")
-    print(f"submit with:  {queue_cmd}")
+    print(f"queue them: {queue_cmd}" + (
+        "  (-dry-run checks the file's syntax only, not the pool's policy)"
+        if args.backend == "condor" else ""))
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +282,7 @@ def status_main(argv: Optional[List[str]] = None) -> None:
     try:
         manifest = sub.load_manifest(out)
     except FileNotFoundError as exc:
-        print(f"neuroatlas status: error: {exc}", file=sys.stderr)
+        _msg.error(str(exc))
         raise SystemExit(2) from None
     backend = manifest.get("backend", "condor")
     queue = sub.queue_snapshot(backend, out, manifest.get("batches"),
@@ -298,22 +304,23 @@ def status_main(argv: Optional[List[str]] = None) -> None:
     if args.format != "table":
         return
     parts = sub.count_parts(list(states.values()))
-    parts.append(f"skipped {len(manifest['skipped'])}")
     print(f"{manifest['benchmark']} ({manifest['suite']}, {manifest['variant']}): "
-          + "   ".join(parts))
+          f"{_plural(len(manifest['jobs']), 'job', 'jobs')}: {', '.join(parts) or 'none'}; "
+          f"{_plural(len(manifest['skipped']), 'pair', 'pairs')} skipped")
     if not queue.ok and not args.no_scheduler:
-        print(f"note: the scheduler was not asked ({queue.note}); running jobs are known only "
-              f"by their status files")
+        _msg.note(f"the scheduler was not asked ({queue.note}): a running job is known only "
+                  f"by its status file")
     if not args.verbose:
         bad = [r for r in rows if r["verdict"].split()[0] in _FAILED + ("held",)]
         for r in bad[:20]:
-            print(f"  {r['dataset']} / {r['model']}: {r['verdict']}"
-                  + (f" -- {r['detail']}" if r["detail"] else "")
-                  + (f"\n      log: {r['log']}" if r["log"] else ""))
+            print(f"  error: {r['dataset']}/{r['model']}: {r['verdict']}"
+                  + (f" ({r['detail']})" if r["detail"] else "")
+                  + (f"\n    log: {r['log']}" if r["log"] else ""))
         if len(bad) > 20:
             print(f"  ... and {len(bad) - 20} more (-v lists every job)")
     if any(counts.get(k) for k in _FAILED):
-        print("re-queue with `neuroatlas submit ... --mode retry`")
+        print(f"re-queue the failed ones: neuroatlas submit {manifest['benchmark']} ... "
+              f"--out {args.out} --mode retry")
     if counts.get("held"):
         print("held jobs stay in the queue until released or removed (by job id, "
               "never by user name)")
