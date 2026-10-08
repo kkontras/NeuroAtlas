@@ -460,7 +460,7 @@ class EpilepsiAEContinuousDataset(Dataset):
                     save_recording_stats(disk_path, stats, fingerprint)
                 except Exception:
                     # Disk-cache write is best-effort; fall through with the
-                    # in-memory result if /anonorg is full or read-only.
+                    # in-memory result if the cache folder is full or read-only.
                     pass
             if self._montage == "bipolar":
                 from neuroatlas.extensions.datasets.epilepsy._common import (

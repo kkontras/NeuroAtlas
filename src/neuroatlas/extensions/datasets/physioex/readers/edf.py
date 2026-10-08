@@ -378,7 +378,7 @@ def read_channels_from_edf(edf_path: Union[str, Path],
     try:
         from neuroatlas.extensions.datasets.physioex.cache import _encode_physical
     except ImportError:
-        # TODO: cache module not yet available; inline a local duplicate
+        # without the cache module: a local copy of its encoder
         def _encode_physical(physical):
             def _sanitize(s):
                 return s.replace("/", "_").replace("\\", "_").replace(" ", "_")

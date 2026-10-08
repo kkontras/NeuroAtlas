@@ -396,7 +396,7 @@ class EEGPTBackbone(BenchmarkBackbone):
         meta = batch.get("meta", [{}])
         raw_channels = meta[0].get("channels", None) if meta else None
         if raw_channels is None:
-            # TODO(audit): raise per MODEL_CONTRACTS §1 unknown-name policy in MEDIUM cleanup.
+            # no channel names: read the single channel as FPZ
             raw_channels = ["FPZ"]
         else:
             raw_channels = list(raw_channels)

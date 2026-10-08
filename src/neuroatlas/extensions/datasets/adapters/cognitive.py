@@ -21,6 +21,7 @@ import numpy as np
 
 from neuroatlas.extensions.datasets.dataio.bci import (
     DATASET_CONFIGS,
+    _load_preprocessed_mat,
     _resolve_preprocessed_path,
     get_subject_split,
     load_preprocessed_dataset,
@@ -58,6 +59,15 @@ def _no_preprocessed_file(slug: str, preprocessed_path: Optional[str],
     return (f"{head} (the authors provide it on request)\n"
             f"fix: ask the authors for {name}, then neuroatlas config set "
             f"{slug}.preprocessed_path FILE")
+
+
+def _no_format_file(slug: str, confound_control: bool, bci_format: str) -> str:
+    """The error for a model format's file that is not built yet."""
+    from neuroatlas.extensions.datasets.dataio.bci_paths import cognitive_files
+
+    where = cognitive_files(slug, confound_control, bci_format)[0]
+    return (f"{slug}: no {bci_format} file, {where}\n"
+            f"fix: neuroatlas data prepare {slug}")
 
 
 #: The band of a confound-filtered pickle (App. D.6: cognitive 4-40 Hz).
@@ -180,6 +190,7 @@ class _PickleCohortDataModule(BenchmarkDataModule):
         preprocessed_path: Optional[str] = None,
         channel_specs: Optional[Sequence[str]] = None,
         confound_control: bool = False,
+        bci_format: Optional[str] = None,
     ) -> None:
         cfg = DATASET_CONFIGS[self.SLUG]
         available = list(cfg.channels)
@@ -212,16 +223,37 @@ class _PickleCohortDataModule(BenchmarkDataModule):
             # Only when on: the cache context of a no-filtering run stays
             # what it always was, so its embeddings are found again.
             meta["confound_control"] = True
-        super().__init__(name=self.SLUG, metadata=meta)
+        if isinstance(n_folds, str):
+            # LOSO: fold k tests the k-th subject (dataio/bci.loso_split)
+            meta["loso_split"] = "ordered"
 
         key = self.SLUG + CONFOUND_CONTROLLED if confound_control else self.SLUG
-        mat = load_preprocessed_dataset(key, preprocessed_path=preprocessed_path)
-        if mat is None:
-            # read only from the authors' preprocessed file (as `data status`
-            # says); nothing downloads it
-            raise FileNotFoundError(_no_preprocessed_file(self.SLUG, preprocessed_path,
-                                                          confound_control))
-        path = _resolve_preprocessed_path(key, preprocessed_path)
+        if bci_format is not None and preprocessed_path is None:
+            # the model's own format's file (dataio/bci_formats.py)
+            from neuroatlas.extensions.datasets.dataio.bci_formats import check_format
+            from neuroatlas.extensions.datasets.dataio.bci_paths import cognitive_files, first_existing
+
+            check_format(bci_format)
+            path = first_existing(cognitive_files(self.SLUG, confound_control, bci_format))
+            if path is None:
+                raise FileNotFoundError(_no_format_file(self.SLUG, confound_control, bci_format))
+            mat = _load_preprocessed_mat(path)
+        else:
+            mat = load_preprocessed_dataset(key, preprocessed_path=preprocessed_path)
+            if mat is None:
+                raise FileNotFoundError(_no_preprocessed_file(self.SLUG, preprocessed_path,
+                                                              confound_control))
+            path = _resolve_preprocessed_path(key, preprocessed_path)
+        rate = (mat.get("preprocessing_meta") or {}).get("resample_sfreq") \
+            if isinstance(mat, dict) else None
+        if bci_format is not None:
+            from neuroatlas.extensions.datasets.dataio.bci_formats import FORMATS
+
+            meta["bci_format"] = bci_format
+            rate = rate or FORMATS[bci_format].rate
+        if rate:
+            meta["sfreq"] = meta["sampling_rate"] = float(rate)
+        super().__init__(name=self.SLUG, metadata=meta)
         wrong = _wrong_file(self.SLUG, path, _file_band(mat), confound_control)
         if wrong:
             raise ValueError(wrong)
@@ -235,7 +267,7 @@ class _PickleCohortDataModule(BenchmarkDataModule):
         self._batch_size = batch_size
         self._num_workers = num_workers
         self._channels = channels
-        self._sampling_rate = float(cfg.resample_sfreq)
+        self._sampling_rate = float(meta["sampling_rate"])
 
     def _make_loader(self, dataset, shuffle: bool):
         from torch.utils.data import DataLoader

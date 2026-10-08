@@ -133,16 +133,21 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         n_jobs: int = 1,
         subject_ids: Optional[Sequence[int]] = None,
         confound_control: bool = False,
+        bci_format: Optional[str] = None,
     ) -> None:
         from neuroatlas.extensions.datasets.dataio.moabb_loader import (
             MOABB_DATASETS,
             get_moabb_subjects,
             load_and_preprocess_moabb,
+            model_input,
         )
         from neuroatlas.extensions.datasets.dataio.bci import get_subject_split, resolve_n_folds
 
         cfg = MOABB_DATASETS[slug]
         subjects = list(subject_ids) if subject_ids is not None else get_moabb_subjects(cfg)
+        # The model's own input format (dataio/bci_formats.py; the runner
+        # passes the checkpoint's): its rate, band and notch.
+        model_cfg, notch = model_input(cfg, bci_format)
         train_subj, val_subj, test_subj = get_subject_split(
             subjects, fold=fold, n_folds=n_folds,
         )
@@ -162,18 +167,24 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
             # "LOSO 1/9"); not part of the global cache key (cache_context)
             "n_folds": resolve_n_folds(n_folds, len(subjects)) if isinstance(n_folds, str) else n_folds,
             "n_channels": cfg.n_channels,
-            "sfreq": cfg.resample_sfreq,
-            "sampling_rate": float(cfg.resample_sfreq),
+            "sfreq": model_cfg.resample_sfreq,
+            "sampling_rate": float(model_cfg.resample_sfreq),
             "source": "moabb",
             # Part of the cache context, so confound-controlled embeddings
             # land in their own cell instead of overwriting the others.
             "confound_control": bool(confound_control),
         }
+        if bci_format is not None:
+            meta.update({"bci_format": bci_format, "notch_hz": notch})
+        if isinstance(n_folds, str):
+            # LOSO: fold k tests the k-th subject (dataio/bci.loso_split)
+            meta["loso_split"] = "ordered"
         super().__init__(name=slug, metadata=meta)
 
         windows = load_and_preprocess_moabb(
             cfg, subject_ids=subjects, n_jobs=n_jobs,
             confound_control=confound_control,
+            **({"bci_format": bci_format} if bci_format is not None else {}),
         )
         self._windows = windows
         self._subjects = list(subjects)
@@ -186,14 +197,14 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         self._batch_size = batch_size
         self._num_workers = num_workers
         self._slug = slug
-        self._sampling_rate = float(cfg.resample_sfreq)
+        self._sampling_rate = float(model_cfg.resample_sfreq)
         # The length of the windows actually cut, which is what FIXED_WINDOW
         # hands the backbone: the trial, or the trial less the first second
         # under confound control (resolve_confound_control's start offset).
         for ds in windows.datasets:
             if len(ds):
                 n_times = int(ds[0][0].shape[-1])
-                self.metadata["epoch_seconds"] = n_times / float(cfg.resample_sfreq)
+                self.metadata["epoch_seconds"] = n_times / float(model_cfg.resample_sfreq)
                 break
         self._channels: List[str] = []
         if windows.datasets:
@@ -242,6 +253,7 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         if purpose == "global_embeddings":
             context.pop("fold", None)
             context.pop("n_folds", None)
+            context.pop("loso_split", None)
         return context
 
     def supports_global_embedding_cache(self) -> bool:

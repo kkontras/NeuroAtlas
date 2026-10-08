@@ -205,7 +205,7 @@ def check_pair(slug: str, spec, embed_argv, data_status, model_status,
             runner = BenchmarkRunner(config)
             dataset_name, run_config = runner._dataset_runs()[0]
             spec = runner._apply_spec_overrides(spec)
-            run_config = runner._pair_config(dict(run_config), cmap, spec)
+            run_config = runner._pair_config(dict(run_config), cmap, spec, dataset_name)
             run_config.pop("channel_map_name", None)
             datamodule, backbone = runner._prepare_pair(dataset_name, run_config, spec, cmap)
             # the pair's live line: loading the data, loading weights, then

@@ -1,6 +1,6 @@
 """Compatibility shims for importing braindecode on hosts with a broken torchaudio.
 
-On some anonorg compute nodes (observed on `anonhost.anonorg.example.invalid`), the
+On some machines the
 installed `torchaudio` .so has an undefined symbol mismatch against the local
 libstdc++:
 

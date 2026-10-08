@@ -635,9 +635,16 @@ class BenchmarkRunner:
 
     @staticmethod
     def _pair_config(dataset_config: Dict[str, Any], cmap: Optional[ChannelMap],
-                     checkpoint_spec) -> Dict[str, Any]:
-        """The dataset config one checkpoint sees: its channels, and recording
-        statistics for the models that normalise by them."""
+                     checkpoint_spec, dataset_name: Optional[str] = None) -> Dict[str, Any]:
+        """The dataset config one checkpoint sees: its channels, recording
+        statistics for the models that normalise by them, and, for a BCI
+        cohort, the input format the model reads (dataio/bci_formats.py)."""
+        if dataset_name is not None and "bci_format" not in dataset_config:
+            from neuroatlas.extensions.datasets.dataio.bci_formats import format_for, uses_formats
+
+            if uses_formats(dataset_name):
+                dataset_config = {**dataset_config,
+                                  "bci_format": format_for(checkpoint_spec.model_family)}
         if cmap is not None:
             family = checkpoint_spec.model_family.lower()
             dataset_config = {**dataset_config, "channel_specs": cmap.channels_for(family)}
@@ -832,7 +839,7 @@ class BenchmarkRunner:
                 },
             )
 
-        dataset_config = self._pair_config(dataset_config, cmap, checkpoint_spec)
+        dataset_config = self._pair_config(dataset_config, cmap, checkpoint_spec, dataset_name)
 
         try:
             effective_extract_only = self.extract_only or self.embed_chunk is not None

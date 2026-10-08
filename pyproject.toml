@@ -3,9 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# The distribution name only: `neuroatlas` on PyPI is an unrelated 2022
-# project (Baihan Lin's brain-mapping library). The import package and the
-# command stay `neuroatlas`: pip install neuroatlas-bench, then run neuroatlas.
+# The distribution is neuroatlas-bench; the command and the import are neuroatlas.
 name = "neuroatlas-bench"
 dynamic = ["version"]
 description = "NeuroAtlas: a benchmark for EEG foundation models across epilepsy, sleep, brain age and BCI"
@@ -14,18 +12,34 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["EEG", "foundation models", "benchmark", "sleep", "epilepsy", "BCI", "brain age"]
+authors = [
+    {name = "Konstantinos Kontras", email = "konstantinos.kontras@kuleuven.be"},
+    {name = "Trui Osselaer"},
+    {name = "Stylianos G. Mouslech"},
+    {name = "Angeliki-Ilektra Karaiskou"},
+    {name = "Guido Gagliardi"},
+    {name = "Thomas Strypsteen"},
+    {name = "Mohammad Hossein Badiei"},
+    {name = "Anku Rani"},
+    {name = "Maarten Vanmarcke"},
+    {name = "Miguel Bhagubai"},
+    {name = "Chanakya Ekbote"},
+    {name = "Jaedong Hwang"},
+    {name = "Christos Chatzichristos"},
+    {name = "Paul Pu Liang"},
+    {name = "Maarten De Vos"},
+]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 
-# Bounded to the tested ranges: the lower bounds are the paper's pins in
-# requirements-fm.txt, the upper bounds the next release line nobody has run
-# the benchmark on (an unbounded install pulled transformers 5, pandas 3 and
-# scikit-learn 1.9, and BIOT stopped loading). requirements-fm.txt still has
-# the exact pins; requirements-tsfm.txt the separate jax-based TS-FM
-# environment. Install torch separately to match your CUDA version.
+# Bounded to the tested ranges. requirements-fm.txt has the exact versions;
+# requirements-tsfm.txt the separate Moirai environment.
 dependencies = [
     "numpy>=1.26,<2",            # the paper's 1.26.4; moabb 1.2.0 (the BCI stack) needs numpy<2
     "scipy>=1.11,<2",
@@ -37,6 +51,12 @@ dependencies = [
     "pyedflib>=0.1.38,<0.2",     # EDF reader behind the PhysioEx-style sleep cohorts; imported by dataset discovery
     "huggingface_hub>=0.34,<1.0",  # gated and hub-hosted model weights; transformers 4.x needs <1.0
 ]
+
+[project.urls]
+Homepage = "https://github.com/kkontras/NeuroAtlas"
+Paper = "https://arxiv.org/abs/2605.14698"
+Documentation = "https://github.com/kkontras/NeuroAtlas/blob/main/docs/user_guide.md"
+Issues = "https://github.com/kkontras/NeuroAtlas/issues"
 
 [project.scripts]
 neuroatlas = "neuroatlas.cli:main"
@@ -102,14 +122,6 @@ bci = [
     "mne-bids>=0.18,<0.21",      # moabb's BIDS readers; the vendored Dreyer2023
     "matplotlib>=3.6.2,<4",
     "seaborn>=0.12.1,<0.14",     # imported by moabb.datasets; moabb 1.2.0 declares <0.13
-]
-# Sleep-domain PhysioEx preprocessing pipeline (not needed by the repro notebook).
-sleep = [
-    "mne",
-    "mne-bids",
-    "braindecode",
-    "physioex",
-    "loguru",
 ]
 
 [tool.setuptools]

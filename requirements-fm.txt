@@ -31,8 +31,7 @@ scikit-learn==1.7.2
 joblib==1.5.3
 
 # Read by benchmarking_helpers/channels/channel_map.py and registry/manifest.py
-# -- i.e. by every run. It was missing from this file; the pin is the version
-# the tsfm freeze records, since the fm freeze never listed it.
+# -- i.e. by every run.
 PyYAML==6.0.3
 
 # extensions/models/backbones/cbramod.py loads .safetensors checkpoints.

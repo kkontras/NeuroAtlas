@@ -336,12 +336,12 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
         n_folds = dataset_config.get("n_folds") or dataset_config.get("num_folds")
         if spec.supports_folds and n_folds:
             # "loso" is one fold per subject, so the count comes from the
-            # cohort rather than from the flag.
+            # cohort rather than from the flag; n_folds stays "loso", which
+            # the BCI readers split by (dataio/bci.loso_split)
             if isinstance(n_folds, str) and n_folds.strip().lower() == "loso":
                 from neuroatlas.extensions.datasets.dataio.moabb_loader import loso_fold_count
 
                 n_folds = loso_fold_count(spec.slug)
-                dataset_config["n_folds"] = n_folds
             dataset_config["folds"] = list(range(int(n_folds)))
 
     if args.aggregation is not None:

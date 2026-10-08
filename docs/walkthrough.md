@@ -182,7 +182,7 @@ embeddings or finds them in the cache, fits the probe and writes
 already cached, and output sent to a file, it prints:
 
 ```
-$ neuroatlas embed --dataset bnci2014_001 --pooling mean --set n_folds=loso --folds 0 --models biot_pretrained
+$ neuroatlas embed --dataset bnci2014_001 --set confound_control=true --pooling mean --set n_folds=loso --folds 0 --models biot_pretrained
 embedding 1 checkpoint on bnci2014_001: 1 run
 [1/1] bnci2014_001 biot_pretrained: embedding
 [1/1] bnci2014_001 biot_pretrained: loading the data 22% (2/9 subjects, 0m 09s, ~0m 34s left)
@@ -190,9 +190,9 @@ embedding 1 checkpoint on bnci2014_001: 1 run
 [1/1] bnci2014_001 biot_pretrained: already extracted (51s)
 embed: 1 ok, 0 failed (cache: ~/neuroatlas/cache)
 
-$ neuroatlas probe --dataset bnci2014_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000 --folds 0 --models biot_pretrained --output-root ~/neuroatlas/results/bci_motor_imagery/bnci2014_001
+$ neuroatlas probe --dataset bnci2014_001 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --tune-c 0.001,0.01,0.1,1,10,100 --seeds 0 --max-iter 1000 --folds 0 --models biot_pretrained --output-root ~/neuroatlas/results/bci_motor_imagery/bnci2014_001
 probing 1 checkpoint on bnci2014_001: 1 run, one line each as it finishes
-[1/1] bnci2014_001 biot_pretrained fold 0: ok, bal_acc 0.316 (27s)
+[1/1] bnci2014_001 biot_pretrained fold 0: ok, bal_acc 0.257 (9s)
 probe: 1 ok, 0 failed (results: ~/neuroatlas/results/bci_motor_imagery/bnci2014_001)
 
 1 run (checkpoint x fold): 1 ok, 0 failed

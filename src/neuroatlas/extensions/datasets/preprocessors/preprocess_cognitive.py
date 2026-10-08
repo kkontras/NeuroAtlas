@@ -2,16 +2,15 @@
 
 One cohort per call (``--dataset``): EEGMat (PhysioNet ``eegmat`` EDFs),
 ArithmeticTask (the OSF release, ``Experiment 1/`` and ``Experiment 2/``),
-DREAMER valence or arousal (``DREAMER.mat``). Each call writes the two files
-the reader reads (``bci_paths.COGNITIVE_PICKLES``):
+DREAMER valence or arousal (``DREAMER.mat``). Each call writes the files the reader reads (``bci_paths.COGNITIVE_PICKLES``),
+one pair per model format (``dataio/bci_formats.py``: labram 0.1-75 Hz at
+200 Hz, bendr 0.5-70 Hz at 256 Hz, steegformer 0.1-64 Hz at 128 Hz):
 
-    <stem>_preprocessed_steegformer.pkl          no filtering: 0.1-64 Hz
-    <stem>_preprocessed_trackD_steegformer.pkl   confound filtering: 4-40 Hz
+    <stem>_preprocessed_<format>.pkl          no filtering: the format's band
+    <stem>_preprocessed_trackD_<format>.pkl   confound filtering: 4-40 Hz
 
-both at 128 Hz, with a 50 Hz notch (and its harmonics below the native
-Nyquist) and the average reference, in microvolts. The preparation is the
-one the published files were made with (the cohorts' ``preprocess_*.py``
-scripts, their ``steegformer`` and ``trackD_steegformer`` rows):
+each at the format's rate, with a 50 Hz notch (and its harmonics below the
+native Nyquist) and the average reference, in microvolts. Per cohort:
 
     EEGMat          19 channels; rest (``SubjectNN_1.edf``) = 0 and mental
                     arithmetic (``SubjectNN_2.edf``) = 1; each recording
@@ -43,13 +42,18 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#: (fmin, fmax, resample rate, notch) of the two files: the published files'
-#: ``steegformer`` and ``trackD_steegformer`` rows
-FORMATS: Dict[bool, Tuple[float, float, float, float]] = {
-    False: (0.1, 64.0, 128.0, 50.0),
-    True: (4.0, 40.0, 128.0, 50.0),
-}
-FORMAT_NAME = "steegformer"
+#: The confound-filtering band of every format
+CONFOUND_BAND = (4.0, 40.0)
+NOTCH_HZ = 50.0
+
+
+def file_format(bci_format: str, confound: bool) -> Tuple[float, float, float, float]:
+    """(fmin, fmax, rate, notch) of one file."""
+    from neuroatlas.extensions.datasets.dataio.bci_formats import check_format
+
+    fmt = check_format(bci_format)
+    fmin, fmax = CONFOUND_BAND if confound else (fmt.fmin, fmt.fmax)
+    return fmin, fmax, fmt.rate, NOTCH_HZ
 
 # --------------------------------------------------------------------------- EEGMat
 
@@ -240,9 +244,11 @@ def _payload(subjects: List[int], windows: List[np.ndarray], labels: List[np.nda
 
 
 def build(slug: str, raw_dir: Path, out_dir: Path, *, force: bool = False,
-          subjects: Optional[Sequence[int]] = None, say: Callable[[str], None] = print
-          ) -> List[Path]:
-    """Write *slug*'s two files into *out_dir*; returns their paths."""
+          subjects: Optional[Sequence[int]] = None, say: Callable[[str], None] = print,
+          formats: Optional[Sequence[str]] = None) -> List[Path]:
+    """Write *slug*'s files into *out_dir*, two per model format (all of
+    ``bci_formats.FORMATS`` unless *formats*); returns their paths."""
+    from neuroatlas.extensions.datasets.dataio.bci_formats import FORMATS as MODEL_FORMATS
     from neuroatlas.extensions.datasets.dataio.bci import DATASET_CONFIGS
     from neuroatlas.extensions.datasets.dataio.bci_paths import (
         COGNITIVE_PICKLES,
@@ -255,9 +261,9 @@ def build(slug: str, raw_dir: Path, out_dir: Path, *, force: bool = False,
     stem = COGNITIVE_PICKLES[slug][1]
     cfg = DATASET_CONFIGS[slug]
     wanted = list(subjects) if subjects is not None else list(cfg.subjects)
-    outputs = {confound: out_dir / (f"{stem}_preprocessed"
-                                    f"{CONFOUND_FILTERED_TAG if confound else '_'}{FORMAT_NAME}.pkl")
-               for confound in (False, True)}
+    outputs = {(name, confound): out_dir / (f"{stem}_preprocessed"
+                                            f"{CONFOUND_FILTERED_TAG if confound else '_'}{name}.pkl")
+               for name in (formats or MODEL_FORMATS) for confound in (False, True)}
     if not force and all(p.is_file() for p in outputs.values()):
         say(f"{slug}: already built ({', '.join(p.name for p in outputs.values())}); "
             f"--set force=true builds them again")
@@ -276,8 +282,10 @@ def build(slug: str, raw_dir: Path, out_dir: Path, *, force: bool = False,
 
     mne.set_log_level("WARNING")
     out_dir.mkdir(parents=True, exist_ok=True)
-    for confound, path in outputs.items():
-        fmt = FORMATS[confound]
+    for (name, confound), path in outputs.items():
+        if path.is_file() and not force:
+            continue
+        fmt = file_format(name, confound)
         t0 = time.time()
         kept, xs, ys, missing = [], [], [], []
         for s in wanted:
@@ -298,7 +306,7 @@ def build(slug: str, raw_dir: Path, out_dir: Path, *, force: bool = False,
         tmp.replace(path)
         n = sum(len(y) for y in ys)
         say(f"{slug}: {path.name}, {len(kept)} subjects, {n:,} windows, "
-            f"{fmt[0]:g}-{fmt[1]:g} Hz ({time.time() - t0:.0f}s)"
+            f"{fmt[0]:g}-{fmt[1]:g} Hz at {fmt[2]:g} Hz ({time.time() - t0:.0f}s)"
             + (f"; no recordings for subjects {', '.join(map(str, missing))}" if missing else ""))
     return list(outputs.values())
 

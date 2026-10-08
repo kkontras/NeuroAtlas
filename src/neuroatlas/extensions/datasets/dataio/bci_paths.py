@@ -202,6 +202,13 @@ def _cognitive_paths(slug: str, confound_control: bool) -> List[str]:
             str(_DATA_DIR / folder / name)]
 
 
+def cognitive_files(slug: str, confound_control: bool, bci_format: str) -> List[str]:
+    """Where one model format's file of a cognitive cohort is looked for, in
+    order (the folders of :func:`_cognitive_paths`)."""
+    return [_resolve_prepared(p).replace("*", bci_format)
+            for p in _cognitive_paths(slug, confound_control)]
+
+
 PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = _SearchPaths({
     # Cognitive/affective cohorts: the pickle the authors provide (see
     # COGNITIVE_PICKLES); <slug>_confound_controlled is the confound-filtered one.

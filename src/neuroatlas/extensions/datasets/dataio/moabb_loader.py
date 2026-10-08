@@ -528,18 +528,35 @@ def get_moabb_subjects(cfg: MOABBDatasetConfig) -> List[int]:
 # Generic loading pipeline
 # ---------------------------------------------------------------------------
 
+def model_input(cfg: MOABBDatasetConfig, bci_format: Optional[str]):
+    """``(cfg, notch)``: the cohort's config at the model format's rate and
+    band (``dataio/bci_formats.py``), and the notch frequency (None: none).
+    Without a format, the cohort's own rate and band and no notch."""
+    if bci_format is None:
+        return cfg, None
+    import dataclasses
+
+    from neuroatlas.extensions.datasets.dataio.bci_formats import check_format, line_frequency
+
+    fmt = check_format(bci_format)
+    notch = fmt.notch if fmt.notch is not None else line_frequency(cfg.slug)
+    return dataclasses.replace(cfg, resample_sfreq=fmt.rate, fmin=fmt.fmin, fmax=fmt.fmax), notch
+
+
 def load_and_preprocess_moabb(
     cfg: MOABBDatasetConfig,
     subject_ids: Optional[Sequence[int]] = None,
     n_jobs: int = 1,
     confound_control: bool = False,
+    bci_format: Optional[str] = None,
 ):
     """Download (if needed), preprocess, and window any MOABB dataset.
 
     Pipeline:
       1. Load raw data via braindecode ``MOABBDataset``
-      2. Keep the EEG channels; scale V → µV
-      3. Band-pass filter: the paradigm's own band, or under confound
+      2. Keep the EEG channels; scale V → µV; with a model format
+         (*bci_format*), a notch at the line frequency and its harmonics
+      3. Band-pass filter (the model format's band, else the paradigm's): the paradigm's own band, or under confound
          filtering the paper's per paradigm (:func:`resolve_confound_control`;
          SSVEP: a high-pass alone)
       4. Optional common average reference
@@ -565,7 +582,8 @@ def load_and_preprocess_moabb(
     # then probes, and every model and fold builds its datamodule, each one
     # loading and filtering the same subjects (minutes on BCI) to the same
     # windows. Only within one `neuroatlas` command (quiet.per_command).
-    key = (repr(cfg), tuple(subjects), bool(confound_control), os.environ.get("MNE_DATA"))
+    cfg, notch = model_input(cfg, bci_format)
+    key = (repr(cfg), notch, tuple(subjects), bool(confound_control), os.environ.get("MNE_DATA"))
     if quiet.in_command() and _LAST_COHORT.get("key") == key:
         logger.info("%s: the %d subjects loaded earlier in this command are reused",
                     cfg.slug, len(subjects))
@@ -582,8 +600,13 @@ def load_and_preprocess_moabb(
         # channels, the EOG stayed in volts (~1e-6) next to EEG in µV.
         Preprocessor("pick", picks="eeg"),
         Preprocessor(lambda x: x * 1e6),  # V -> µV
-        Preprocessor("filter", l_freq=fmin, h_freq=fmax),
     ]
+    if notch:
+        import numpy as np
+
+        preprocessors.append(Preprocessor(
+            "notch_filter", freqs=np.arange(notch, cfg.native_sfreq / 2, notch)))
+    preprocessors.append(Preprocessor("filter", l_freq=fmin, h_freq=fmax))
     if cfg.use_car:
         preprocessors.append(
             Preprocessor("set_eeg_reference", ref_channels="average", ch_type="eeg")

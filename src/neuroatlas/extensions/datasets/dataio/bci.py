@@ -1801,6 +1801,26 @@ def resolve_n_folds(n_folds: Union[int, str], n_subjects: int) -> int:
     return max(2, min(int(n_folds), n_subjects))
 
 
+def loso_split(
+    all_subjects: Sequence[int],
+    fold: int,
+    val_ratio: float = 0.1,
+    random_state: int = 42,
+) -> Tuple[List[int], List[int], List[int]]:
+    """``(train, val, test)`` of leave-one-subject-out fold *fold*: the
+    subjects in ascending order, fold k tests the k-th, and the validation
+    subjects (one for up to 19 others) are drawn from the rest with
+    ``train_test_split(test_size=val_ratio, random_state)``."""
+    from sklearn.model_selection import train_test_split
+
+    ordered = sorted(int(s) for s in all_subjects)
+    n = len(ordered)
+    k = int(fold) % n
+    rest = [i for i in range(n) if i != k]
+    train_idx, val_idx = train_test_split(rest, test_size=val_ratio, random_state=random_state)
+    return ([ordered[i] for i in train_idx], [ordered[i] for i in val_idx], [ordered[k]])
+
+
 def get_subject_split(
     all_subjects: Sequence[int],
     fold: int,
@@ -1810,11 +1830,13 @@ def get_subject_split(
 ) -> Tuple[List[int], List[int], List[int]]:
     """Split subjects into train / val / test by fold index.
 
-    Uses a simple deterministic split: subjects are shuffled once with
-    *random_state*, divided into *n_folds* roughly equal chunks.  The chunk
-    at index *fold* is the test set; the next chunk is the validation set;
-    the rest is training.
+    ``n_folds="loso"``: :func:`loso_split`. Otherwise subjects are shuffled
+    once with *random_state*, divided into *n_folds* roughly equal chunks.
+    The chunk at index *fold* is the test set; the next chunk is the
+    validation set; the rest is training.
     """
+    if isinstance(n_folds, str) and n_folds.strip().lower() == LOSO:
+        return loso_split(all_subjects, fold, val_ratio=val_ratio, random_state=random_state)
     rng = np.random.RandomState(random_state)
     subjects = np.array(all_subjects)
     perm = rng.permutation(len(subjects))

@@ -7,7 +7,7 @@ question: >
 paper: App. C.4
 # no task: each cohort's own (linear_probe); trial windows come from its manifest
 embed: --set confound_control=true --pooling mean
-probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --tune-c 0.001,0.01,0.1,1,10,100 --seeds 0 --max-iter 1000
 datasets: [kim2025betarange, nakanishi2015]
 single: nakanishi2015
 # Model families this benchmark does not evaluate: `-m all`, a group or an
@@ -31,9 +31,10 @@ metrics:
     balanced accuracy over one held-out subject's trials (the mean of the
     per-class recalls)
   fold: >
-    leave-one-subject-out, one fold per subject (another subject is the
-    validation fold, the rest train); logistic regression, balanced loss,
-    regularisation C = 1
+    leave-one-subject-out, one fold per subject (fold k tests the k-th subject
+    in ascending order; one other subject, drawn with seed 42, is the
+    validation subject, the rest train); logistic regression, unweighted
+    loss, C from 0.001 to 100 chosen on the validation subject's Cohen's kappa
   spread: population SD over the held-out subjects
   note: >
     The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
@@ -45,8 +46,9 @@ metrics:
 # in its metadata), whichever folder it is in.
 default_variant:
   description: >
-    confound filtering, mean-pool: each trial high-passed at 1 Hz and not
-    low-passed, so the stimulus harmonics stay in, its window the cohort's
+    confound filtering, mean-pool: each trial high-passed at the model's own
+    lower edge (0.1 Hz; EEGPT 0.5 Hz) and not low-passed, so the stimulus
+    harmonics stay in, at the model's own rate, its window the cohort's
     own; a trial's patch tokens are averaged into one vector
   paper: Fig. 26b and Table 13 (confound filtering, mean pool)
 variants:
@@ -57,14 +59,15 @@ variants:
       dimension) instead of averaged
     paper: Fig. 23 (SSVEP), the confound-filtering bars; Fig. 5b and Table 12
     embed: --set confound_control=true --pooling per_patch
-    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --tune-c 0.001,0.01,0.1,1,10,100 --seeds 0 --max-iter 1000
   no_filtering:
     description: >
-      no filtering, mean-pool: each trial band-passed 1-50 Hz, its window the
-      cohort's own
+      no filtering, mean-pool: each trial in the model's own band and rate
+      (0.1-75 Hz at 200 Hz; EEGPT 0.5-70 Hz at
+      256 Hz; ST-EEGFormer and SleepFM 0.1-64 Hz at 128 Hz), its window the cohort's own
     paper: App. D.8, mean pool without confound filtering
     embed: --set confound_control=false --pooling mean
-    probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+    probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --tune-c 0.001,0.01,0.1,1,10,100 --seeds 0 --max-iter 1000
   no_filtering_token_flattening:
     aliases: [per_patch]
     description: >
@@ -72,4 +75,4 @@ variants:
       concatenated in token order into one vector
     paper: Fig. 23 (SSVEP), the no-filtering bars
     embed: --set confound_control=false --pooling per_patch
-    probe: --set confound_control=false --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+    probe: --set confound_control=false --pooling per_patch --set n_folds=loso --probe-type linear --tune-c 0.001,0.01,0.1,1,10,100 --seeds 0 --max-iter 1000

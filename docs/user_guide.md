@@ -354,7 +354,7 @@ every experiment in the paper.
 | `sleep_hypnogram` | Mean Pearson r between hypnogram features from the predicted and the scored hypnograms | test recordings of all folds pooled | one value, no ± |
 | `brain_age` | MAE in years. Ridge regression, alpha by nested 4-fold CV. | subjects (recordings for ISRUC and WSC), one mean embedding each | 5 subject-level folds stratified on age, SD over folds |
 | `epilepsy` | Event-level Sens@FA AUC over 0.1-100 false alarms per hour. C chosen on validation AUPRC. `n/a` on Bonn, TUAB and NMT. | seizure events | 5 patient-level folds, sample SD (ddof=1) of the per-fold AUCs |
-| `bci_*` | Balanced accuracy. Logistic regression at C = 1, balanced loss. | one held-out subject's trials | LOSO, SD over held-out subjects |
+| `bci_*` | Balanced accuracy. Logistic regression, unweighted loss, C from 0.001 to 100 chosen on the validation subject's Cohen's kappa. | one held-out subject's trials | LOSO: fold k tests the k-th subject in ascending order, one other subject (drawn with seed 42) validates; SD over held-out subjects |
 
 Every SD except epilepsy's is the population SD (ddof=0). For BCI, the
 paper's figures plot the rescaling (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of
@@ -364,20 +364,28 @@ of classes C.
 ### BCI variants
 
 The four BCI benchmarks run confound filtering by default (App. D.6). Each
-paradigm is filtered its own way:
+model reads the trials in its own format:
+
+| Models | Band | Rate | Notch |
+|---|---|---|---|
+| EEGPT | 0.5-70 Hz | 256 Hz | the dataset's line frequency |
+| ST-EEGFormer, SleepFM | 0.1-64 Hz | 128 Hz | the dataset's line frequency |
+| every other model | 0.1-75 Hz | 200 Hz | 50 Hz |
+
+The notch covers the line frequency and its harmonics, and every trial is
+average-referenced. Confound filtering keeps the model's rate and notch and
+changes the band, each paradigm its own way:
 
 | Paradigm | Confound filtering (the default) | No filtering (`--variant no_filtering`) |
 |---|---|---|
-| Motor imagery | 4-40 Hz, the trial from 1 s to 4 s after the cue | 4-40 Hz, the trial from the cue to 4 s after it |
-| ERP | 0.5-40 Hz, the cohort's own trial window | 1-30 Hz, the cohort's own trial window |
-| SSVEP | 1 Hz high-pass and no low-pass, the cohort's own trial window | 1-50 Hz, the cohort's own trial window |
-| Cognitive | 4-40 Hz, the dataset's file of that band ([built from the raw data](#files-built-from-the-raw-data)) | 0.1-64 Hz, the dataset's other file |
+| Motor imagery | 4-40 Hz, the trial from 1 s to 4 s after the cue | the model's band, the trial from the cue to 4 s after it |
+| ERP | 0.5-40 Hz, the cohort's own trial window | the model's band, the cohort's own trial window |
+| SSVEP | the model's high-pass and no low-pass, the cohort's own trial window | the model's band, the cohort's own trial window |
+| Cognitive | 4-40 Hz, the dataset's file of that band ([built from the raw data](#files-built-from-the-raw-data)) | the model's band, the dataset's other file |
 
 For motor imagery, dropping the first second after the cue means the score
 cannot come from the cue's evoked response or the eye movement towards it.
-SSVEP has no low-pass so that the stimulus harmonics stay in. The MOABB
-datasets are cut at 128 Hz (SSVEP at 256 Hz), with the average reference
-and no notch filter.
+SSVEP has no low-pass so that the stimulus harmonics stay in.
 
 Each benchmark has four variants, the two filterings crossed with the two
 ways of turning a trial's patch tokens into one vector:
@@ -598,12 +606,12 @@ order:
 `config show` prints which one and why. To move it, set
 `export MNE_DATA=/your/mne_data`.
 
-`run` reads the MOABB recordings directly and cuts the trials itself,
-with each paradigm's band and sampling rate and each dataset's trial
+`run` reads the MOABB recordings directly and cuts the trials itself, in
+each model's band, sampling rate and notch, with each dataset's trial
 window. By default that is confound filtering: for motor imagery 4-40 Hz
-at 128 Hz, average reference, no notch filter, and the trial from 1 s to
-4 s after the cue ([BCI variants](#bci-variants) lists the others). There
-is nothing to prepare first.
+at the model's rate, average reference, and the trial from 1 s to 4 s
+after the cue ([BCI variants](#bci-variants) lists the others). There is
+nothing to prepare first.
 
 `list datasets --all` also shows MOABB datasets outside the paper. Most of
 them need a newer moabb than 1.2.0, which needs numpy 2. The tool refuses
@@ -640,12 +648,16 @@ where to ask and where to put `DREAMER.mat`. `dreamer_valence` and
 `dreamer_arousal` read the same file, so put a copy or a link in each
 folder.
 
-`data prepare` writes two files per dataset into `<cache root>/prepared/<dataset>/`,
-both at 128 Hz with a 50 Hz notch and the average reference:
-`<name>_preprocessed_trackD_steegformer.pkl`, filtered 4-40 Hz, which the
-default (confound filtering) reads, and `<name>_preprocessed_steegformer.pkl`,
-filtered 0.1-64 Hz, which the `no_filtering` variants read. EEGMat and
-DREAMER are cut into 4 s windows, ArithmeticTask into 1 s windows.
+`data prepare` writes two files per model format into
+`<cache root>/prepared/<dataset>/`, each at the format's rate with a 50 Hz
+notch and the average reference: `<name>_preprocessed_trackD_<format>.pkl`,
+filtered 4-40 Hz, which the default (confound filtering) reads, and
+`<name>_preprocessed_<format>.pkl`, in the format's band, which the
+`no_filtering` variants read. The formats are `labram` (0.1-75 Hz, 200 Hz),
+`bendr` (0.5-70 Hz, 256 Hz, read by EEGPT) and `steegformer` (0.1-64 Hz,
+128 Hz, read by ST-EEGFormer and SleepFM). Each model reads its format's
+file. EEGMat and DREAMER are cut into 4 s windows, ArithmeticTask into 1 s
+windows.
 
 `data status` shows `not prepared` until the files are built, with the
 command that builds them. A file whose recorded band is the other
@@ -835,7 +847,7 @@ results: <output root>/brain_age; `neuroatlas results brain_age` summarises them
 
 Each fold's result line carries that fold's headline value, under the
 same label as the `results` column. Examples are `kappa 0.777` for sleep
-staging, `bal_acc 0.316` for BCI and `Sens@FA_AUC(event) 0.428` on Siena.
+staging, `bal_acc 0.257` for BCI and `Sens@FA_AUC(event) 0.428` on Siena.
 On Bonn, whose recordings have no seizure events, the line shows
 `AUROC 0.993` instead. A fold scored from saved predictions says
 `ok, reused`.
@@ -859,8 +871,8 @@ While fitting, the progress line counts what the probe tries:
 
 | Benchmark | Counts |
 |---|---|
-| sleep staging, epilepsy | the C values of the grid |
-| BCI, sleep events, diagnosis | the seeds |
+| sleep staging, epilepsy, BCI | the C values of the grid |
+| sleep events, diagnosis | the seeds |
 | brain age | the ridge's alpha values |
 
 Sleep staging shows no time left while it fits, because a large C takes
