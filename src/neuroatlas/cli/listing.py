@@ -145,16 +145,18 @@ def list_benchmarks(args) -> None:
             notes[len(rows) - 1] = [", ".join(listed)]
     if not _done(args, rows, len(every), "benchmarks"):
         return
+    # a planned column only while some benchmark names datasets it cannot run
+    any_planned = any(r["planned"] for r in rows)
     render(rows, ["benchmark", "domain", "task", "headline", "chance", "single",
-                  "n_full", "planned", "variants"], args.format, notes,
+                  "n_full", *(["planned"] if any_planned else []), "variants"],
+           args.format, notes,
            extra=["headline_key", "datasets", "planned_datasets", "excluded_models"],
            labels={"single": "quick dataset", "n_full": "datasets"})
     if args.format == "table":
         print("\n" + "\n".join(_msg.legend([
             ("quick dataset", "the one dataset `run` and `check` use by default "
                               "(--dataset single); --dataset full runs all of them"),
-            ("datasets", "how many datasets the benchmark has (listed under its row); "
-                         "planned: how many more the paper lists that cannot run here yet"),
+            ("datasets", "how many datasets the benchmark has (listed under its row)"),
             ("chance", "the headline's value for a classifier that guesses (-: the "
                        "headline has no fixed chance value)"),
             ("variants", "other protocols beside the default one (--variant NAME; "
@@ -416,42 +418,49 @@ def list_tasks(args) -> None:
 
 
 LISTINGS = {
-    "benchmarks": (list_benchmarks, "What each benchmark predicts, on which datasets, scored how."),
-    "datasets": (list_datasets, "Every paper dataset: domain, access, size, benchmarks."),
-    "models": (list_models, "Checkpoints: family, group, input rate and window, embedding size."),
-    "aliases": (list_aliases, "Names for groups of checkpoints, for -m / --models."),
-    "tasks": (list_tasks, "Probe tasks, and the settings each benchmark runs them with."),
+    "benchmarks": (list_benchmarks, "List each benchmark with its task, datasets and headline "
+                                    "metric."),
+    "datasets": (list_datasets, "List the paper's datasets with their domain, access, size "
+                                "and benchmarks."),
+    "models": (list_models, "List the checkpoints with their family, group, input rate, "
+                            "window and embedding size."),
+    "aliases": (list_aliases, "List the names that select groups of checkpoints with -m."),
+    "tasks": (list_tasks, "List the probe tasks and the settings each benchmark runs them "
+                          "with."),
 }
 
 _VERBOSE_HELP = {
-    "benchmarks": "Also show each dataset's full name, how it is obtained and its task.",
-    "datasets": "Also show where each dataset comes from (its web page, or its MOABB name).",
-    "models": "Also show where each checkpoint's weights come from.",
-    "aliases": "Also list each alias's checkpoints.",
-    "tasks": "Also list the tasks no benchmark runs, and each one's kind.",
+    "benchmarks": "Also show how to get each dataset and the models a benchmark leaves out.",
+    "datasets": "Also show the web page or MOABB name of each dataset.",
+    "models": "Also show where the weights of each checkpoint come from.",
+    "aliases": "Also list the checkpoints of each alias.",
+    "tasks": "Also list the tasks no benchmark runs, and the kind of each.",
 }
 
 
 def build_parser() -> Parser:
-    parser = Parser(prog="neuroatlas list", description=__doc__)
+    parser = Parser(prog="neuroatlas list",
+                    description="List the benchmarks, datasets, models, aliases or tasks. "
+                                "This reads only the tables that ship with NeuroAtlas. Use "
+                                "`neuroatlas data status` and `neuroatlas models status` to "
+                                "see what is on this machine.")
     sub = parser.add_subparsers(dest="what", metavar="<what>")
     for name, (_, summary) in LISTINGS.items():
         p = sub.add_parser(name, help=summary, description=summary)
-        p.add_argument("--grep", metavar="TEXT", help="Only rows mentioning TEXT.")
+        p.add_argument("--grep", metavar="TEXT",
+                       help="Only show rows that mention TEXT (case-insensitive).")
         p.add_argument("-v", "--verbose", action="store_true", help=_VERBOSE_HELP[name])
         add_format_arg(p)
         if name == "models":
             p.add_argument("selector", nargs="?",
-                           help="Only these: an alias, group, family or ids (e.g. all_fm, "
-                                "baseline, reve).")
+                           help="Only show these checkpoints, given as an alias, group, "
+                                "family or ids such as all_fm, baseline or reve.")
             p.add_argument("--benchmark", metavar="NAME", default=None,
-                           help="Only the checkpoints this benchmark evaluates: the selector "
-                                "(default: every checkpoint) without the model families the "
-                                "benchmark leaves out.")
+                           help="Leave out the models this benchmark does not evaluate.")
         if name == "datasets":
             p.add_argument("--all", action="store_true",
-                           help="Also list the datasets readable here that the paper does "
-                                "not evaluate.")
+                           help="Also list the datasets that can be read but are not in "
+                                "the paper.")
     return parser
 
 

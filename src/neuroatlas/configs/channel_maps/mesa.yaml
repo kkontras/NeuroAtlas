@@ -50,6 +50,19 @@ per_model:
     C3: C3
     Cz: Cz
 
+  neurogpt:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  neurorvq:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  steegformer:
+    C4: C4
+    C3: C3
+    Cz: Cz
+
   core_sleep:
     C4: C4
     C3: C3
@@ -69,3 +82,6 @@ notes:
   neurolm: "MESA generic labels mapped to 10-20 positions."
   reve: "MESA generic labels mapped to REVE position bank names (mixed case)."
   biot: "MESA 3 monopolar channels mapped to 10-20 names."
+  neurogpt: "MESA's three EEG channels, as the reader names them (C4, C3, Cz), uppercase in NeuroGPT's 22-channel layout (3 of 22 filled)."
+  neurorvq: "MESA's three EEG channels as the reader names them; NeuroRVQ looks names up case-insensitively."
+  steegformer: "MESA's three EEG channels as the reader names them, mixed case as S-TEEGformer's vocabulary spells them (Cz)."

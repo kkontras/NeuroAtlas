@@ -75,19 +75,18 @@ pipeline:
       out: --output
 
 runtime_options:
-  # Reached with `--set confound_control=true` on `embed` and `probe`.
-  # Motor imagery only: `embed` refuses it on a P300, ERP or SSVEP cohort,
-  # where the cue-locked response is the signal rather than a confound.
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_motor_imagery benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
   confound_control:
     default: false
     effect: >
       holds the passband to the 4-40 Hz motor range and starts each trial
       1 s after the cue, so the evoked response and the eye movement towards
-      the cue are outside the window: 1-4 s after the cue. Off uses the
-      paradigm's own passband and the paper's 4 s trial, 0-4 s after the cue
-      (moabb_loader.trial_window). The two are cached separately, and the gap
-      between them is how much of a score came from the cue rather than the
-      imagery.
+      the cue are outside the window: 1-4 s after the cue. Off uses the same
+      band and the 4 s trial from the cue, 0-4 s (moabb_loader.trial_window).
+      The two are cached separately, and the gap between them is how much of
+      a score came from the cue rather than the imagery.
     implemented_by: extensions/datasets/dataio/moabb_loader.py:resolve_confound_control
 
 provenance:

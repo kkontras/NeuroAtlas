@@ -46,6 +46,6 @@ metrics:
     Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3, REM), each
     fold's test subjects pooled, unscored epochs left out
   fold: >
-    5 subject-level folds (SHHS: one fixed split); the probe's C is chosen
-    from 0.001-100 on validation Cohen's kappa, unweighted loss
+    5 subject-level folds; the probe's C is chosen from 0.001-100 on
+    validation Cohen's kappa, unweighted loss
   spread: population SD over the folds

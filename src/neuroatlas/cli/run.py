@@ -19,61 +19,57 @@ PLAN_LABELS = {"n_models": "checkpoints", "n_runs": "runs", "n_not_applicable": 
 def build_parser() -> Parser:
     p = Parser(
         prog="neuroatlas run",
-        description="Run a benchmark on this machine: for each dataset, `embed` (a no-op "
-                    "where the cache already has it), then `probe` over its folds. "
-                    "Results go to <output root>/<benchmark>/<dataset>/.")
-    from neuroatlas.cli.check import DATASET_HELP
+        description="Run a benchmark on this machine. For each dataset it extracts the "
+                    "embeddings that are not cached yet, fits the probes on every fold and "
+                    "writes the results to `<output root>/<benchmark>/<dataset>/`.")
+    from neuroatlas.cli.check import BENCHMARK_HELP, DATASET_HELP, VARIANT_HELP
 
-    p.add_argument("benchmark")
+    p.add_argument("benchmark", help=BENCHMARK_HELP)
     p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="single", metavar="single|full|NAMES",
-                   help=f"Which datasets (default: single). {DATASET_HELP}")
-    p.add_argument("--variant", default="default", help="A benchmark variant (see `neuroatlas show`).")
+                   help=f"{DATASET_HELP} (default: single).")
+    p.add_argument("--variant", default="default", help=VARIANT_HELP)
     p.add_argument("--dry-run", action="store_true",
-                   help="Print the plan (datasets, checkpoints, folds, runs, whether the data "
-                        "is here) and stop.")
+                   help="Print the datasets, checkpoints, folds and runs, and whether the "
+                        "data is here, then stop.")
     p.add_argument("--debug", action="store_true",
-                   help="Fold 0 only. Most datasets save one set of embeddings for every "
-                        "fold: it is extracted in full, and a later full run reuses it. A few "
-                        "save them per fold (HMC, MESA, STAGES, HomePAP, SHHS, the four "
-                        "bci_cognitive datasets, TUAB and CHB-MIT when read from an HDF5 "
-                        "file, and any run with a stride other than the window): those "
-                        "extract fold 0 only, and the full run extracts the other folds.")
+                   help="Run fold 0 only, as a quick test. Most datasets still extract the "
+                        "embeddings of every fold, which a later full run reuses. HMC, MESA, "
+                        "STAGES, HomePAP, the four bci_cognitive datasets, TUAB and "
+                        "CHB-MIT when read from an HDF5 file, and runs with a stride other "
+                        "than the window extract fold 0 only.")
     p.add_argument("--folds", default=None, metavar="LIST",
-                   help="Only these folds: 0,1 or 0-4 (default: all of them).")
+                   help="Only run these folds, as in 0,1 or 0-4 (default: all).")
     p.add_argument("--limit-batches", type=int, default=None, metavar="N",
-                   help="Stop each extraction after N batches: a smoke test. Uses its own "
-                        "cache, <cache root>/_limited, and writes its results under "
-                        "<output root>/_limited; too few subjects may leave a fold with "
-                        "nothing to test on.")
+                   help="Stop each extraction after N batches, for a smoke test. Its "
+                        "embeddings and results go to `_limited` folders under the cache "
+                        "and output roots. A fold may end up with no test subjects.")
     p.add_argument("--skip-embed", action="store_true",
-                   help="Probe only; fail where embeddings are missing.")
+                   help="Only fit the probes. Fail where embeddings are missing.")
     p.add_argument("--reprobe", action="store_true",
-                   help="Fit every fold again. Without it, a fold whose saved predictions "
-                        "(predictions.npz in its probe folder) were made with the same "
-                        "settings, weights and embeddings is not fitted again: its metrics "
-                        "are recomputed from them.")
+                   help="Fit every fold again. Without it, a fold with saved predictions "
+                        "from the same settings, weights and embeddings is only rescored.")
     p.add_argument("--num-workers", type=int, default=None, metavar="N",
-                   help="Data-loader workers for extraction. Default: the CPUs this job may "
-                        "use (CPU affinity and cgroup quota) minus one, at most 16, unless "
-                        "the dataset pins its own.")
+                   help="Data loader workers for extraction (default: the CPUs this job may "
+                        "use minus one, at most 16). Some datasets set their own.")
     p.add_argument("--cache-root", default=None, metavar="DIR",
-                   help="Where this run saves and reads embeddings (default: the cache root).")
+                   help="Where to save and read embeddings (default: the cache_root "
+                        "setting).")
     p.add_argument("--output-root", default=None, metavar="DIR",
-                   help="Where this run writes results (default: the output root).")
+                   help="Where to write results (default: the output_root setting).")
     p.add_argument("--checkpoint-override", action="append", default=[],
                    metavar="ID.checkpoint_path=PATH",
-                   help="Run checkpoint ID (a checkpoint id or family among the -m selection) "
-                        "from other weights, e.g. biot_pretrained.checkpoint_path=/my/"
-                        "weights.ckpt; the file must exist. Needs --cache-root: saved "
-                        "embeddings are filed under the checkpoint id, not its weights, so "
-                        "other weights need a cache folder of their own.")
+                   help="Load the weights of checkpoint ID from PATH, as in "
+                        "biot_pretrained.checkpoint_path=/my/weights.ckpt. ID must be in the "
+                        "-m selection. Needs its own --cache-root, because embeddings are "
+                        "cached by checkpoint id.")
     p.add_argument("--per-model-output", action="store_true",
-                   help="Results in <dataset>/<checkpoint>/ (what `submit`'s jobs use).")
+                   help="Write results to `<dataset>/<checkpoint>/`, as the jobs of `submit` "
+                        "do.")
     p.add_argument("--allow-partial", action="store_true",
-                   help="Run on a dataset that `data status` calls partial or empty (a "
-                        "half-finished download). Without it, run refuses: the results would "
-                        "silently cover only the subjects that arrived.")
+                   help="Run on a dataset that `data status` reports as partial or empty. "
+                        "Without it, run refuses, because the results would cover only some "
+                        "subjects.")
     add_format_arg(p)
     return p
 

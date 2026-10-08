@@ -45,14 +45,14 @@ class Setting:
 # editable install or a wheel, nor on the working directory.
 SETTINGS: Dict[str, Setting] = {s.key: s for s in (
     Setting("data_root", "EEG_DATA_ROOT", lambda: None,
-            "raw datasets, one sub-folder each"),
+            "Folder with the raw datasets, one sub-folder per dataset"),
     Setting("cache_root", "EEG_CACHE_ROOT", lambda: _paths.artifacts_dir("embedding_cache"),
-            "saved embeddings and prepared datasets (prepared/); can grow large",
+            "Folder for saved embeddings and prepared datasets, which can grow large",
             "$NEUROATLAS_HOME/artifacts/embedding_cache"),
     Setting("output_root", "NEUROATLAS_OUTPUT_ROOT", lambda: _paths.artifacts_dir("benchmarks"),
-            "probe results (results.json)", "$NEUROATLAS_HOME/artifacts/benchmarks"),
+            "Folder for the probe results", "$NEUROATLAS_HOME/artifacts/benchmarks"),
     Setting("models_root", "NEUROATLAS_MODELS_ROOT", lambda: _paths.artifacts_dir("models"),
-            "model weights", "$NEUROATLAS_HOME/artifacts/models"),
+            "Folder for model weights", "$NEUROATLAS_HOME/artifacts/models"),
 )}
 
 # Keys a config file may hold besides the roots.

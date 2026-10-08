@@ -50,7 +50,7 @@ neuroatlas = "neuroatlas.cli:main"
 fm = [
     "torch",
     "tqdm>=4.66,<5",              # probe progress bars
-    "easydict>=1.13,<2",          # CoRe-Sleep, SleepTransformer and the SHHS reader
+    "easydict>=1.13,<2",          # CoRe-Sleep and SleepTransformer
     "physioex>=1.0.9,<1.1",       # the Sleep-EDF reader's PhysioEx preprocessing
     "loguru>=0.7,<0.8",           # imported by that reader
     "transformers>=4.57.1,<5",

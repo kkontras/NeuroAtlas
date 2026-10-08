@@ -1,16 +1,16 @@
-"""Build a dataset's prepared file: an optional step between `data download` and `run`.
+"""Build a dataset's prepared file: a step between `data download` and `run`.
 
-No dataset of the paper needs it. Every sleep and brain-age dataset reads its
+Four datasets need it: the bci_cognitive ones (dreamer_valence,
+dreamer_arousal, eegmat, arithmetic_task) are read from the files their
+builder writes from the raw data. Every sleep and brain-age dataset reads its
 raw data directly, and so do the epilepsy ones: `chbmit` and `siena` read
 BIDS, `sz1`, `sz2` and `tusz` read EDF, `tuab` reads EDF, `bonn` reads its
 plain-text clips. For five of them (bonn, epilepsiae, sz1, tuab, tusz) a
 prepared file is a speed-up for large sweeps and nothing else -- `embed`
-works without it. The BCI datasets load through MOABB's own reader; the
+works without it. The MOABB datasets load through MOABB's own reader; the
 pickle the five motor-imagery builders write (bnci2014_001, bnci2014_004,
 bnci2015_001, shin2017a, weibo2014) is not read by `run` (``required: false``
-in their manifests; :func:`neuroatlas.catalog.prepare_required`). The four
-bci_cognitive datasets read a prepared file nothing here builds: it comes
-from the authors.
+in their manifests; :func:`neuroatlas.catalog.prepare_required`).
 
 It dispatches on ``pipeline.preprocessor`` in the dataset manifest, which
 records the builder module and which of its flags take the raw corpus and the
@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
-from neuroatlas.cli import ErrorParser
+from neuroatlas.cli import ErrorParser, LinesFormatter
 from neuroatlas.entrypoints._common import (
     expand_dataset_paths,
     parse_embed_chunk,
@@ -97,6 +97,13 @@ def build_argv(slug: str, overrides: Dict[str, Any],
         argv += [args["slug"], slug]
     if "raw" in args:
         raw = next((defaults[k] for k in _RAW_KEYS if defaults.get(k)), None)
+        if not raw and not any(k in defaults for k in _RAW_KEYS):
+            # a reader that reads only the built file (bci_cognitive): the
+            # raw data is where `data download` puts it
+            from neuroatlas import data
+
+            _, download_dir, unresolved = data.raw_location(slug)
+            raw = str(download_dir) if download_dir is not None and not unresolved else None
         if not raw:
             # the key its manifest names for the raw data (set, but empty)
             key = next((k for k in _RAW_KEYS if k in defaults), _RAW_KEYS[0])
@@ -180,28 +187,27 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
 
     parser = ErrorParser(
         prog="neuroatlas prepare",
-        description="Build a faster-to-read copy of bonn, epilepsiae, sz1, tuab or tusz "
-                    "(optional: every benchmark runs without it). `neuroatlas data "
-                    "prepare` is the same, and refuses until the raw data is there; it "
-                    "writes under <cache root>/prepared.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Build the files dreamer_valence, dreamer_arousal, eegmat and arithmetic_task are "
+            "read from, or a faster-to-read copy of bonn, epilepsiae, sz1, tuab or tusz "
+            "(optional). `neuroatlas data prepare` does the same, after checking that the raw "
+            "data is there. The files go to `<cache root>/prepared`."),
+        formatter_class=LinesFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
     )
-    parser.add_argument("--dataset", help="A dataset name, as `neuroatlas list datasets` "
-                                           "shows it.")
+    parser.add_argument("--dataset", help="Dataset name, as listed by `neuroatlas list "
+                                           "datasets`.")
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="KEY=VALUE",
-                        help="Override a dataset config key, e.g. --set raw_root=/data.")
+                        help="Change a dataset setting, as in --set raw_root=/data.")
     parser.add_argument("--dest", default=None,
-                        help="Where the prepared file is written. Default: under "
-                             "<cache root>/prepared.")
+                        help="Where to write the copy (default: `<cache root>/prepared`).")
     parser.add_argument("--shard", default=None, metavar="K/N",
-                        help="Build shard K of N, for scheduler fan-out.")
+                        help="Build only shard K of N, to split the work across cluster jobs.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Say what would be built, and from where, and exit.")
+                        help="Print what would be built and from where, then exit.")
     parser.add_argument("--list", action="store_true",
-                        help="Show which datasets have a build step (every one is "
-                             "optional).")
+                        help="List the datasets that have a build step.")
     return parser
 
 
@@ -238,8 +244,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             print(f"{slug:20s} {str(domain):10s} {what}")
         print(f"\n{len(built)} of the paper's {len(rows)} datasets have a build step"
               + (f", {len(needed)} of them required" if needed else
-                 "; none is required: every dataset runs without it (the four "
-                 "bci_cognitive datasets read preprocessed files from the authors)")
+                 "; none is required: every dataset runs without it")
               + ". `neuroatlas data prepare DATASET` builds one.")
         return
 

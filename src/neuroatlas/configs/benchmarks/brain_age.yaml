@@ -4,7 +4,7 @@ title: Brain age
 domain: brain_age
 question: >
   How old is the sleeper? A ridge regressor on each subject's mean
-  embedding (each recording's, for ISRUC and WSC); the brain-age gap
+  embedding (each recording's, for ISRUC, SHHS and WSC); the brain-age gap
   (predicted minus true age) is the clinical readout. It reuses the 30 s
   sleep embeddings rather than reading the recordings again, and re-splits
   them the way the paper did: Sleep-EDF is the Sleep Cassette subset only,
@@ -16,19 +16,16 @@ probe: --set label_mode=age --aggregation mean
 datasets:
   # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
   - cfs
+  - hpap_lab_full
   - {slug: isruc, embed: ""}
+  - mesa
   - mros
   - {slug: physionet2026, embed: ""}
+  - {slug: shhs, embed: ""}
   - {slug: sleep_edf_expanded, embed: ""}
+  - stages
   - {slug: wsc, embed: ""}
 single: sleep_edf_expanded
-planned:
-  # The paper reports brain age on these too; here their readers carry no
-  # participant ages yet (each declares only a sleep_stage label mode).
-  - {name: shhs, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
-  - {name: mesa, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
-  - {name: hpap_lab_full, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
-  - {name: stages, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
 # Model families this benchmark does not evaluate: `-m all`, a group or an
 # alias leaves them out; naming one is refused.
 excluded_models:
@@ -47,9 +44,10 @@ metrics:
   unit: subject
   describe: >
     MAE in years of the predicted age over the test subjects (recordings for
-    ISRUC and WSC), each one mean embedding; ridge regression, alpha by nested
-    4-fold CV on train+val
+    ISRUC, SHHS and WSC), each one mean embedding; ridge regression, alpha by
+    nested 4-fold CV on train+val
   fold: >
     5 subject-level folds stratified on age (PhysioNet 2026: its healthy
-    subjects only, 200 age-matched subjects held out of every fold)
+    subjects only, 200 age-matched subjects held out of every fold; SHHS: its
+    5 sleep-staging folds, a participant's two visits in one fold)
   spread: population SD over the folds

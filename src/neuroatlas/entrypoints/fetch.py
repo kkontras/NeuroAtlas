@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from neuroatlas import config as user_config
-from neuroatlas.cli import ErrorParser
+from neuroatlas.cli import ErrorParser, LinesFormatter
 
 
 # How each acquisition.kind is obtained. `auto` means `data download` (and so
@@ -166,22 +166,21 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
 
     parser = ErrorParser(
         prog="neuroatlas fetch",
-        description="Download a dataset's raw data, or say exactly how to get it. "
-                    "`neuroatlas data download` runs the same code.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Download a dataset, or print how to get it. It is another name for `neuroatlas "
+            "data download`, and it only downloads when given --download."),
+        formatter_class=LinesFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
     )
-    parser.add_argument("--dataset", help="A dataset name, as `neuroatlas list datasets` "
-                                           "shows it.")
+    parser.add_argument("--dataset", help="Dataset name, as listed by `neuroatlas list "
+                                           "datasets`.")
     parser.add_argument("--dest", default=None, metavar="DIR",
-                        help="The data root to plan against (default: the data_root "
-                             "setting). The data lands in the dataset's own folder under "
-                             "it.")
+                        help="Data folder to download into (default: the data_root setting). "
+                             "The dataset goes to its own sub-folder.")
     parser.add_argument("--download", action="store_true",
-                        help="Actually transfer. Without it, the plan is printed and "
-                             "nothing leaves or enters this machine.")
+                        help="Download the data. Without it, only the plan is printed.")
     parser.add_argument("--list", action="store_true",
-                        help="Show every paper dataset and how it is obtained.")
+                        help="List the paper's datasets and how to get each one.")
     return parser
 
 

@@ -9,3 +9,8 @@ class HPAPLabFullBenchmarkDataModule(PhysioExBenchmarkDataModule):
     # Empty map — _strip_to_standard fallback resolves to C3, C4, F3, F4, O1, O2
     CHANNEL_MAP = {}
     DATASET_KWARGS = {"subset": "lab-full"}
+    # Brain age: age at the baseline visit; homepap-lab-full-1600001 is
+    # nsrrid 1600001.
+    AGE_TABLE = "homepap-baseline-dataset-*.csv"
+    AGE_ID_COLUMN = "nsrrid"
+    AGE_COLUMN = "age"

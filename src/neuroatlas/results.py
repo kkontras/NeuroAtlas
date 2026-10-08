@@ -7,7 +7,9 @@ Every results.json under ``<output_root>/<benchmark>/`` counts -- a local
 folder deeper, ``<dataset>/<variant>/...`` (``run.result_dir``) -- and a result
 recorded twice (same dataset, variant, model, fold, task) is counted once, the
 newest copy. Variants are never merged: a per_patch result and a default one
-of the same model and fold are two results, not a duplicate.
+of the same model and fold are two results, not a duplicate. A result made
+with another variant's settings (its metadata says so) is that variant's,
+whatever folder it is in (``Benchmark.record_variant``).
 
 "n/a" is never a number: a model the channel map rules out, a spread over
 one fold, a metric the task does not define for the dataset (AUROC of a
@@ -32,7 +34,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from neuroatlas import _paths, progress
 
@@ -300,9 +302,17 @@ def _n_classes(meta: Dict[str, Any]) -> Optional[int]:
     return len(space) if isinstance(space, list) and space else None
 
 
-def _records(path: Path, variants: Variants = ()) -> List[Record]:
+#: ``(the folder's own name, the result's metadata) -> variant``:
+#: ``Benchmark.record_variant``, which reads a result made with another
+#: variant's settings as that variant's, whatever folder it is in.
+Classify = Callable[[str, Dict[str, Any]], str]
+
+
+def _records(path: Path, variants: Variants = (),
+             classify: Optional[Classify] = None) -> List[Record]:
     """The records of one results.json. *variants*: the benchmark's variant
-    names, so that a record under ``<dataset>/<variant>/`` is that variant's."""
+    names, so that a record under ``<dataset>/<variant>/`` is that variant's;
+    *classify* then reads each record's own settings (``record_variant``)."""
     try:
         rows = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -325,7 +335,8 @@ def _records(path: Path, variants: Variants = ()) -> List[Record]:
             metrics=r.get("metrics") or {}, source=path, mtime=mtime,
             message=str(message).strip() if message else None,
             n_folds=_protocol_folds(meta, dataset),
-            variant=variant_of(path, dataset, variants),
+            variant=(classify(variant_of(path, dataset, list(variants)), meta) if classify
+                     else variant_of(path, dataset, variants)),
             n_classes=_n_classes(meta)))
     return out
 
@@ -347,10 +358,12 @@ def result_files(benchmark: Optional[str] = None, paths: Optional[Sequence[str]]
     return sorted(base.rglob("results.json")) if base.is_dir() else []
 
 
-def collect(files: Iterable[Path], variants: Variants = ()) -> Tuple[List[Record], int]:
+def collect(files: Iterable[Path], variants: Variants = (),
+            classify: Optional[Classify] = None) -> Tuple[List[Record], int]:
     """Every record, deduplicated by (dataset, variant, model, fold, task);
     newest wins. *variants*: the benchmark's variant names (see
-    :func:`variant_of`). Returns (records, number of duplicates dropped)."""
+    :func:`variant_of`); *classify*: see :func:`_records`. Returns (records,
+    number of duplicates dropped)."""
     best: Dict[Tuple[str, str, str, str, str], Record] = {}
     total = 0
     files = list(files)
@@ -358,7 +371,7 @@ def collect(files: Iterable[Path], variants: Variants = ()) -> Tuple[List[Record
     item = progress.current().phase("reading", total=len(files), unit="result files")
     for f in files:
         item.update(advance=1)
-        for rec in _records(f, variants):
+        for rec in _records(f, variants, classify):
             total += 1
             key = (rec.dataset, rec.variant, rec.model, rec.fold, rec.task)
             if key not in best or rec.mtime >= best[key].mtime:
@@ -570,7 +583,7 @@ def benchmark_summary(benchmark: str, paths: Optional[Sequence[str]] = None,
     if variant is not None:
         variant = bench.variant(variant).name       # an earlier name: the variant's
     files = result_files(benchmark, paths, output_root)
-    records, dropped = collect(files, bench.variant_folders())
+    records, dropped = collect(files, bench.variant_folders(), bench.record_variant)
     if paths:
         known = {e.slug for e in bench.datasets}
         records = [r for r in records if r.dataset in known]

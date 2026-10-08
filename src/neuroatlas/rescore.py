@@ -130,7 +130,7 @@ def rescore(benchmark: str, *, datasets=None, models: Optional[str] = None,
                 meta = row.setdefault("metadata", {})
                 dataset = str(row.get("dataset_name"))
                 model = str(row["checkpoint_id"])
-                var = res.variant_of(path, dataset, variants)
+                var = bench.record_variant(res.variant_of(path, dataset, list(variants)), meta)
                 if ((wanted_ds is not None and dataset not in wanted_ds)
                         or (wanted_models is not None and model not in wanted_models)
                         or (variant is not None and var != variant)):

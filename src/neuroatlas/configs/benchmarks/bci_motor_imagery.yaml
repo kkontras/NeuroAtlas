@@ -6,8 +6,8 @@ question: >
   Which movement is the person imagining in one trial? Tested on people the probe never saw (leave-one-subject-out).
 paper: App. C.4
 # no task: each cohort's own (linear_probe); trial windows come from its manifest
-embed: --pooling mean
-probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+embed: --set confound_control=true --pooling mean
+probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 datasets: [bnci2014_001, bnci2014_004, bnci2015_001, dreyer2023, liu2024, shin2017a, weibo2014]
 single: bnci2014_001
 # Model families this benchmark does not evaluate: `-m all`, a group or an
@@ -38,40 +38,41 @@ metrics:
   note: >
     The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
     number (App. C.4, Eq. 4), which puts chance at 0.5 for every C.
-# The variants carry the paper's names (Sec. 4.4, App. D.6, D.8): "no
-# filtering" / "confound filtering" crossed with "mean-pool" / "token
-# flattening". `--variant` also accepts the `aliases`, and results folders
-# named after them are read as the variant's.
+# The variants carry the paper's names (Sec. 4.4, App. D.6, D.8): "confound
+# filtering" (the default) or "no filtering", crossed with "mean-pool" or
+# "token flattening". `--variant` also accepts the `aliases`. A result is
+# read as the variant whose settings it was made with (confound_control and
+# pooling in its metadata), whichever folder it is in.
 default_variant:
+  aliases: [confound_filtering, confound_control]
   description: >
-    no filtering, mean-pool: the paper's 4 s trial after the cue in this
-    reader's 4-40 Hz motor-imagery band, and each trial's patch tokens averaged
-    into one vector. The paper's no-filtering embeddings kept each model's own
-    passband; here only the start of the trial differs from confound
-    filtering, not the band
-  paper: Fig. 26a, the no-filtering bars (mean pool, App. D.8)
+    confound filtering, mean-pool: each trial from 1 s to 4 s after the cue,
+    band-passed 4-40 Hz, so the score cannot come from the cue's evoked
+    response or the eye movement towards it; a trial's patch tokens are
+    averaged into one vector
+  paper: Fig. 26a, the confound-filtering bars, and Fig. 26b (mean pool)
 variants:
   token_flattening:
-    aliases: [per_patch]
+    aliases: [confound_filtering_token_flattening, confound_control_per_patch]
     description: >
-      no filtering, token flattening: as the default, but a trial's patch
+      confound filtering, token flattening: as the default, but a trial's patch
       tokens are concatenated in token order into one vector (tokens x
       dimension) instead of averaged
-    paper: Fig. 5a, the no-filtering bars
-    embed: --pooling per_patch
-    probe: --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-  confound_filtering:
-    aliases: [confound_control]
-    description: >
-      confound filtering, mean-pool: band 4-40 Hz and the trial starts 1 s
-      after the cue (1-4 s), so the score cannot come from the cue's evoked
-      response or the eye movement towards it
-    paper: Fig. 26a, the confound-filtering bars, and Fig. 26b (mean pool)
-    embed: --set confound_control=true --pooling mean
-    probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-  confound_filtering_token_flattening:
-    aliases: [confound_control_per_patch]
-    description: confound filtering and token flattening, both of the above
     paper: Fig. 5a, the confound-filtering bars, and Fig. 5b
     embed: --set confound_control=true --pooling per_patch
     probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering:
+    description: >
+      no filtering, mean-pool: each trial from the cue to 4 s after it, in the
+      same 4-40 Hz band; only the first second differs from the default
+    paper: Fig. 26a, the no-filtering bars (mean pool)
+    embed: --set confound_control=false --pooling mean
+    probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering_token_flattening:
+    aliases: [per_patch]
+    description: >
+      no filtering, token flattening: the no-filtering trial, its patch tokens
+      concatenated in token order into one vector
+    paper: Fig. 5a, the no-filtering bars
+    embed: --set confound_control=false --pooling per_patch
+    probe: --set confound_control=false --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

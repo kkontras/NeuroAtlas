@@ -275,7 +275,7 @@ def cmd_prepare(args) -> int:
               + " (no build step)")
         return 0
 
-    raw = data.status(slug)
+    raw = data.status(slug, raw_only=True)
     if raw.kind == "moabb":
         # The prepared state hides the raw one; ask about the raw download.
         probe = data.DatasetStatus(slug, raw.kind, raw.access, raw.handler, "missing")
@@ -324,54 +324,57 @@ def _positive(text: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = Parser(prog="neuroatlas data", description=__doc__)
+    parser = Parser(prog="neuroatlas data",
+                    description="Check which datasets are on this machine, download them, and "
+                                "build optional faster-to-read copies.")
     sub = parser.add_subparsers(dest="action", metavar="<action>")
-    st = sub.add_parser("status", help="Is each dataset of a benchmark on this machine?",
-                        description="Is each dataset on this machine, where was it looked "
-                                    "for, which setting moves it, and how `data download` "
-                                    "would get it. Takes benchmarks, domains (epilepsy, "
-                                    "sleep, brain_age, bci, all) or dataset names, "
-                                    "space- or comma-separated; default all.")
-    st.add_argument("targets", nargs="*")
+    st = sub.add_parser("status", help="Show which datasets are on this machine.",
+                        description="Show which datasets are on this machine, where they were "
+                                    "looked for and how to get the missing ones.")
+    st.add_argument("targets", nargs="*",
+                    help="Benchmarks, domains (epilepsy, sleep, brain_age, bci or all) or "
+                         "dataset names, separated by spaces or commas (default: all).")
     st.add_argument("-v", "--verbose", action="store_true",
-                    help="Show every path, the setting that moves it and whether a channel "
-                         "map ships, as columns, and explain every value.")
+                    help="Add columns for each path, the setting that moves it and the "
+                         "channel map, and explain every value.")
     add_format_arg(st)
-    dl = sub.add_parser("download", help="Fetch a dataset, or print how to.",
-                        description="Fetch datasets into the folder each is read from "
-                                    "(under the data root; MOABB ones under $MNE_DATA). "
-                                    "Credentialed and manual ones print where to get them. "
-                                    "Exit 0 done, 1 a transfer failed, 2 refused.")
-    dl.add_argument("datasets", nargs="+")
+    dl = sub.add_parser("download", help="Download datasets, or print how to get them.",
+                        description="Download datasets into the folder each one is read from. "
+                                    "MOABB datasets go to $MNE_DATA. For datasets that need an "
+                                    "account or a request, it prints where to get them.")
+    dl.add_argument("datasets", nargs="+",
+                    help="Dataset names, as listed by `neuroatlas list datasets`.")
     dl.add_argument("--dry-run", action="store_true",
-                    help="Print the plan and run every check (token, disk, tools); "
-                         "transfer nothing.")
+                    help="Print the plan and run every check (token, disk space, tools), but "
+                         "download nothing.")
     dl.add_argument("--mirror", choices=("physionet", "aws"), default="physionet",
-                    help="PhysioNet datasets: physionet.org (default) or PhysioNet's "
-                         "open-data copy on AWS (anonymous, usually much faster).")
+                    help="Where to get PhysioNet datasets (default: physionet). aws is "
+                         "PhysioNet's open-data copy on AWS, which is usually much faster.")
     dl.add_argument("--keep-archive", action="store_true",
-                    help="Keep a downloaded .zip after unpacking it (default: delete it).")
+                    help="Keep downloaded .zip files after unpacking them.")
     dl.add_argument("--first", type=_positive, default=None, metavar="N",
-                    help="Fetch only the first N recordings, with the files they share, "
-                         "for a smoke test: `neuroatlas check` runs on them, `run` needs "
-                         "the whole dataset. PhysioNet, NSRR and file-by-file Zenodo "
-                         "downloads only.")
-    pr = sub.add_parser("prepare", help="Build a faster-to-read copy of an epilepsy dataset "
-                                        "(optional).",
-                        description="Build a faster-to-read copy of bonn, epilepsiae, sz1, "
-                                    "tuab or tusz. It is optional: every benchmark runs "
-                                    "without it. Refuses until the raw data is there (`data "
-                                    "download` first), and writes under <cache root>/prepared.")
-    pr.add_argument("dataset", nargs="?")
+                    help="Download only the first N recordings, for a quick test. `check` "
+                         "works on them, but `run` needs the whole dataset. Works for "
+                         "PhysioNet, NSRR and file-by-file Zenodo downloads.")
+    pr = sub.add_parser("prepare", help="Build the files a bci_cognitive dataset is read from, "
+                                        "or a faster copy of an epilepsy dataset.",
+                        description="Build the two files that dreamer_valence, dreamer_arousal, "
+                                    "eegmat or arithmetic_task are read from. Run it once before "
+                                    "`run`. For bonn, epilepsiae, sz1, tuab and tusz it builds an "
+                                    "optional faster-to-read copy. Download the raw data first. "
+                                    "The files go to `<cache root>/prepared`.")
+    pr.add_argument("dataset", nargs="?",
+                    help="Dataset name. --list shows the datasets with a build step.")
     pr.add_argument("--set", dest="overrides", action="append", default=[],
-                    metavar="KEY=VALUE", help="Override a dataset setting, e.g. raw_root=/data.")
+                    metavar="KEY=VALUE", help="Change a dataset setting, as in raw_root=/data.")
     pr.add_argument("--dest", default=None, metavar="PATH",
-                    help="Where the prepared file goes. Default: under <cache root>/prepared.")
+                    help="Where to write the copy (default: `<cache root>/prepared`).")
     pr.add_argument("--shard", default=None, metavar="K/N",
-                    help="Build shard K of N, to split one build across cluster jobs.")
-    pr.add_argument("--dry-run", action="store_true", help="Print the build command; run nothing.")
+                    help="Build only shard K of N, to split the work across cluster jobs.")
+    pr.add_argument("--dry-run", action="store_true",
+                    help="Print what would be built, without building it.")
     pr.add_argument("--list", action="store_true",
-                    help="Which datasets have a build step (every one is optional).")
+                    help="List the datasets that have a build step.")
     return parser
 
 

@@ -30,6 +30,12 @@ per_model:
     C4-A1: C4-A1
   moirai:
     C4-A1: C4-A1
+  core_sleep:
+    C4-A1: C4-A1
+  sleep_transformer:
+    C4-A1: C4-A1
+  sleepyco:
+    C4-A1: C4-A1
 notes:
   eegpt: C4-A1 onto EEGPT's referential C4, one of the 58 channels EEGPT was pretrained on.
   cbramod: CBraMod is index-based + permutation-invariant; pass the bipolar label through unchanged.
@@ -44,3 +50,6 @@ notes:
   chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.

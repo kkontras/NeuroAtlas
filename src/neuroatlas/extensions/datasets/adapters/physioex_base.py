@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -23,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 _CANONICAL_LABELS = ["W", "N1", "N2", "N3", "REM"]
+
+#: What a recording is labelled with: the sleep stage of each 30 s epoch, or
+#: (a cohort with an ``AGE_TABLE``) its participant's age, for brain age.
+LABEL_MODES = ("sleep_stage", "age")
 
 
 def _ensure_physioex():
@@ -167,6 +172,13 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         EEG_CHANNELS: list   — channel requests for physioex
         CHANNEL_MAP: dict    — physical name → standard 10-20 name
         DATASET_KWARGS: dict — extra kwargs for the physioex constructor
+
+    and, for brain age (``label_mode=age``):
+        AGE_TABLE: str       — the cohort's NSRR dataset table under
+                               <data_root>/datasets/ (``*`` = its version)
+        AGE_ID_COLUMN: str   — the table's subject-id column
+        AGE_COLUMN: str      — its age column
+        age_key()            — the table id of a recording
     """
 
     DATASET_NAME: str = "generic"
@@ -174,6 +186,80 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
     EEG_CHANNELS: List[str] = ["EEG", "EEG"]
     CHANNEL_MAP: Dict[str, str] = {}
     DATASET_KWARGS: Dict[str, Any] = {}
+    AGE_TABLE: Optional[str] = None
+    AGE_ID_COLUMN: str = "nsrrid"
+    AGE_COLUMN: str = "age"
+
+    @staticmethod
+    def age_key(recording_id: str) -> Optional[str]:
+        """The table id of a recording (``mesa-sleep-0001`` -> ``1``): by
+        default the number its file name ends in."""
+        from neuroatlas.extensions.datasets.dataio.nsrr_ages import subject_key
+
+        return subject_key(re.split(r"[-_]", recording_id)[-1])
+
+    def _read_ages(self, recordings: Sequence[str]) -> Dict[str, float]:
+        """{recording: its participant's age} from the cohort's NSRR table.
+
+        Brain age joins these to the cached embeddings at probe time
+        (:meth:`with_ages`), so the sleep-staging cache serves it as it is. A
+        recording the table gives no age is left out of brain age, and said
+        so at INFO.
+        """
+        from neuroatlas.extensions.datasets._missing import no_data
+        from neuroatlas.extensions.datasets.dataio.nsrr_ages import find_table, read_ages
+
+        folder = Path(self._data_root) / "datasets"
+        path = find_table(folder, str(self.AGE_TABLE))
+        if path is None:
+            raise FileNotFoundError(no_data(
+                self.DATASET_NAME, folder, "data_root", what=f"no {self.AGE_TABLE} "
+                f"(the participants' ages brain age predicts) in"))
+        by_subject, _empty = read_ages(path, self.AGE_ID_COLUMN, self.AGE_COLUMN)
+        ages = {r: by_subject[k] for r in recordings
+                if (k := self.age_key(r)) is not None and k in by_subject}
+        if not ages and recordings:
+            raise ValueError(
+                f"{self.DATASET_NAME}: {path.name} gives an age for none of the "
+                f"{len(recordings)} recordings in {self._data_root} (joined on its "
+                f"{self.AGE_ID_COLUMN} column, e.g. {recordings[0]} -> "
+                f"{self.age_key(recordings[0])})")
+        without = [r for r in recordings if r not in ages]
+        if without:
+            logger.info("%s: %s gives no age for %d of %d recordings, which brain age "
+                        "leaves out: %s%s", self.DATASET_NAME, path.name, len(without),
+                        len(recordings), ", ".join(without[:10]),
+                        " ..." if len(without) > 10 else "")
+        logger.info("%s: ages of %d recordings from %s (%s, joined on %s)",
+                    self.DATASET_NAME, len(ages), path, self.AGE_COLUMN, self.AGE_ID_COLUMN)
+        return ages
+
+    def with_ages(self, payload):
+        """*payload* with each row's participant age, in ``age`` and as its
+        label (NaN where the table has none).
+
+        The cached embeddings are the sleep-staging ones, labelled with
+        stages; brain age calls this on what it reads.
+        """
+        from neuroatlas.benchmarking_helpers import EmbeddingPayload
+
+        if self._ages is None:
+            from neuroatlas.cli import _msg, command_with
+
+            raise ValueError(_msg.compose(
+                f"{self.DATASET_NAME}: brain age reads the participants' ages with "
+                f"label_mode=age", command_with("--set", "label_mode=age")))
+        ages = self._ages
+        rows = [{**row, "age": ages.get(str(row.get("subject_id")))}
+                for row in payload.metadata]
+        labels = np.asarray([np.nan if r["age"] is None else r["age"] for r in rows],
+                            dtype=np.float64)
+        return EmbeddingPayload(features=payload.features, labels=labels, metadata=rows)
+
+    def cache_context(self, purpose: str = "default") -> Dict[str, Any]:
+        """The cache key's dataset part: the label mode is not in it, since
+        brain age reads the sleep-staging embeddings (and joins the ages)."""
+        return {k: v for k, v in self.metadata.items() if k != "label_mode"}
 
     def _check_fold_count(self, n_folds: Optional[int]) -> None:
         """Refuse a fold count the cohort's manifest does not have.
@@ -263,10 +349,15 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         num_workers: int = 0,
         max_records: Optional[int] = None,
         n_folds: Optional[int] = None,
+        label_mode: str = "sleep_stage",
         **kwargs,
     ):
         if pipeline_name not in PIPELINE_REGISTRY:
             raise ValueError(f"Unknown pipeline_name {pipeline_name!r}. Available: {sorted(PIPELINE_REGISTRY)}")
+        modes = LABEL_MODES if self.AGE_TABLE else LABEL_MODES[:1]
+        if label_mode not in modes:
+            raise ValueError(f"{self.DATASET_NAME}: label_mode must be "
+                             f"{' or '.join(modes)}, not {label_mode!r}")
 
         pipeline = PIPELINE_REGISTRY[pipeline_name]()
         fold = int(fold) if fold is not None else 0
@@ -292,6 +383,8 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         all_subject_ids = [s.subject_id for s in self._physio_ds._subjects]
         if max_records is not None:
             all_subject_ids = all_subject_ids[:int(max_records)]
+        self._ages: Optional[Dict[str, float]] = (
+            self._read_ages(all_subject_ids) if label_mode == "age" else None)
 
         train_ids, val_ids, test_ids = self._resolve_splits(fold, all_subject_ids)
 
@@ -329,6 +422,8 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
                 "test": list(test_ids),
             },
         }
+        if label_mode != "sleep_stage":
+            metadata["label_mode"] = label_mode
         super().__init__(name=self.DATASET_NAME, metadata=metadata)
 
         logger.info(

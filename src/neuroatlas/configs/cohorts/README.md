@@ -66,16 +66,16 @@ seeded splitter.
 | [`dcsm`](dcsm/cohort.yaml) | yes | manual | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
 | [`dod`](dod/cohort.yaml) | yes | zenodo | — | — | `sleep_stage`, `osa_group` | sleep_stage: window, osa_group: recording | 5 <br><sub>frozen</sub> | patient |
 | [`hmc`](hmc/cohort.yaml) | yes | physionet | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
-| [`hpap_lab_full`](hpap_lab_full/cohort.yaml) | yes | nsrr | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
+| [`hpap_lab_full`](hpap_lab_full/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` | sleep_stage: window, age: recording | 5 <br><sub>frozen</sub> | patient |
 | [`isruc`](isruc/cohort.yaml) | yes | manual | — | — | `sleep_stage`, `diagnosis`, `has_diagnosis`, `age` <br><sub>+1 unused</sub> | sleep_stage: window, diagnosis: recording, has_diagnosis: recording, age: recording | 5 <br><sub>frozen</sub> | patient |
 | [`mass`](mass/cohort.yaml) | yes | manual | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
-| [`mesa`](mesa/cohort.yaml) | yes | nsrr | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
+| [`mesa`](mesa/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` | sleep_stage: window, age: recording | 5 <br><sub>frozen</sub> | patient |
 | [`mros`](mros/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` | sleep_stage: window, age: recording | 5 <br><sub>derived</sub> | patient |
 | [`parkinson`](parkinson/cohort.yaml) | — | from the authors | — | — | `group` | recording | 5 <br><sub>derived</sub> | patient |
 | [`physionet2026`](physionet2026/cohort.yaml) | yes | manual | — | — | `sleep_stage`, `ci_label`, `age` <br><sub>+1 unused</sub> | sleep_stage: window, ci_label: recording, age: recording | 5 <br><sub>frozen</sub> | patient |
-| [`shhs`](shhs/cohort.yaml) | yes | nsrr | — | — | `sleep_stage` | window | — | patient |
+| [`shhs`](shhs/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` | sleep_stage: window, age: recording | 5 <br><sub>frozen</sub> | patient |
 | [`sleep_edf`](sleep_edf/cohort.yaml) | — | physionet | — | — | `sleep_stage` | window | — | patient |
 | [`sleep_edf_expanded`](sleep_edf_expanded/cohort.yaml) | yes | physionet | — | — | `sleep_stage`, `condition`, `age` <br><sub>+1 unused</sub> | sleep_stage: window, condition: recording, age: recording | 5 <br><sub>frozen</sub> | patient |
-| [`stages`](stages/cohort.yaml) | yes | nsrr | — | — | `sleep_stage` | window | 5 <br><sub>frozen</sub> | patient |
+| [`stages`](stages/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` | sleep_stage: window, age: recording | 5 <br><sub>frozen</sub> | patient |
 | [`ucddb`](ucddb/cohort.yaml) | yes | physionet | — | — | `sleep_stage` <br><sub>+1 unused</sub> | window | 5 <br><sub>frozen</sub> | patient |
 | [`wsc`](wsc/cohort.yaml) | yes | nsrr | — | — | `sleep_stage`, `age` <br><sub>+1 unused</sub> | sleep_stage: window, age: recording | 5 <br><sub>frozen</sub> | patient |

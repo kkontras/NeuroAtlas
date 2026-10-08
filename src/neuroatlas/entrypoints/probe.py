@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
-from neuroatlas.cli import ErrorParser
+from neuroatlas.cli import ErrorParser, LinesFormatter
 from neuroatlas.entrypoints._common import (
     check_dataset_paths,
     expand_dataset_paths,
@@ -176,107 +176,94 @@ def load_task_preset(name: str) -> Dict[str, Any]:
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = ErrorParser(
         prog="neuroatlas probe",
-        description="Fit a probe on extracted embeddings: any dataset, checkpoint and task.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Fit probes on extracted embeddings, for any dataset, checkpoint and task. "
+            "`neuroatlas run` does this for you. Use it directly to try another task or other "
+            "probe settings."),
+        formatter_class=LinesFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
     )
     parser.add_argument("--config", default=None, metavar="FILE",
-                        help="Run a benchmark config file (JSON) as written; not with "
-                             "--dataset.")
+                        help="Run a saved JSON config file as written, instead of --dataset.")
     parser.add_argument("--dataset", default=None,
-                        help="A dataset name (`neuroatlas list datasets --all`).")
-    parser.add_argument("-m", "--models", default=None,
-                        help="An alias (all_fm, all_ts, all_supervised, all_random), a "
-                             "group, a family or checkpoint ids, comma-separated; `all` "
-                             "(the default) is every checkpoint (`neuroatlas list models`). "
-                             "See `neuroatlas list aliases`.")
+                        help="Dataset name, as listed by `neuroatlas list datasets --all`.")
+    parser.add_argument("-m", "--models", default=None, help=_help.MODELS_HELP)
     parser.add_argument("--task", default=None,
-                        help="A task or preset (`neuroatlas list tasks`). Default: the "
-                             "dataset's own task.")
+                        help="Task to fit, as listed by `neuroatlas list tasks` (default: the "
+                             "dataset's own task).")
     parser.add_argument("--set", dest="overrides", action="append", metavar="KEY=VALUE",
-                        help="Change one of the dataset's settings, repeatable; the same "
-                             "--set as the embed that made the embeddings (`neuroatlas probe "
-                             "--dataset DATASET --help` lists them).")
+                        help="Change a dataset setting. Use the same --set values as the "
+                             "`embed` that made the embeddings. Can be repeated.")
     parser.add_argument("--checkpoint", dest="checkpoints", action="append",
                         metavar="ID=PATH",
-                        help="Read a checkpoint's weights from PATH instead, repeatable.")
+                        help="Load the weights of checkpoint ID from PATH. Can be repeated.")
     parser.add_argument("--folds", default=None,
-                        help="Fold indices: '0,1,2' or a range '0-4'. "
-                             "Default: every fold of the dataset.")
+                        help="Folds to fit, as in 0,1,2 or 0-4 (default: all).")
     parser.add_argument("--data-root", default=None, metavar="DIR",
                         help="Read the dataset from DIR instead of its configured folder.")
     parser.add_argument("--batch-size", type=int, default=None, metavar="N",
                         help="Windows per batch (default: the dataset's own).")
     parser.add_argument("--num-workers", type=int, default=None, metavar="N",
-                        help="Data-loading worker processes (default: the dataset's own, "
-                             "else the CPUs this job may use minus one, at most 16).")
+                        help="Data loader workers (default: the dataset's own, else the CPUs "
+                             "this job may use minus one, at most 16).")
     parser.add_argument("--probe-type", default="linear",
                         choices=["linear", "sklearn_linear", "nonlinear"],
-                        help="linear: the benchmarks' logistic regression (default); "
-                             "sklearn_linear: the same; nonlinear: an MLP.")
+                        help="Probe model (default: linear). linear and sklearn_linear are both "
+                             "the logistic regression of the benchmarks. nonlinear is an MLP.")
     parser.add_argument("--hidden-dims", default="256,128", metavar="N,N",
-                        help="Hidden sizes for --probe-type nonlinear.")
+                        help="Hidden layer sizes for --probe-type nonlinear (default: 256,128).")
     parser.add_argument("--max-iter", type=int, default=DEFAULT_MAX_ITER, metavar="N",
-                        help="The solver's iteration cap (default 10000; the BCI benchmarks "
-                             "pass 1000, and seizure detection keeps its 500 unless given "
-                             "another).")
+                        help="Iteration limit of the solver (default: 10000). The BCI "
+                             "benchmarks use 1000, and seizure detection keeps its 500 unless "
+                             "this is given.")
     parser.add_argument("--class-weight", choices=["balanced"], default=None,
-                        help="balanced: weight each class by the inverse of its frequency "
-                             "(default: unweighted, unless the task fixes it).")
+                        help="Weight each class by its inverse frequency (default: unweighted, "
+                             "unless the task sets it).")
     parser.add_argument("--selection-metric", default="macro_f1", metavar="METRIC",
-                        help="Validation metric that picks the seed. Seizure detection also "
-                             "ranks its C grid by it: auprc (the paper's), auroc, or "
-                             "event_sens_fa_auc (the event-level Sens@FA AUC on the validation "
-                             "fold); the other logistic-regression probes choose their --tune-c "
-                             "C on validation Cohen's kappa.")
+                        help="Validation metric that picks the seed (default: macro_f1). "
+                             "Seizure detection also ranks C by it, from auprc (its default), "
+                             "auroc or event_sens_fa_auc. Other logistic regression probes "
+                             "choose C on validation Cohen's kappa.")
     parser.add_argument("--tune-c", default=None, metavar="C,C,...",
-                        help="Comma-separated C values for the regularisation sweep (a "
-                             "logistic-regression probe; a task that fits none refuses it).")
+                        help="C values to try for the logistic regression, separated by "
+                             "commas. A task without a logistic regression refuses it.")
     parser.add_argument("--aggregation", default=None, metavar="NAME[,NAME]",
-                        help="Subject aggregation for subject-level tasks, e.g. "
-                             "'mean' or 'mean,mean_std' (runs once per value).")
+                        help="How subject-level tasks combine the windows of a subject, as in "
+                             "mean or mean,mean_std. Each value is a separate run.")
     parser.add_argument("--seeds", default="0,1,2", metavar="N,N,...",
-                        help="The probe's seeds, comma-separated, with --seed-mode shared "
-                             "(default 0,1,2).")
+                        help="Probe seeds for --seed-mode shared, separated by commas "
+                             "(default: 0,1,2).")
     parser.add_argument("--seed-mode", choices=["fold", "shared"], default="fold",
-                        help="fold (default): one seed per fold, the fold's number; shared: "
-                             "every fold fits each of --seeds.")
+                        help="How probe seeds are chosen (default: fold). fold uses the fold "
+                             "number as the seed. shared fits each of --seeds on every fold.")
     parser.add_argument("--pooling", choices=["mean", "per_patch"], default="mean",
-                        help="Which cached embeddings to probe, for each "
-                             "window. mean: the one vector averaged over that "
-                             "window's patch tokens. per_patch: that window's "
-                             "tokens kept separate. Must match what `embed "
-                             "--pooling` produced.")
+                        help="Which embeddings to probe (default: mean). It must match the "
+                             "--pooling of `embed`.")
     parser.add_argument("--seed", type=int, default=42, metavar="N",
-                        help="Global random seed.")
+                        help="Random seed (default: 42).")
     parser.add_argument("--output-root", default=None, metavar="DIR",
-                        help="Where results.json and the fold probes are written (default: "
-                             "$NEUROATLAS_OUTPUT_ROOT, else $NEUROATLAS_HOME/artifacts/"
-                             "benchmarks, by dataset and task).")
+                        help="Where to write results.json and the fold probes (default: the "
+                             "output_root setting). Each dataset and task gets its own "
+                             "folder.")
     parser.add_argument("--cache-root", default=None, metavar="DIR",
-                        help="Where the embeddings are read. Default: the cache_root "
-                             "setting ($EEG_CACHE_ROOT), else "
-                             "$NEUROATLAS_HOME/artifacts/embedding_cache.")
+                        help="Where to read the embeddings (default: the cache_root setting).")
     parser.add_argument("--reprobe", action="store_true",
-                        help="Fit every fold again. Without it, a fold whose "
-                             "predictions.npz is already in its probe folder -- same "
-                             "probe and task settings, dataset settings, fold, seeds, "
-                             "weights and embeddings -- is not fitted again: its "
-                             "metrics are recomputed from the saved predictions.")
+                        help="Fit every fold again. Without it, a fold with saved predictions "
+                             "from the same settings, weights and embeddings is only "
+                             "rescored.")
     parser.add_argument("--extract-only", action="store_true",
-                        help="Extract the embeddings and exit (what `neuroatlas embed` does).")
+                        help="Only extract the embeddings, as `neuroatlas embed` does.")
     parser.add_argument("--embed-chunk", default=None, metavar="K/N",
-                        help="With --extract-only: extract subject chunk K of N, e.g. 0/4.")
+                        help="With --extract-only, extract only chunk K of N of the subjects, "
+                             "as in 0/4.")
     parser.add_argument("--no-recording-norm", action="store_true",
-                        help="Probe the embeddings of `embed --no-recording-norm` (an "
-                             "ablation).")
+                        help="Probe the embeddings made with `embed --no-recording-norm`.")
     parser.add_argument("--no-amplitude-scale", action="store_true",
-                        help="Probe the embeddings of `embed --no-amplitude-scale` (an "
-                             "ablation).")
+                        help="Probe the embeddings made with `embed --no-amplitude-scale`.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the resolved settings as JSON and exit without probing.")
+                        help="Print the resolved settings as JSON and exit.")
     parser.add_argument("--list-tasks", action="store_true",
-                        help="List the tasks and their presets, then exit.")
+                        help="List the tasks and exit.")
     return parser
 
 

@@ -68,9 +68,8 @@ def _json_value(value: Any) -> Any:
 
 def add_format_arg(parser) -> None:
     parser.add_argument("--format", choices=FORMATS, default="table",
-                        help="Output format (default: table). csv, md and json carry the "
-                             "table's indented note lines as a `note` column; json uses null for "
-                             "a missing value.")
+                        help="Output format (default: table). In csv, md and json the notes "
+                             "under a row go to a `note` column.")
 
 
 def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],

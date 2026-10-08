@@ -19,7 +19,7 @@ sleep_edf_expanded, sz1, sz2, tusz, ucddb, wsc.
 
 ## `folds/`: frozen train/val/test splits
 
-26 files here, plus the thirteen `cohorts/<dataset>/folds.json`. A dataset
+24 files here, plus the thirteen `cohorts/<dataset>/folds.json`. A dataset
 with a file takes its folds from it; a dataset without one derives them with
 its reader's seeded splitter, so the same data always gives the same folds.
 
@@ -27,9 +27,10 @@ Two shapes: `explicit` gives `train`/`val`/`test` per fold; `partition` gives
 fold *k*'s test group and derives `val = k+1`, `train = the rest`.
 
 Not every file here is read: `alzheimers_*` and `parkinsons_*` belong to
-datasets neuroatlas does not list, the `shhs_*` files are SHHS visit splits,
-and the thirteen `stages_*` are per-site splits whose union is `stages.json`,
-the one the stages dataset reads.
+datasets neuroatlas does not list, and the thirteen `stages_*` are per-site
+splits whose union is `stages.json`, the one the stages dataset reads. SHHS
+reads `shhs_combined.json`: its 8444 recordings of both visits, a participant's
+two visits always in the same fold.
 
 For dcsm, dod, isruc, mass, physionet2026, ucddb and wsc the reader derives
 the folds with its seeded splitter, and the file holds the same assignment,

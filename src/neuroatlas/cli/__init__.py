@@ -57,53 +57,53 @@ _always = lambda argv: True       # noqa: E731
 
 COMMANDS = {
     "config": Command("neuroatlas.cli.config",
-                      "Set up and inspect where data, caches, results and weights live.",
+                      "Set where data, caches, results and model weights are stored.",
                       report=_always),
     "list": Command("neuroatlas.cli.listing",
-                    "What exists: benchmarks, datasets, models, aliases, tasks.",
+                    "List the benchmarks, datasets, models, aliases or tasks.",
                     report=_always),
     "show": Command("neuroatlas.cli.show",
-                    "Explain one benchmark and print the commands it runs.",
+                    "Describe a benchmark and print the commands it runs.",
                     report=_always),
     "data": Command("neuroatlas.cli.data",
-                    "Is each dataset here; download it; build its optional prepared file.",
+                    "Check, download and prepare datasets.",
                     downloads=lambda argv: argv[:1] in (["download"], ["prepare"]),
                     report=lambda argv: argv[:1] == ["status"]),
     "models": Command("neuroatlas.cli.models",
-                      "Are a selection's weights here; download them.",
+                      "Check and download model weights.",
                       downloads=lambda argv: argv[:1] == ["download"],
                       report=lambda argv: argv[:1] == ["status"]),
     "check": Command("neuroatlas.cli.check",
-                     "Push one real batch through each dataset x checkpoint pair, then stop.",
+                     "Test each dataset and model on one batch before a long run.",
                      report=_always),
     "run": Command("neuroatlas.cli.run",
-                   "Run a benchmark here: embed where missing, probe, write results.",
+                   "Run a benchmark on this machine.",
                    report=lambda argv: "--dry-run" in argv),
     "submit": Command("neuroatlas.cli.submit_cmd",
-                      "Write cluster jobs (HTCondor or SLURM) for a whole benchmark.",
+                      "Write HTCondor or SLURM jobs for a benchmark.",
                       report=_always),
     "status": Command("neuroatlas.cli.status_cmd",
-                      "How each job of a `submit` is doing.",
+                      "Show the state of the jobs that `submit` wrote.",
                       report=_always),
     "results": Command("neuroatlas.cli.results_cmd",
-                       "Summarise a benchmark's results: its headline metric over the folds, and the others.",
+                       "Summarise a benchmark's results.",
                        report=_always),
     "rescore": Command("neuroatlas.cli.rescore",
-                       "Recompute results' metrics from their saved test predictions.",
+                       "Recompute the metrics from saved test predictions.",
                        report=_always),
     "fetch": Command("neuroatlas.entrypoints.fetch",
-                     "Download a dataset, or say exactly how to (as `data download`).",
+                     "Another name for `data download`.",
                      downloads=lambda argv: "--download" in argv, listed=False),
     "prepare": Command("neuroatlas.entrypoints.prepare",
-                       "Build a dataset's optional prepared file (as `data prepare`).",
+                       "Another name for `data prepare`.",
                        # MOABB builders download the corpus as they epoch it.
                        downloads=lambda argv: True, listed=False),
     "embed": Command("neuroatlas.entrypoints.embed",
-                     "Extract frozen-backbone embeddings for a dataset."),
+                     "Extract embeddings of one dataset with frozen models."),
     "probe": Command("neuroatlas.entrypoints.probe",
-                     "Fit a probe on extracted embeddings."),
+                     "Fit probes on extracted embeddings."),
     "hypnogram": Command("neuroatlas.entrypoints.hypnogram",
-                         "Reconstruct hypnograms and sleep-architecture features."),
+                         "Compute hypnograms and sleep features from sleep staging results."),
 }
 
 #: Commands whose first word is a sub-command (``data status``): a report's
@@ -118,20 +118,16 @@ REMOVED = {"leaderboard": "results"}
 USAGE = "usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]"
 
 #: The -m / --models help of the commands that take a benchmark.
-MODELS_HELP = ("An alias (all_fm, all_ts, all_supervised, all_random), group, family or "
-               "checkpoint ids, comma-separated; `-name` removes one (all,-reve). An alias or "
-               "group leaves out the families a benchmark does not evaluate (`neuroatlas show "
-               "<benchmark>`), and naming one of them is refused.")
+MODELS_HELP = ("Checkpoint ids, families, groups or an alias such as all_fm, separated by "
+               "commas. Put `-` before a name to remove it, as in all_fm,-reve. "
+               "An alias or group skips the models a benchmark does not evaluate.")
 
 # (flags, help) of the options every command takes, before or after its name.
 GLOBAL_OPTIONS = [
-    ("-v, --verbose", "show more: the command's own detail (members, paths, reasons), "
-                      "library log lines and warnings, and full tracebacks"),
-    ("--log FILE", "also write everything printed, every log line and every traceback, "
-                   "to FILE"),
-    ("--online", "allow downloads for this run (off by default, except for the "
-                 "commands that exist to download)"),
-    ("-V, --version", "print the version (and the commit, when run from a source clone)"),
+    ("-v, --verbose", "Show more detail, library log lines and full tracebacks."),
+    ("--log FILE", "Also write all output, log lines and tracebacks to FILE."),
+    ("--online", "Allow downloads. Only the commands that download are online by default."),
+    ("-V, --version", "Print the version, and the commit when run from a git clone."),
 ]
 
 
@@ -207,8 +203,8 @@ def _help() -> str:
         "options (before or after the command):",
         global_options_text(),
         "",
-        "Start with `neuroatlas config init --data-root DIR`.",
-        "Run `neuroatlas <command> --help` for a command's options.",
+        "Start with `neuroatlas config init DIR`.",
+        "Run `neuroatlas <command> --help` for the options of a command.",
     ])
 
 
@@ -236,6 +232,16 @@ def describe(doc: Optional[str]) -> Optional[str]:
         text = stripped[0].upper() + stripped[1:]
     text = text.replace("``", "`")
     return text if text.endswith((".", "?", "!", ":")) else text + "."
+
+
+class LinesFormatter(argparse.HelpFormatter):
+    """Wraps a text of one paragraph (a description) to the terminal, and
+    keeps a text of several lines (an epilog with a list) as written."""
+
+    def _fill_text(self, text, width, indent):
+        if "\n" in text.strip("\n"):
+            return "".join(indent + line for line in text.splitlines(keepends=True))
+        return super()._fill_text(text, width, indent)
 
 
 class _SubParsers(argparse._SubParsersAction):

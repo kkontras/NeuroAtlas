@@ -29,6 +29,25 @@ per_model:
     C4: C4
     C3: C3
 
+  neurogpt:
+    C4: C4
+    C3: C3
+  neurorvq:
+    C4: C4
+    C3: C3
+  steegformer:
+    C4: C4
+    C3: C3
+  chronos:
+    C4: C4
+    C3: C3
+  moirai:
+    C4: C4
+    C3: C3
+  moment:
+    C4: C4
+    C3: C3
+
   core_sleep:
     C4: C4
     C3: C3
@@ -40,3 +59,9 @@ per_model:
     C3: C3
 
 notes:
+  neurogpt: "The reader names each central derivation (C4-M1 and C3-M2, or the A1/A2-referenced pair a recording has instead) by its active electrode; that referential anchor is its slot in NeuroGPT's 22-channel layout (2 of 22 filled)."
+  neurorvq: "Central derivations, named by their active electrode, onto that referential anchor in NeuroRVQ's vocabulary."
+  steegformer: "Central derivations, named by their active electrode, onto that referential anchor; monopolar anchor approximation."
+  chronos: "Univariate TS FM; channel names unused (mean-pooled). Identity mapping."
+  moirai: "Univariate TS FM; channel names unused (mean-pooled). Identity mapping."
+  moment: "Univariate TS FM; channel names unused (mean-pooled). Identity mapping."

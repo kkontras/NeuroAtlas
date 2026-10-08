@@ -38,7 +38,7 @@ Most datasets key their embedding cache globally (``purpose=
 extraction pass serves every fold, label mode and probe type for that
 ``(dataset, model)`` pair, and ``--folds`` defaults to that single pass (the
 configured fold). The cohorts whose datamodule cannot serve a global cache
--- HMC, MESA, STAGES and HomePAP (PhysioEx format), SHHS, the four
+-- HMC, MESA, STAGES and HomePAP (PhysioEx format), the four
 bci_cognitive cohorts, TUAB's H5 fast path, CHB-MIT's HDF5 backend, and any
 run with ``stride_s`` other than ``window_s`` -- cache per fold and split, and
 need ``--folds`` to name every fold the probe will read; ``neuroatlas run``
@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from neuroatlas import config as user_config
-from neuroatlas.cli import ErrorParser
+from neuroatlas.cli import ErrorParser, LinesFormatter
 from neuroatlas.benchmarking_helpers import BenchmarkRunner, seed_everything
 from neuroatlas.benchmarking_helpers.runtime.cache import SHARED_EMBEDDING_CACHE_ROOT
 from neuroatlas.benchmarking_helpers.registry.discovery import (
@@ -170,83 +170,74 @@ def _parse_checkpoints(pairs: List[str]) -> Dict[str, Dict[str, Any]]:
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = ErrorParser(
         prog="neuroatlas embed",
-        description="Extract frozen-backbone embeddings for any dataset `neuroatlas list "
-                    "datasets --all` shows.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Extract the embeddings of one dataset with frozen models and save them to the "
+            "cache. `neuroatlas run` does this for you. Use it directly for a dataset outside "
+            "the benchmarks, or to change its settings."),
+        formatter_class=LinesFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
     )
-    parser.add_argument("--dataset", help="A dataset name (see --list-datasets).")
-    parser.add_argument("-m", "--models", default=None,
-                        help="An alias (all_fm, all_ts, all_supervised, all_random), a "
-                             "group, a family or checkpoint ids, comma-separated; `all` "
-                             "(the default) is every checkpoint (`neuroatlas list models`). "
-                             "See `neuroatlas list aliases`.")
+    parser.add_argument("--dataset", help="Dataset name (see --list-datasets).")
+    parser.add_argument("-m", "--models", default=None, help=_help.MODELS_HELP)
     parser.add_argument("--set", dest="overrides", action="append", metavar="KEY=VALUE",
-                        help="Change one of the dataset's settings, repeatable: it goes on "
-                             "top of the dataset's defaults (e.g. --set window_s=10; "
-                             "`neuroatlas embed --dataset DATASET --help` lists them).")
+                        help="Change a dataset setting, as in --set window_s=10. Can be "
+                             "repeated. `neuroatlas embed --dataset NAME --help` lists the "
+                             "settings.")
     parser.add_argument("--checkpoint", dest="checkpoints", action="append", metavar="ID=PATH",
-                        help="Read a checkpoint's weights from PATH instead, repeatable.")
+                        help="Load the weights of checkpoint ID from PATH. Can be repeated.")
     parser.add_argument("--folds", default=None, metavar="FOLDS",
-                        help="Comma-separated fold indices. Default: the dataset's configured "
-                             "fold only (--set fold=K; usually 0). Most datasets save one set "
-                             "of embeddings that serves every fold, so one pass is enough. A "
-                             "few save them per fold (HMC, MESA, STAGES, HomePAP, SHHS, the "
+                        help="Folds to extract, separated by commas (default: the dataset's "
+                             "fold setting, usually 0). Most datasets share one set of "
+                             "embeddings across folds. HMC, MESA, STAGES, HomePAP, the "
                              "four bci_cognitive datasets, TUAB and CHB-MIT when read from an "
-                             "HDF5 file, and any run with a stride other than the window): "
-                             "those need every fold the probe will read (`neuroatlas run` "
-                             "passes them).")
+                             "HDF5 file, and runs with a stride other than the window need "
+                             "every fold the probe will read.")
     parser.add_argument("--data-root", default=None, metavar="DIR",
                         help="Read the dataset from DIR instead of its configured folder.")
     parser.add_argument("--batch-size", type=int, default=None, metavar="N",
                         help="Windows per batch (default: the dataset's own).")
     parser.add_argument("--num-workers", type=int, default=None, metavar="N",
-                        help="Data-loading worker processes (default: the dataset's own, "
-                             "else the CPUs this job may use minus one, at most 16; 0 reads "
-                             "in this process).")
+                        help="Data loader workers (default: the dataset's own, else the CPUs "
+                             "this job may use minus one, at most 16). 0 reads in the main "
+                             "process.")
     parser.add_argument("--cache-root", default=None, metavar="DIR",
-                        help="Where the embeddings are written. Default: the cache_root "
-                             "setting ($EEG_CACHE_ROOT), else "
-                             "$NEUROATLAS_HOME/artifacts/embedding_cache.")
+                        help="Where to write the embeddings (default: the cache_root "
+                             "setting).")
     # extraction writes nothing there: kept for command lines that pass it
     parser.add_argument("--output-root", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--limit-batches", type=int, default=None, metavar="N",
-                        help="Stop each extraction after N batches: a smoke test. Writes to "
-                             "a cache of its own, <cache root>/_limited, so a later full "
-                             "extraction never takes the truncated one for complete.")
+                        help="Stop each extraction after N batches, for a smoke test. The "
+                             "embeddings go to `<cache root>/_limited`, apart from complete "
+                             "ones.")
     parser.add_argument("--embed-chunk", default=None, metavar="K/N",
-                        help="Extract subject chunk K of N for parallel jobs, e.g. '0/4'. "
-                             "Chunks are merged automatically on the first read, so no "
-                             "separate merge step is needed.")
+                        help="Extract only chunk K of N of the subjects, as in 0/4, to split "
+                             "the work across jobs. The chunks are merged when first read.")
     parser.add_argument("--expected-epoch-seconds", type=float, default=None, metavar="S",
-                        help="The window length, in seconds, each selected checkpoint is "
-                             "told it receives (the epilepsy benchmark passes 10). Without "
-                             "it, each checkpoint expects its own window length.")
+                        help="Window length in seconds that each checkpoint is told to expect "
+                             "(default: the checkpoint's own). The epilepsy benchmark passes "
+                             "10.")
     # No --device: the per-dataset extractors had one, but nothing in the
     # unified runner reads such a key, so the flag would be accepted and
     # silently ignored. Device selection is `cuda` when available else `cpu`;
     # pin a GPU with CUDA_VISIBLE_DEVICES, which the schedulers already set.
     parser.add_argument("--no-recording-norm", action="store_true",
-                        help="An ablation: no per-recording normalisation (BIOT's 95th "
-                             "percentile, REVE's z-score). Not the benchmark's protocol.")
+                        help="Skip the per-recording normalisation, such as the z-score of "
+                             "REVE. For ablations, not the benchmark protocol.")
     parser.add_argument("--no-amplitude-scale", action="store_true",
-                        help="An ablation: no fixed amplitude scaling (EEGPT x1000, LaBraM "
-                             "/100, ...). Not the benchmark's protocol.")
+                        help="Skip the fixed amplitude scaling, such as x1000 for EEGPT. For "
+                             "ablations, not the benchmark protocol.")
     parser.add_argument("--pooling", choices=["mean", "per_patch"], default="mean",
-                        help="What a backbone hands back for each window (the "
-                             "window itself is set by --set window_s/stride_s). "
-                             "mean: one vector per window, averaged over that "
-                             "window's patch tokens. per_patch: that window's "
-                             "tokens kept separate. Cached separately, so both "
-                             "can coexist.")
+                        help="What to keep for each window (default: mean). mean averages the "
+                             "patch tokens into one vector, per_patch keeps them all. The two "
+                             "are cached apart.")
     parser.add_argument("--seed", type=int, default=42, metavar="N",
-                        help="Global random seed.")
+                        help="Random seed (default: 42).")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the resolved settings as JSON and exit without extracting.")
+                        help="Print the resolved settings as JSON and exit.")
     parser.add_argument("--list-datasets", action="store_true",
                         help="List every dataset name and exit.")
     parser.add_argument("--paper-only", action="store_true",
-                        help="With --list-datasets, only the datasets the paper evaluates.")
+                        help="With --list-datasets, only list the datasets of the paper.")
     return parser
 
 

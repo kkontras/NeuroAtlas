@@ -86,6 +86,28 @@ per_model:
     O2: O2
     O1: O1
 
+  neurogpt:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+  neurorvq:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+  steegformer:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+
   core_sleep:
     C4: C4
     C3: C3
@@ -110,3 +132,6 @@ per_model:
 
 notes:
   biot: "6 monopolar channels -> 10-20 names. Wrapper computes bipolar derivations (F4-C4, F3-C3, etc.); remaining slots zero-padded."
+  neurogpt: "The reader names each site's M1/M2- or A1/A2-referenced derivation (C4-M1, EEG_C4-A1, C4M1, ...) by its active electrode; that referential anchor is its slot in NeuroGPT's 22-channel layout (6 of 22 filled)."
+  neurorvq: "Referenced derivations, named by their active electrode, onto that referential anchor in NeuroRVQ's vocabulary."
+  steegformer: "Referenced derivations, named by their active electrode, onto that referential anchor; monopolar anchor approximation."

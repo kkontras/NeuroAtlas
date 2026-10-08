@@ -6,8 +6,8 @@ question: >
   Emotion (DREAMER valence and arousal) and mental arithmetic (EEGMat,
   ArithmeticTask), tested on people the probe never saw (leave-one-subject-out).
 paper: App. C.4
-embed: --pooling mean
-probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+embed: --set confound_control=true --pooling mean
+probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 # DREAMER is one dataset in the paper and two cohorts here, one per label axis,
 # which is how its pickles, embeddings and probes are stored.
 datasets: [dreamer_valence, dreamer_arousal, eegmat, arithmetic_task]
@@ -40,3 +40,38 @@ metrics:
   note: >
     The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
     number (App. C.4, Eq. 4), which puts chance at 0.5 for every C.
+# The variants carry the paper's names (App. D.6, D.8): "confound filtering"
+# (the default) or "no filtering", crossed with "mean-pool" or "token
+# flattening". `--variant` also accepts the `aliases`. A result is read as
+# the variant whose settings it was made with (confound_control and pooling
+# in its metadata), whichever folder it is in.
+default_variant:
+  description: >
+    confound filtering, mean-pool: each cohort's file filtered 4-40 Hz
+    (<name>_preprocessed_trackD_<format>.pkl, which `data prepare` builds);
+    a trial's patch tokens are averaged into one vector
+  paper: Fig. 26b and Table 13 (confound filtering, mean pool)
+variants:
+  token_flattening:
+    description: >
+      confound filtering, token flattening: as the default, but a trial's patch
+      tokens are concatenated in token order into one vector (tokens x
+      dimension) instead of averaged
+    paper: Fig. 23 (Cognitive), the confound-filtering bars; Fig. 5b and Table 12
+    embed: --set confound_control=true --pooling per_patch
+    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering:
+    description: >
+      no filtering, mean-pool: each cohort's other file
+      (<name>_preprocessed_<format>.pkl), filtered 0.1-64 Hz at 128 Hz
+    paper: App. D.8, mean pool without confound filtering
+    embed: --set confound_control=false --pooling mean
+    probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering_token_flattening:
+    aliases: [per_patch]
+    description: >
+      no filtering, token flattening: the no-filtering trial, its patch tokens
+      concatenated in token order into one vector
+    paper: Fig. 23 (Cognitive), the no-filtering bars
+    embed: --set confound_control=false --pooling per_patch
+    probe: --set confound_control=false --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

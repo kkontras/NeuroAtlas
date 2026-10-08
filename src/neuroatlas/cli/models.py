@@ -192,20 +192,30 @@ def _package_name(spec) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = Parser(prog="neuroatlas models", description=__doc__)
+    parser = Parser(prog="neuroatlas models",
+                    description="Check which model weights are on this machine, and download "
+                                "the missing ones.")
     sub = parser.add_subparsers(dest="action", metavar="<action>")
-    st = sub.add_parser("status", help="Whether each checkpoint's weights are here. No network.")
-    st.add_argument("selector", nargs="?", help="An alias, group, family or ids (default: every checkpoint).")
+    st = sub.add_parser("status", help="Show which checkpoints have their weights here.",
+                        description="Show which checkpoints have their weights on this "
+                                    "machine. It does not use the network.")
+    st.add_argument("selector", nargs="?",
+                    help="Checkpoints to check, given as an alias, group, family or ids "
+                         "(default: every checkpoint).")
     st.add_argument("-m", "--models", dest="models", default=None, metavar="SELECTOR",
-                    help="The same selection, as run and check take it.")
+                    help="The same selection, given with -m as for `run`.")
     st.add_argument("-v", "--verbose", action="store_true",
-                    help="Show where each is expected, and explain every state.")
+                    help="Show where each file is expected, and explain every state.")
     add_format_arg(st)
-    dl = sub.add_parser("download", help="Fetch the weights a selection is missing; exit 1 "
-                                         "if one could not be fetched.")
-    dl.add_argument("selector", nargs="?", help="An alias, group, family or ids, e.g. all_fm.")
+    dl = sub.add_parser("download", help="Download the weights a selection is missing.",
+                        description="Download the weights that a selection of checkpoints is "
+                                    "missing. It exits with status 1 if one could not be "
+                                    "downloaded.")
+    dl.add_argument("selector", nargs="?",
+                    help="Checkpoints to download, given as an alias, group, family or ids "
+                         "such as all_fm.")
     dl.add_argument("-m", "--models", dest="models", default=None, metavar="SELECTOR",
-                    help="The same selection, as run and check take it.")
+                    help="The same selection, given with -m as for `run`.")
     return parser
 
 

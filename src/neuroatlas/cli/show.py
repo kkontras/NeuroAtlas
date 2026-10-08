@@ -10,14 +10,19 @@ from neuroatlas.cli import Parser
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = Parser(prog="neuroatlas show", description=__doc__)
-    parser.add_argument("benchmark")
+    from neuroatlas.cli.check import BENCHMARK_HELP, DATASET_HELP
+
+    parser = Parser(prog="neuroatlas show",
+                    description="Describe one benchmark and print the `embed` and `probe` "
+                                "commands that `run` executes for it. Use it to see the "
+                                "metrics, folds, datasets and variants of a benchmark.")
+    parser.add_argument("benchmark", help=BENCHMARK_HELP)
     parser.add_argument("--dataset", default="full", metavar="single|full|NAMES",
-                        help="Whose commands to print: single (the quick dataset), full (all datasets, "
-                             "the default) or dataset names.")
-    parser.add_argument("--variant", default="default", help="Which variant (default: default).")
+                        help=f"{DATASET_HELP} (default: full).")
+    parser.add_argument("--variant", default="default",
+                        help="Benchmark variant to describe (default: default).")
     parser.add_argument("-m", "--models", default=None,
-                        help="Put this checkpoint selection into the printed commands.")
+                        help="Put this model selection into the printed commands.")
     return parser
 
 

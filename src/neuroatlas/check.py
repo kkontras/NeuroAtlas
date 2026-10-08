@@ -58,6 +58,17 @@ def data_fix(slug: str, st) -> str:
             return f"\n{_msg.FIX}: ".join(fixes)
     handler = getattr(st, "handler", None)
     elsewhere = f"neuroatlas config set {setting} {what}" if setting else None
+    if str(getattr(st, "state", "")).startswith("not prepared"):
+        from neuroatlas.catalog import prepare_required
+
+        if prepare_required(slug):
+            # built from the raw data: what the status notes say comes next
+            raw = data.status(slug, raw_only=True)
+            build = f"neuroatlas data prepare {slug}"
+            return build if raw.found else (
+                f"neuroatlas data download {slug}"
+                + (" (says where to get it)" if handler == "manual" else "")
+                + f", then {build}")
     if handler == "refused":
         # `data download` refuses it (what the host serves is not what the
         # benchmark reads): only a copy from elsewhere helps
