@@ -1034,8 +1034,8 @@ PhysioNet 2026, SHHS, Sleep-EDF Expanded, STAGES and WSC.
 On the epilepsy datasets, `embed` and `probe` accept
 `--set folds_manifest=none` to derive folds with the dataset's own splitter
 instead of the shipped file. `--set strict_folds=false` runs on the
-subjects that the data and the file share when they differ. Neither result
-is comparable with the paper's.
+subjects that the data and the file share when they differ. Both change
+the benchmark's folds.
 
 ### Run options
 

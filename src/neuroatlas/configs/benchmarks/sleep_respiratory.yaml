@@ -23,13 +23,8 @@ excluded_models:
     reason: >
       seizure-detection models, which the paper reports on epilepsy only
 metrics:
-  # AUPRC at 10 s of apnea or hypopnea, as paper v2 reports it (Fig. 17b).
-  # ahi_fraction is the apnea and hypopnea time of an epoch (both readers sum
-  # apnea_any and hypopnea, capped at 1): on UCDDB it equals
-  # respiratory_event_any_fraction, which the published figure script read;
-  # on PhysioNet 2026 respiratory_event_any_fraction also counts RERAs, so it
-  # is not the paper's event set there (plot_final_figures.py reads
-  # ahi_fraction for PhysioNet 2026).
+  # AUPRC at 10 s of apnea or hypopnea (Fig. 17b). ahi_fraction is the apnea
+  # and hypopnea time of an epoch (apnea_any plus hypopnea, capped at 1).
   headline: auprc
   at: ahi_fraction@10.0s
   higher_is_better: true
