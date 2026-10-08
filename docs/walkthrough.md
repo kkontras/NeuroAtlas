@@ -31,17 +31,15 @@ From a clone, `--version` prints the version and the commit, such as
 
 ## 2. Choose your folders
 
-Pick four folders. They are created when they are first needed.
+Pick one project folder. The tool creates `data`, `cache`, `results` and
+`models` inside it.
 
 ```bash
-neuroatlas config init --data-root ~/eeg/data --cache-root ~/eeg/cache \
-    --output-root ~/eeg/results --models-root ~/eeg/models
+neuroatlas config init ~/neuroatlas
 neuroatlas config show
 ```
 
 `config init` prints the four folders it wrote to `~/.neuroatlas/config.yaml`.
-It warns if the data root does not exist. That is fine, because
-`data download` creates it.
 
 If you already have a dataset somewhere else, point the tool at it instead
 of downloading it again:
@@ -190,15 +188,15 @@ embedding 1 checkpoint on bnci2014_001: 1 run
 [1/1] bnci2014_001 biot_pretrained: loading the data 22% (2/9 subjects, 0m 09s, ~0m 34s left)
 ...
 [1/1] bnci2014_001 biot_pretrained: already extracted (51s)
-embed: 1 ok, 0 failed (cache: ~/eeg/cache)
+embed: 1 ok, 0 failed (cache: ~/neuroatlas/cache)
 
-$ neuroatlas probe --dataset bnci2014_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000 --folds 0 --models biot_pretrained --output-root ~/eeg/results/bci_motor_imagery/bnci2014_001
+$ neuroatlas probe --dataset bnci2014_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000 --folds 0 --models biot_pretrained --output-root ~/neuroatlas/results/bci_motor_imagery/bnci2014_001
 probing 1 checkpoint on bnci2014_001: 1 run, one line each as it finishes
 [1/1] bnci2014_001 biot_pretrained fold 0: ok, bal_acc 0.316 (27s)
-probe: 1 ok, 0 failed (results: ~/eeg/results/bci_motor_imagery/bnci2014_001)
+probe: 1 ok, 0 failed (results: ~/neuroatlas/results/bci_motor_imagery/bnci2014_001)
 
 1 run (checkpoint x fold): 1 ok, 0 failed
-results: ~/eeg/results/bci_motor_imagery; `neuroatlas results bci_motor_imagery` summarises them
+results: ~/neuroatlas/results/bci_motor_imagery; `neuroatlas results bci_motor_imagery` summarises them
 ```
 
 A run is one probe fit, of one checkpoint on one fold. A `--debug` run is
@@ -274,31 +272,6 @@ number of classes.
 is that fold's own Sens@FA AUC. The headline is the AUC of the folds'
 median curve, so it is not the mean of the five.
 
-Our runs gave:
-
-| Benchmark | Dataset | Checkpoint | Headline | Ours | Paper |
-|---|---|---|---|---|---|
-| `sleep_stage` | Sleep-EDF Expanded | BIOT | Cohen's κ | 0.758 ± 0.016 | |
-| `brain_age` | Sleep-EDF Expanded | BIOT | MAE (years) | 11.98 ± 1.69 | 11.98 ± 1.69 (Table 7) |
-| `epilepsy` | Siena | CBraMod | event-level Sens@FA AUC | 0.496 ± 0.159 | see below |
-
-`run` uses patient-level folds on Siena. The paper's Siena results were
-computed on folds over Siena's 40 recordings, which ship with the package.
-The [user guide](user_guide.md#the-folds-behind-the-papers-siena-and-bonn-rows)
-gives the probe command that uses them, and the [README](../README.md)
-has the result beside the paper's.
-
-### Agreement between machines
-
-Probes are seeded. The same embeddings probed on another machine give
-sleep-staging and brain-age numbers that are equal to the third decimal.
-
-On epilepsy, each fold chooses its C from six values by validation AUPRC.
-Embeddings extracted on another GPU or driver can move one fold to a
-neighbouring C. On Siena this moved CBraMod's headline by 0.026.
-`neuroatlas results epilepsy -v` prints each fold's value and C, so you can
-compare two runs fold by fold.
-
 ### Saved predictions
 
 ```bash
@@ -311,9 +284,9 @@ metric from them in seconds. Running `sleep_stage` again also takes
 seconds, because each fold's saved predictions are reused and nothing is
 fitted.
 
-## 10. Reproduce a paper number with a supervised baseline
+## 10. A supervised baseline
 
-The CoRe-Sleep weights are a release asset of this repository.
+The supervised baselines run like any other model. CoRe-Sleep on brain age:
 
 ```bash
 neuroatlas models download core_sleep_shhs_fold0
@@ -322,8 +295,7 @@ neuroatlas results brain_age
 ```
 
 The run takes a few minutes, most of it extracting CoRe-Sleep on Sleep-EDF.
-`results` then shows `core_sleep_shhs_fold0` at 10.392 ± 1.074 years. The
-paper reports 10.39 ± 1.07 (Table 7).
+`results` then shows `core_sleep_shhs_fold0` at 10.392 ± 1.074 years.
 
 ## 11. Cluster jobs
 

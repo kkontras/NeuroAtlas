@@ -87,12 +87,13 @@ Note that the package on PyPI called `neuroatlas` is unrelated to this project.
 
 ## Quick start
 
-Set the folders for data, cache, results and model weights:
+Choose a project folder. Data, cache, results and model weights go into sub-folders of it:
 
 ```bash
-neuroatlas config init --data-root ~/eeg/data --cache-root ~/eeg/cache \
-    --output-root ~/eeg/results --models-root ~/eeg/models
+neuroatlas config init ~/neuroatlas
 ```
+
+To keep one of them elsewhere, add for example `--data-root /path/to/datasets`.
 
 Download Sleep-EDF and the BIOT weights, then run sleep staging:
 
@@ -108,22 +109,7 @@ neuroatlas results sleep_stage
 
 See [docs/walkthrough.md](docs/walkthrough.md) for a full example with the expected output.
 
-## Benchmarks
-
-| Benchmark | Domain | Metric | Datasets |
-|---|---|---|---|
-| `sleep_stage` | Sleep | Cohen's κ | 15 |
-| `sleep_hypnogram` | Sleep | Pearson r of hypnogram features | 8 |
-| `sleep_diagnosis` | Sleep | AUROC | 3 |
-| `sleep_arousal` | Sleep | AUPRC | 2 |
-| `sleep_respiratory` | Sleep | AUPRC | 2 |
-| `sleep_limb` | Sleep | AUPRC | 1 |
-| `brain_age` | Brain age | MAE (years) | 6 |
-| `epilepsy` | Epilepsy | Event-level Sens@FA AUC | 10 |
-| `bci_motor_imagery` | BCI | Balanced accuracy | 7 |
-| `bci_erp` | BCI | Balanced accuracy | 5 |
-| `bci_ssvep` | BCI | Balanced accuracy | 2 |
-| `bci_cognitive` | BCI | Balanced accuracy | 4 |
+## Running a benchmark
 
 Every benchmark runs the same way:
 
@@ -134,34 +120,22 @@ neuroatlas run epilepsy -m all_fm --dataset full  # all EEG FMs on all datasets 
 neuroatlas results epilepsy
 ```
 
-A few notes on individual benchmarks:
-
-- **Sleep staging** classifies 30 s epochs into five stages. The probe's regularization is chosen
-  on the validation set of each fold.
-- **Sleep events** (arousals, respiratory events, limb movements) predict whether a 30 s epoch
-  contains the event, using the thresholds from the paper (3 s, 10 s and 0.5 s).
-- **Brain age** fits a ridge regression on each subject's mean embedding. The paper also reports
-  SHHS, MESA, HomePAP and STAGES. Their ages come from NSRR demographic files that this release
-  does not read, so the benchmark covers the other six datasets.
-- **Epilepsy** scores seizure detection on 10 s windows at the event level. For TUAB, NMT and Bonn,
-  which only have recording-level labels, use the AUROC instead.
-- **BCI** uses leave-one-subject-out evaluation. The paper's other BCI setups (token flattening
-  and confound filtering) are available as variants, e.g. `--variant token_flattening`.
+`neuroatlas list benchmarks` lists all twelve, and `neuroatlas show <benchmark>` describes one.
 
 To run many jobs on a cluster, `neuroatlas submit` writes one HTCondor or SLURM job per dataset
 and model. `run/default_runs.sh` lists every experiment in the paper.
 
 ## Data
 
-Datasets are stored in `<data root>/<dataset>`. Run `neuroatlas data status` to see which
-datasets you have and how to get the others.
+Each dataset has its own folder in the data folder (`~/neuroatlas/data/<dataset>` with the setup
+above). Run `neuroatlas data status` to see which datasets you have and how to get the others.
 
 | Access | Datasets |
 |---|---|
 | Open, downloaded with `neuroatlas data download` | Sleep-EDF Expanded, HMC, UCDDB, DOD, Siena, CHB-MIT, Helsinki Neonatal, Bonn, 14 MOABB BCI datasets |
-| [NSRR](https://sleepdata.org) account, then `neuroatlas config token nsrr` | CFS, HomePAP, MESA, MrOS, STAGES, WSC |
+| [NSRR](https://sleepdata.org) account, then `neuroatlas config token nsrr` | CFS, HomePAP, MESA, MrOS, SHHS, STAGES, WSC |
 | Request from the data owners | DCSM, ISRUC, MASS, PhysioNet 2026, NMT, EPILEPSIAE, TUSZ, TUAB |
-| Available from the authors | SHHS (preprocessed), SeizeIT1, SeizeIT2, DREAMER, EEGMat, ArithmeticTask (preprocessed) |
+| Available from the authors | SeizeIT1, SeizeIT2, and the preprocessed DREAMER, EEGMat and ArithmeticTask files |
 
 If you already have a dataset, point to it with `neuroatlas config set <dataset>.data_root DIR`.
 To test the setup before a large download, `neuroatlas data download <dataset> --first 5`
@@ -178,29 +152,6 @@ downloads only the first five recordings.
 
 Download weights with `neuroatlas models download <model>` and list all checkpoints with
 `neuroatlas list models`. Each benchmark only includes the models that the paper evaluates on it.
-
-## Reproducing the paper
-
-The table compares results from this repository, with embeddings extracted from scratch, to the
-numbers in the paper.
-
-| Benchmark | Dataset | Model | Metric | This repo | Paper |
-|---|---|---|---|---|---|
-| Sleep staging | Sleep-EDF | CoRe-Sleep | Cohen's κ | 0.821 ± 0.012 | 0.820 |
-| Sleep staging | Sleep-EDF | CoRe-Sleep | Macro-F1 | 0.770 | 0.769 |
-| Brain age | Sleep-EDF | CoRe-Sleep | MAE | 10.39 ± 1.07 | 10.39 ± 1.07 |
-| Brain age | Sleep-EDF | BIOT | MAE | 11.98 ± 1.69 | 11.98 ± 1.69 |
-| Epilepsy | Siena | CBraMod | Sens@FA AUC | 0.499 ± 0.114 | 0.51 ± 0.09 |
-
-The Siena result uses the folds from the paper, which split the 40 Siena recordings into five
-folds. These are selected with `--set split_mode=paper_recordings` (see the
-[user guide](docs/user_guide.md)). By default, `run` splits Siena by patient.
-
-All probes are seeded, so sleep staging and brain age give the same results up to the third
-decimal on different machines. For epilepsy, each fold picks its regularization from six values
-on the validation AUPRC, and small differences in the embeddings (e.g. from a different GPU) can
-change the choice for one fold. In our tests this moved the Siena result by up to 0.026.
-`neuroatlas results epilepsy -v` shows the value and the chosen C for each fold.
 
 ## Repository structure
 

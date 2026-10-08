@@ -69,21 +69,29 @@ options:
 ### config init
 
 ```
-usage: neuroatlas config init [-h] --data-root DIR [--cache-root DIR]
+usage: neuroatlas config init [-h] [--data-root DIR] [--cache-root DIR]
                               [--output-root DIR] [--models-root DIR]
                               [--dataset-path DATASET.KEY=PATH] [--force]
+                              [DIR]
 
-Write the settings file. Only --data-root is required; every other folder has a
-default.
+Write the settings file. Give one project folder and everything goes under it:
+DIR/data, DIR/cache, DIR/results and DIR/models. A --*-root option puts that one
+somewhere else.
+
+positional arguments:
+  DIR                   The project folder; its data, cache, results and models sub-
+                        folders are created as needed.
 
 options:
   -h, --help            show this help message and exit
-  --data-root DIR       Raw datasets, one sub-folder each.
+  --data-root DIR       Raw datasets, one sub-folder each. Default: DIR/data.
   --cache-root DIR      Saved embeddings and prepared datasets (prepared/); can grow
-                        large. Default: $NEUROATLAS_HOME/artifacts/embedding_cache.
-  --output-root DIR     Probe results (results.json). Default:
-                        $NEUROATLAS_HOME/artifacts/benchmarks.
-  --models-root DIR     Model weights. Default: $NEUROATLAS_HOME/artifacts/models.
+                        large. Default: DIR/cache, or
+                        $NEUROATLAS_HOME/artifacts/embedding_cache without DIR.
+  --output-root DIR     Probe results (results.json). Default: DIR/results, or
+                        $NEUROATLAS_HOME/artifacts/benchmarks without DIR.
+  --models-root DIR     Model weights. Default: DIR/models, or
+                        $NEUROATLAS_HOME/artifacts/models without DIR.
   --dataset-path DATASET.KEY=PATH
                         A dataset stored outside its default sub-folder, e.g.
                         ucddb.data_root=/mnt/ucddb. Repeatable.

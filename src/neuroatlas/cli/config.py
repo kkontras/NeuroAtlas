@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from neuroatlas import _paths
 from neuroatlas import config as cfg
-from neuroatlas.cli import Parser, _msg
+from neuroatlas.cli import Parser, UsageError, _msg
 
 
 def _dataset_key(text: str) -> Tuple[str, str, str]:
@@ -48,16 +48,22 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="action", metavar="<action>")
 
     init = sub.add_parser("init", help="Write the settings file.",
-                          description="Write the settings file. Only --data-root is "
-                                      "required; every other folder has a default.")
-    init.add_argument("--data-root", required=True, metavar="DIR",
-                      help="Raw datasets, one sub-folder each.")
+                          description="Write the settings file. Give one project folder and "
+                                      "everything goes under it: DIR/data, DIR/cache, "
+                                      "DIR/results and DIR/models. A --*-root option puts "
+                                      "that one somewhere else.")
+    init.add_argument("root", nargs="?", metavar="DIR",
+                      help="The project folder; its data, cache, results and models "
+                           "sub-folders are created as needed.")
+    init.add_argument("--data-root", metavar="DIR",
+                      help="Raw datasets, one sub-folder each. Default: DIR/data.")
     for setting in cfg.SETTINGS.values():
         if setting.key == "data_root":
             continue
         init.add_argument(f"--{setting.key.replace('_', '-')}", metavar="DIR",
-                          help=f"{setting.help[0].upper()}{setting.help[1:]}. "
-                               f"Default: {setting.default_text}.")
+                          help=f"{setting.help[0].upper()}{setting.help[1:]}. Default: "
+                               f"DIR/{PROJECT_FOLDERS[setting.key]}, or "
+                               f"{setting.default_text} without DIR.")
     init.add_argument("--dataset-path", action="append", default=[], type=_dataset_key,
                       metavar="DATASET.KEY=PATH",
                       help="A dataset stored outside its default sub-folder, e.g. "
@@ -156,15 +162,25 @@ def _init(args: argparse.Namespace) -> int:
         if problem:
             _msg.error(f"--dataset-path {slug}.{key}: {problem}")
             return 2
+    if not (args.root or args.data_root):
+        raise UsageError("config init needs a project folder (or --data-root)\n"
+                         "fix: neuroatlas config init ~/neuroatlas")
     # All four roots are written out, defaults included, so the file says
     # where everything goes and nothing depends on how the package was
     # installed or which directory the command ran from.
-    data: Dict[str, Any] = {"data_root": _abs(args.data_root)}
+    root = Path(_abs(args.root)) if args.root else None
+    data: Dict[str, Any] = {}
     for key, setting in cfg.SETTINGS.items():
         value = getattr(args, key, None)
-        if key == "data_root":
-            continue
-        data[key] = _abs(value) if value else str(setting.default())
+        if value:
+            data[key] = _abs(value)
+        elif root is not None:
+            data[key] = str(root / PROJECT_FOLDERS[key])
+        else:
+            data[key] = str(setting.default())
+    if root is not None:
+        for key in cfg.SETTINGS:
+            Path(data[key]).mkdir(parents=True, exist_ok=True)
     paths: Dict[str, Dict[str, str]] = {}
     for slug, key, value in args.dataset_path:
         paths.setdefault(slug, {})[key] = _abs(value)
@@ -180,6 +196,10 @@ def _init(args: argparse.Namespace) -> int:
     print(NEXT_STEPS)
     return 0
 
+
+#: The sub-folders of a project folder (`config init DIR`), per setting.
+PROJECT_FOLDERS = {"data_root": "data", "cache_root": "cache", "output_root": "results",
+                   "models_root": "models"}
 
 NEXT_STEPS = ("next: neuroatlas config show; neuroatlas list benchmarks; "
               "neuroatlas data status <benchmark>")

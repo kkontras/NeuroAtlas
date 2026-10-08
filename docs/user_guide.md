@@ -155,24 +155,26 @@ From a clone this prints the version and the commit, for example
 
 ### The four folders
 
-Tell the tool where to keep data, caches, results and weights:
+Choose one project folder. Everything the tool keeps goes into it:
 
 ```bash
-neuroatlas config init --data-root ~/eeg/data --cache-root ~/eeg/cache \
-    --output-root ~/eeg/results --models-root ~/eeg/models
+neuroatlas config init ~/neuroatlas
 neuroatlas config show
 ```
 
-`config init` writes `~/.neuroatlas/config.yaml`. Set `$NEUROATLAS_HOME` to
-keep it somewhere else. Only `--data-root` is required. The others default
-to folders under `$NEUROATLAS_HOME`:
+This creates four sub-folders and writes their paths to
+`~/.neuroatlas/config.yaml` (set `$NEUROATLAS_HOME` to keep that file
+elsewhere):
 
-| Setting | Holds | Environment variable | Default |
+| Setting | Holds | Folder | Environment variable |
 |---|---|---|---|
-| `data_root` | raw datasets | `EEG_DATA_ROOT` | none, you must set it |
-| `cache_root` | embeddings and prepared files (can grow large) | `EEG_CACHE_ROOT` | `$NEUROATLAS_HOME/artifacts/embedding_cache` |
-| `output_root` | results | `NEUROATLAS_OUTPUT_ROOT` | `$NEUROATLAS_HOME/artifacts/benchmarks` |
-| `models_root` | model weights | `NEUROATLAS_MODELS_ROOT` | `$NEUROATLAS_HOME/artifacts/models` |
+| `data_root` | raw datasets | `~/neuroatlas/data` | `EEG_DATA_ROOT` |
+| `cache_root` | embeddings and prepared files (can grow large) | `~/neuroatlas/cache` | `EEG_CACHE_ROOT` |
+| `output_root` | results | `~/neuroatlas/results` | `NEUROATLAS_OUTPUT_ROOT` |
+| `models_root` | model weights | `~/neuroatlas/models` | `NEUROATLAS_MODELS_ROOT` |
+
+To put one of them somewhere else, add its option, for example
+`neuroatlas config init ~/neuroatlas --data-root /shared/eeg`.
 
 To change one folder later, run `neuroatlas config set cache_root DIR`.
 `neuroatlas config unset cache_root` returns it to the default.
@@ -967,34 +969,6 @@ Sleep-EDF Expanded and WSC. The paper also reports SHHS, MESA, HomePAP and
 STAGES (Table 9). Their participant ages come from NSRR's demographic
 tables, which this release does not read.
 
-#### The folds behind the paper's Siena and Bonn rows
-
-`run` uses patient-level folds on Siena, as App. B.1 describes. The
-paper's Siena results were computed on five folds over Siena's 40
-recordings. Those folds ship with the package. To use them, take the probe
-command that `run --dry-run` prints and add `--set split_mode=paper_recordings`:
-
-```bash
-neuroatlas run epilepsy --dataset siena -m cbramod_pretrained
-neuroatlas probe --dataset siena --task seizure_detection \
-    --set window_s=10 --set stride_s=10 --set split_mode=paper_recordings \
-    --probe-type linear --class-weight balanced \
-    --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc \
-    --models cbramod_pretrained --output-root ~/eeg/results/paper_folds/siena
-neuroatlas results epilepsy ~/eeg/results/paper_folds/siena
-```
-
-The probe reuses the embeddings from the first command, because the folds
-are not part of the cache key. Give it its own output folder. In
-`<output root>/epilepsy/siena` its results would replace the patient-level
-results of the same folds.
-
-Bonn ships no subject identifiers, so `run` makes its folds over the 500
-clips and keeps a clip's two 10 s segments together. The paper's Bonn
-results used folds over the 1,000 segments. Use the same probe command with
-`--dataset bonn`, `--set split_mode=paper_segments` and another output
-folder, such as `~/eeg/results/paper_folds/bonn`.
-
 #### Changing the folds
 
 On the epilepsy datasets, `embed` and `probe` accept
@@ -1218,17 +1192,6 @@ A result recorded twice counts once, for example from a quick `run` and a
 later cluster job of the same dataset, variant, model, fold and task. The
 newest file wins, and a warning says how many duplicates were dropped. Two
 variants of the same model and fold are two results.
-
-### Agreement between machines
-
-Probes are seeded. The same embeddings probed on another machine give
-sleep-staging and brain-age numbers that are equal to the third decimal.
-
-On epilepsy, each fold chooses its C from six values by validation AUPRC.
-Embeddings extracted on another GPU or driver can move one fold to a
-neighbouring C. On Siena this moved CBraMod's headline by 0.026. Compare
-two runs fold by fold with `neuroatlas results epilepsy -v`, which prints
-each fold's value and the C it chose.
 
 `results` exits with 0 when there is something to show, 1 when there are
 no results, and 2 for a usage error.

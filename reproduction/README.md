@@ -46,7 +46,7 @@ momentfm from downgrading transformers and numpy.
 ## Get the weights and the data
 
 ```bash
-neuroatlas config init --data-root ~/eeg/data              # once, to set where data goes
+neuroatlas config init ~/neuroatlas                       # once, to set the project folder
 neuroatlas models download cbramod_pretrained
 neuroatlas data download sleep_edf_expanded --mirror aws   # 8.1 GB
 neuroatlas data download chbmit                             # 21.7 GB
