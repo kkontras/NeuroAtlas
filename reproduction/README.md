@@ -1,174 +1,97 @@
-# Minimal reproduction
+# Pipeline walkthrough
 
-Two copies of the same notebook live here:
+`neuroatlas_minimal_repro.ipynb` walks through what `neuroatlas run` does, one stage per
+cell. It runs on a slice of Sleep-EDF Expanded and CHB-MIT and takes a few minutes on one
+GPU.
 
-| File | What it is |
-|---|---|
-| `neuroatlas_minimal_repro.ipynb` | the notebook to run yourself, with no outputs stored |
-| `neuroatlas_minimal_repro.executed.ipynb` | the same notebook after a complete run, with every result and all six figures saved inside it |
+By default it uses fold 0 and six subjects per split, so its numbers show how each stage
+works. The paper's numbers come from the benchmark commands:
 
-Open the executed one on GitHub if you want to see what the pipeline produces without
-downloading 30 GB of EEG first. It was run on the full Sleep-EDF Cassette subset and on
-CHB-MIT, so the numbers and plots in it are real rather than illustrative.
+```bash
+neuroatlas run sleep_stage -m cbramod_pretrained
+neuroatlas run brain_age -m cbramod_pretrained
+neuroatlas run epilepsy --dataset chbmit -m cbramod_pretrained
+```
 
-`neuroatlas_minimal_repro.ipynb` walks through the NeuroAtlas evaluation pipeline one stage
-at a time, on a small enough slice of data to run on a single machine. Nothing is hidden
-behind a wrapper script: each stage is a short cell whose output you can inspect before
-moving on.
+The notebook ships without outputs. Run it to see them.
 
-The stages are read raw EDF, map channel names into each model's vocabulary, pick models,
-extract frozen embeddings, fit a linear probe on the training subjects, and turn the
-predictions on held out subjects into the metrics the paper reports.
+## What it covers
 
-That last stage happens three times, because the three tasks report very different things:
+Every task goes through the same stages. Read the raw EDF, map the channel names to each
+model, extract frozen embeddings, fit a linear probe on the training subjects, and compute
+the metrics on the test subjects.
 
 | Task | Dataset | Reported |
 |---|---|---|
-| Sleep staging | Sleep-EDF Expanded | per epoch accuracy and Cohen's kappa, then a reconstructed hypnogram (with a plot) and the clinical features derived from it |
-| Brain age | Sleep-EDF Expanded, Cassette subset | mean absolute error and the brain age gap |
-| Seizure detection | CHB-MIT | event level sensitivity and false alarms per hour over whole recordings |
+| Sleep staging | Sleep-EDF Expanded | accuracy and Cohen's kappa, then a hypnogram and five clinical features |
+| Brain age | Sleep-EDF Expanded | mean absolute error and the brain age gap |
+| Seizure detection | CHB-MIT | event-level sensitivity and false alarms per hour over whole recordings |
 
-## Which models you can actually run
-
-Most of the model weights used in the paper are not distributed with this repository. They
-live in a directory called `artifacts/` that is excluded from version control, so a fresh
-clone does not have them and there is no way to download them from here.
-
-This notebook is therefore built around models whose weights it can obtain on its own,
-either downloading from Hugging Face the first time you run it or reading a file that is
-small enough to be committed. Section 4 sorts every model in the benchmark into those
-categories and prints the result, so you can see what is and is not available to you before
-anything fails.
-
-The consequence is that the EEG side of the comparison is CBraMod alone. REVE, NeuroLM,
-LaBraM, BIOT and EEGPT need local weights. If you have them, put them under
-`artifacts/models/` and add their identifiers to `MODELS` in section 4; nothing else
-changes.
-
-| Role | Checkpoint | Weights |
-|---|---|---|
-| EEG foundation model | `cbramod_pretrained` | Hugging Face |
-| Untrained control, same architecture | `cbramod_random_init` | none needed |
-| Generic time series model | `moment_small` | Hugging Face |
-| Generic time series model | `chronos_t5_small` | Hugging Face |
-| Supervised sleep baseline | `core_sleep_shhs_fold0` | `artifacts/`, optional |
-| Supervised seizure baseline | `seizure_transformer_pretrained` | `artifacts/`, optional |
-
-The last two are checked for per file and skipped with an explanation when absent, so the
-notebook runs either way. The check tests for the Git LFS pointer magic rather than file
-size, because CoRe-Sleep's normalisation stats are a legitimate 2.5 kB npz that a size
-threshold misreads as a stub.
-
-The contrast between the EEG model and the two generic ones is the paper's central
-comparison. The random initialised control is what separates "this architecture suits the
-task" from "the pretraining helped".
+The notebook embeds with CBraMod. It also defines MOMENT, Chronos and an untrained CBraMod
+in `MODELS`, and section 4 prints the state of each checkpoint's weights.
 
 ## Install
 
-```bash
-pip install -e ".[notebook]"
-```
-
-or explicitly:
+Use Python 3.11 and run these lines in a clone of the repository.
 
 ```bash
-pip install numpy scipy pandas scikit-learn matplotlib torch \
-            edfio h5py pyyaml xlrd transformers safetensors momentfm chronos-forecasting \
-            easydict
+pip install -e ".[fm,ts]" -c requirements-fm.txt
+pip install --no-deps "momentfm==0.1.4"
+pip install matplotlib -c requirements-fm.txt
 ```
 
-One Python 3.11 kernel. Two absences are deliberate. There is no `mne`, `braindecode` or
-`physioex`, because both Sleep-EDF tasks read raw EDF through `edfio` and no PhysioEx model
-is used. There is also no jax, uni2ts or gluonts: `requirements-tsfm.txt` describes a
-second environment, but that split exists for moirai, timesfm and lag-llama, whereas MOMENT
-and Chronos are ordinary torch plus transformers.
+The constraints file pins every package to the version the paper used. `--no-deps` stops
+momentfm from downgrading transformers and numpy.
 
-`xlrd` is needed because Sleep-EDF ships its age metadata as a legacy `.xls` file that
-pandas cannot open without it.
-
-## Downloading the data
-
-Two public datasets, about 30 GB total, no credentials and no data use agreements.
+## Get the weights and the data
 
 ```bash
-# Sleep-EDF Expanded, about 8 GB, covers the sleep staging and brain age sections
-wget -r -N -c -np -nH --cut-dirs=1 -P "$(dirname "$SLEEPEDF_ROOT")" \
-     https://physionet.org/files/sleep-edfx/1.0.0/
-
-# CHB-MIT, about 22 GB, covers the seizure detection section
-python -m neuroatlas.entrypoints.fetch --dataset chbmit --download   # Zenodo record 10259996
+neuroatlas config init --data-root ~/eeg/data              # once, to set where data goes
+neuroatlas models download cbramod_pretrained
+neuroatlas data download sleep_edf_expanded --mirror aws   # 8.1 GB
+neuroatlas data download chbmit                             # 21.7 GB
 ```
 
-Point the notebook at them with `SLEEPEDF_ROOT` and `CHBMIT_ROOT`. Without them it falls
-back to `data/sleep-edf-database-expanded-1.0.0` and `chbmit_cache/raw` under the
-repository root.
+The notebook reads both datasets from the folders `data download` puts them in. To read a
+copy somewhere else, set `SLEEPEDF_ROOT` or `CHBMIT_ROOT`. Without CHB-MIT, the notebook
+skips the seizure section.
 
-CHB-MIT is here because the paper's headline epilepsy cohort, TUSZ, is released under a
-Temple University data use agreement that has to be signed and approved, so it cannot
-appear in a notebook anyone can run. CHB-MIT is open and exercises the same task and the
-same event level metrics. The absolute numbers are not comparable to the paper's TUSZ rows.
-The protocol is.
+CHB-MIT is one of the paper's ten epilepsy datasets, and it is open.
 
-## How subjects are divided into train and test
+## Run it
 
-Fold 0 only, read verbatim from `src/neuroatlas/configs/folds/` rather than recomputed. That is the only
-way a reproduction lands on the paper's partitions. The adapters used here (`chbmit`,
-`sleep_edf_expanded`, `sleepedf_raw_brain_age`) accept a `folds_manifest` key that makes
-them take frozen subject lists from disk instead of running their own k-fold at import
-time. `benchmarking_helpers/fold_manifest.py` is the reader, and it handles both on-disk
-layouts.
+Start Jupyter in `reproduction/` and run the cells in order. To start it elsewhere, set
+`NEUROATLAS_ROOT` to your clone.
 
-Using one fold saves less than it looks. Fold 0's train, validation and test splits
-together cover the whole cohort, so reading, preprocessing and embedding are unchanged.
-Only the probe fitting gets cheaper.
+In section 5, `SUBJECT_LIMIT` keeps six subjects per split. In section 7d, `LIMIT_BATCHES`
+keeps 40 batches of CHB-MIT windows. To run all of fold 0, set both to `None`, or export
+`NEUROATLAS_SUBJECT_LIMIT=none` and `NEUROATLAS_LIMIT_BATCHES=none` before you start
+Jupyter. Fold 0 of CHB-MIT has 353,824 windows, so a full run takes much longer.
 
-### Why the same person must never appear on both sides
+## Folds
 
-Manifests list recordings, not subjects, and Sleep-EDF Cassette records two nights per
-subject. A split that is disjoint over recordings can still put night 1 of a subject in
-train and night 2 of the same subject in test, which quietly inflates everything
-downstream.
+The notebook reads fold 0 from the frozen fold files that ship with the package.
+`neuroatlas run` reads the same files. Fold 0's train, validation and test splits together
+cover the whole dataset, so using one fold makes only the probe fitting cheaper.
+`SUBJECT_LIMIT` is what keeps the notebook fast.
 
-An earlier Sleep-EDF manifest here had exactly that defect: 55 of its 78 subjects were spread
-over more than one fold, and in fold 0, 16 of the 26 test subjects also appear in train.
-The notebook therefore uses `sleep_edf_expanded.json`, which is clean, and prints the
-comparison rather than hiding it. Run any manifest you add through
-`fold_manifest.check_subject_grouping` before trusting numbers computed from it.
+Sleep-EDF Cassette records two nights per subject, so a split of recordings can still put
+one subject on both sides. Section 1 checks that no subject is on both sides of the
+benchmark's folds. It then moves one recording across to show what the check catches.
 
-The CHB-MIT manifest also carries per fold window counts, so the notebook can assert
-232,291 train, 44,468 validation and 77,065 test windows after preprocessing and fail
-loudly if your copy of the data diverges.
+## What `neuroatlas run` does differently
 
-## How long it takes to run
+Section 8 of the notebook compares the two stage by stage. In short, `neuroatlas run` uses
+all five folds and every subject, embeds each 30 s epoch whole with CBraMod, picks the
+probe's C from a wider grid, and scores seizure detection by the event-level Sens@FA AUC.
 
-About two and a half minutes end to end on one GPU at the defaults, measured at 154 s.
-Embedding 37,665 sleep epochs is 22 s of that; most of the rest is reading EDF files. It is
-meant to stay that way, so that it is something you run while reading it.
+## Change the notebook
 
-`SUBJECT_LIMIT` (section 5) keeps six subjects per split and `LIMIT_BATCHES` (section 7d)
-keeps 40 batches of CHB-MIT windows. Raising them costs time roughly linearly: full fold 0
-is about ten minutes for sleep and around two hours for CHB-MIT, which is 353,824 windows.
-Neither is needed to follow the pipeline, and the defaults are the intended scale.
-
-## What differs from the paper
-
-The paper averages folds 0 to 4 over seeds 0, 1 and 2, so loop `FOLD` over `range(5)` and
-average to match it.
-
-Section 8 of the notebook lists every difference from the published protocol in one place.
-The two worth knowing before you start: CBraMod was pretrained on 10 second windows while
-sleep is scored in 30 second epochs, and the notebook handles that by embedding three
-consecutive windows and concatenating, whereas the harness applies the per checkpoint
-`runtime_overrides` in the registry. And the seizure section sets `balance="none"` so that
-false alarms per hour is measured against real elapsed time, where the harness default is a
-weighted sampler.
-
-## Changing the notebook
+Edit `build_notebook.py`, not the `.ipynb`, then regenerate the notebook.
 
 ```bash
 python reproduction/build_notebook.py
 ```
 
-Edit `build_notebook.py`, not the `.ipynb`. A notebook cell's `source` is a list of lines
-that each have to keep their trailing newline, and hand-editing the JSON tends to collapse
-a whole cell onto one line.
+A notebook cell's `source` is a list of lines that each keep their trailing newline.
+Editing the JSON by hand tends to collapse a cell onto one line.

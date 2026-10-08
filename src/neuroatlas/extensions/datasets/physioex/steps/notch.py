@@ -20,10 +20,14 @@ class NotchFilter(PreprocessingStep):
         import logging
         nyq = 0.5 * fs_in
         if not 0 < self.freq < nyq:
-            logging.getLogger("physioex.data.steps").warning(
-                f"NotchFilter(freq={self.freq}) skipped: freq >= Nyquist ({nyq} Hz) "
-                f"at fs={fs_in}. Signal passed through."
-            )
+            # compiled once per recording: said once per run (-v, --log)
+            from neuroatlas import quiet
+
+            quiet.warn_once(
+                logging.getLogger("physioex.data.steps"), f"notch not applied:{self.freq}:{fs_in}",
+                f"recordings sampled at {fs_in:g} Hz get no {self.freq:g} Hz notch filter: "
+                f"it is at or above their Nyquist frequency ({nyq:g} Hz)",
+                level=logging.INFO)
             return CompiledStep(
                 apply=lambda x: np.asarray(x, dtype=np.float32),
                 fs_out=fs_in,

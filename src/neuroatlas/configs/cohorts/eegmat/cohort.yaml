@@ -21,7 +21,9 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  kind: physionet
+  # The benchmark reads the authors' preprocessed file, not the raw EDFs
+  # PhysioNet serves (ref/version/upstream: where the recordings come from).
+  kind: internal
   ref: eegmat
   version: 1.0.0
   upstream: https://physionet.org/content/eegmat/1.0.0/
@@ -29,9 +31,9 @@ acquisition:
   dest: ${EEG_DATA_ROOT}/eegmat             # where `data download` puts the raw EDFs
   expect: {glob: "Subject*.edf", count: 72} # RECORDS: 36 subjects x (rest, task)
   prepared_only: >
-    the benchmark reads the preprocessed pickle (4 s windows at 128 Hz) the
-    published embeddings were built from; no script in this repository builds
-    it from the raw EDFs.
+    bci_cognitive reads EEGMat_preprocessed_*.pkl (4 s windows at 128 Hz), the
+    file the published embeddings were extracted from; the authors provide it
+    on request.
     fix: ask the authors for EEGMat_preprocessed_*.pkl, then
     neuroatlas config set eegmat.preprocessed_path FILE
 

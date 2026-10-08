@@ -28,16 +28,10 @@ per_model:
     C4-A1: C4-A1
   moment:
     C4-A1: C4-A1
-  timemoe:
-    C4-A1: C4-A1
   moirai:
     C4-A1: C4-A1
-  lagllama:
-    C4-A1: C4-A1
-  timesfm:
-    C4-A1: C4-A1
 notes:
-  eegpt: C4-A1 → C4 referential. Paper pretrained unipolar at 58 channels; single-channel bipolar input is a severely reduced pairing and should be marked with an asterisk in benchmark reports.
+  eegpt: C4-A1 onto EEGPT's referential C4, one of the 58 channels EEGPT was pretrained on.
   cbramod: CBraMod is index-based + permutation-invariant; pass the bipolar label through unchanged.
   labram: C4-A1 → C4 referential anchor; shared vocabulary with NeuroLM.
   neurolm: Uppercase per NeuroLM standard_1020 vocabulary.
@@ -49,7 +43,4 @@ notes:
   sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
   chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

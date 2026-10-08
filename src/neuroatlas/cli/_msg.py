@@ -1,5 +1,46 @@
 """How ``neuroatlas`` talks to its user: three kinds of message, one shape.
 
+The message contract -- every command, every module that prints:
+
+1. **Three channels only.** Results and tables go to stdout. Progress goes to
+   stderr (a live line on a terminal; a start and a result line off it).
+   Messages go to stderr as ``error:`` / ``warning:`` / ``note:``, the remedy
+   on its own ``fix:`` line. Nothing else reaches the terminal without
+   ``-v``: no library log lines, no tqdm bar, no ``print`` from task,
+   dataset or model code.
+2. **Every number says what it is:** the metric, its unit (30 s epoch, 10 s
+   window, seizure event, subject, trial, recording), the classes or the
+   threshold, what a fold is and what ± is over.
+3. **One word per concept,** the same in every table, message and flag (the
+   glossary below).
+4. **Alive within a second:** a step that can take more than ~2 s shows a
+   live line naming what it does, to what, with a count when one is known,
+   and ends with one result line with its time (``12s``, ``2m 05s``:
+   :func:`neuroatlas.progress.duration`).
+5. **Every message says what happened, why, and what to do,** one form per
+   remedy::
+
+       missing data          fix: neuroatlas data download <dataset>
+       a dataset elsewhere   fix: neuroatlas config set <dataset>.<key> DIR
+       missing weights       fix: neuroatlas models download <checkpoint>
+
+   Plain words: no internal file path, module, YAML key or class name in
+   user text unless the user must act on it; no em dash or arrow as a
+   separator. A ``fix:`` that names a neuroatlas command names a real one
+   (``tests/test_fix_Z2_fix_commands.py`` parses every one).
+
+The words (the glossary; tables, messages and flags use these and no
+synonyms): *checkpoint* (one model's weights; ``-m`` selects checkpoints),
+*family*, *dataset* (never cohort or corpus), *benchmark*, *quick dataset*
+(``--dataset single``) and *all datasets* (``--dataset full``), *fold*,
+*LOSO*, *variant*, *embeddings*, *probe*, *run* (one checkpoint on one
+fold), and for a pair or a run that did not produce a result: *skipped*
+(its data or weights are missing here), *ruled out* (the dataset's channel
+map excludes the model), *invalid* (the channel map has no entry for the
+model's family), *failed* (it ran and broke). Weights are *found*,
+*downloadable*, *in Hugging Face cache* or *manual*; a dataset is
+*downloadable*, *credentialed*, *manual* or *from the authors*.
+
 Every message that is not ordinary output starts with the word that says
 what it is, in lower case, and goes to stderr::
 
@@ -15,6 +56,8 @@ when there is one::
 
 Ordinary output -- tables, progress, summaries -- has no prefix and goes to
 stdout. The logging formatter (:class:`LogFormatter`) uses the same words.
+The lines under a table row start with the same words, or with
+``skipped:`` / ``ruled out:`` / ``invalid:`` (:data:`ROW_KINDS`).
 
 Exception texts written for a user have the same shape: the first line says
 what is wrong, a line starting ``fix:`` says what to do (:func:`compose`).
@@ -37,8 +80,17 @@ import sys
 from typing import List, Optional, Sequence, Tuple
 
 KINDS = ("error", "warning", "note")
-#: The words a line under a table row starts with (beside the three kinds).
-ROW_KINDS = ("error", "warning", "note", "skipped", "n/a")
+#: The words a line under a table row starts with (beside the three kinds):
+#: ``skipped`` (data or weights missing here), ``ruled out`` (the channel map
+#: excludes the model), ``invalid`` (the channel map has no entry for its family).
+ROW_KINDS = ("error", "warning", "note", "skipped", "ruled out", "invalid")
+#: Not run because the dataset's channel map excludes the model: the word
+#: every table and message uses (`check`, `run`, `submit`, `results`).
+RULED_OUT = "ruled out"
+#: Not run because the data or the weights are not here.
+SKIPPED = "skipped"
+#: Not run because the dataset's channel map has no entry for the family.
+INVALID = "invalid"
 FIX = "fix"
 #: Where a shortened message's full text goes (the --log file only, unless -v).
 FULL_LOGGER = "neuroatlas.full"
@@ -50,12 +102,14 @@ LIMIT = 200
 _state = {"verbose": False}
 
 _COLORS = {"error": "\033[1;31m", "warning": "\033[1;33m", "note": "\033[2m",
-           "skipped": "\033[33m", "n/a": "\033[2m", FIX: "\033[1m"}
+           "skipped": "\033[33m", "ruled out": "\033[2m", "invalid": "\033[33m", "n/a": "\033[2m",
+           FIX: "\033[1m"}
 _RESET = "\033[0m"
 ANSI = re.compile(r"\r?\x1b\[[0-9;?]*[A-Za-z]")   # colours, and the clear-line code
 
-_PREFIX = re.compile(r"^\s*(?:neuroatlas(?: [\w-]+)?: )?(error|warning|note|skipped|n/a):\s*",
-                     re.IGNORECASE)
+# `n/a:` is still read (results.json files written before `ruled out`)
+_PREFIX = re.compile(r"^\s*(?:neuroatlas(?: [\w-]+)?: )?"
+                     r"(error|warning|note|skipped|ruled out|invalid|n/a):\s*", re.IGNORECASE)
 _FIX_LINE = re.compile(r"^\s*fix:\s*", re.IGNORECASE)
 # a sentence ends at . ! ? followed by a space and a capital, a quote or a bracket
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[`'\"])")
@@ -182,7 +236,9 @@ def format(kind: str, text: str, fix: Optional[str] = None, *, color: bool = Fal
     lines; *fix* adds one more."""
     _, lines, fixes = split(text)
     if fix:
-        fixes.append(fix)
+        # one remedy per line: a fix of several lines ("A\nfix: B") is that many
+        fixes += [f[len(FIX) + 2:] if f.startswith(FIX + ": ") else f
+                  for f in fix.splitlines() if f.strip()]
     lines = lines or [""]
     out = [f"{indent}{paint(kind, kind + ':', color)} {lines[0]}".rstrip()]
     out += [f"{indent}  {line}" for line in lines[1:]]
@@ -198,6 +254,14 @@ def lines(kind: str, text: str, fix: Optional[str] = None) -> List[str]:
 def say(kind: str, text: str, fix: Optional[str] = None, *, file=None) -> None:
     """Print one message to stderr (or *file*)."""
     stream = file if file is not None else sys.stderr
+    if stream is not sys.stdout:
+        # what a table printed so far lands first: through a pipe stdout is
+        # buffered and stderr is not, and a message that says "the lines
+        # above" must come after them
+        try:
+            sys.stdout.flush()
+        except (AttributeError, ValueError, OSError):
+            pass
     escapes = use_color(stream)     # a terminal that takes escape codes (not NO_COLOR)
     print((CLEAR_LINE if escapes else "") + format(kind, text, fix, color=escapes),
           file=stream, flush=True)
@@ -229,7 +293,7 @@ def paint_row_note(line: str, color: bool) -> str:
 
 def counts(total: int, noun: str, parts: Sequence[Tuple[str, int]], *,
            keep_zero: Sequence[str] = ()) -> str:
-    """A footer: ``3 pairs: 2 ok, 1 error, 0 skipped`` (zero counts only for
+    """A footer: ``3 pairs: 2 ok, 1 failed, 0 skipped`` (zero counts only for
     the states in *keep_zero*)."""
     shown = [f"{n} {state}" for state, n in parts if n or state in keep_zero]
     return f"{total} {noun}" + (f": {', '.join(shown)}" if shown else "")
@@ -237,6 +301,16 @@ def counts(total: int, noun: str, parts: Sequence[Tuple[str, int]], *,
 
 def plural(n: int, one: str, many: Optional[str] = None) -> str:
     return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def legend(entries: Sequence[Tuple[str, str]], indent: str = "  ") -> List[str]:
+    """The lines under a table that explain the values that are not
+    self-explanatory: ``  downloadable   models download can fetch them``,
+    one per (value, meaning), the meanings aligned."""
+    if not entries:
+        return []
+    width = max(len(word) for word, _ in entries)
+    return [f"{indent}{word:<{width}}  {meaning}".rstrip() for word, meaning in entries]
 
 
 # --------------------------------------------------------------------------

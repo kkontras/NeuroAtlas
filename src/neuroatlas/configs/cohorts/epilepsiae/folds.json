@@ -6,8 +6,8 @@
  "split_mode": "subject",
  "subject_independent": true,
  "generator": "replay probe_sz1_sklearn._build_patient_splits seed42",
- "generator_notes": "The paper's epilepsy probe (probe_sz1_sklearn, run on sofia over artifacts/benchmarks/<ds>/embeddings_w10s_s10s_sofia/<model>/embeddings.npz) split every cohort with _build_patient_splits: StratifiedKFold(5, shuffle=True, random_state=42) over sorted(unique subjects), stratum = 'subject has any seizure window'; an inner StratifiedKFold(5, seed 42) on the rest picks val with fold (k+1) % 5. This file is that replay, committed as configs/folds/epilepsiae.json in 3c6721c and frozen here so the reader's own splitter (different strata/subject set) cannot move it.",
- "verified": "re-derived 2026-10-03 from the paper-era embeddings on esat (na_seizure_probe/epilepsiae/reve_pretrained/embeddings.npz, 148 subjects, 10,043,429 windows) with the paper's splitter: every fold's train/val/test identical, window counts identical",
+ "generator_notes": "The paper's epilepsy probe split every dataset with _build_patient_splits: StratifiedKFold(5, shuffle=True, random_state=42) over sorted(unique subjects), stratum = 'subject has any seizure window'; an inner StratifiedKFold(5, seed 42) on the rest picks val with fold (k+1) % 5. This file is that replay, frozen so the reader's own splitter (different strata/subject set) cannot move it.",
+ "verified": "re-derived from the paper's embeddings (reve_pretrained, 148 subjects, 10,043,429 windows) with the paper's splitter: every fold's train/val/test identical, window counts identical",
  "folds": {
   "0": {
    "train": [

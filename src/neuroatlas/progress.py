@@ -6,16 +6,16 @@ downloading data or weights -- prints the same three kinds of line:
 ``header``
     what it is about to do, at once::
 
-        embedding 12 model(s) on siena: 12 run(s)
+        embedding 12 checkpoints on siena: 12 runs
 
 ``live line``
     while one item works, on a terminal only: one line, rewritten in place
     every second or two and cleared when the item ends. It names the phase
     the item is in, and when it is known how far along it is::
 
-        [3/12] siena eegpt_pretrained: loading weights (0m 12s)
+        [3/12] siena eegpt_pretrained: loading weights (12s)
         [3/12] siena eegpt_pretrained: embedding 45% (352/793 batches, 1m 05s, ~1m 20s left)
-        [2/3] neurogpt_pretrained: downloading 45% (143 MB of 318 MB, 12.1 MB/s, 0m 12s, ~0m 14s left)
+        [2/3] neurogpt_pretrained: downloading 45% (143 MB of 318 MB, 12.1 MB/s, 12s, ~14s left)
 
     Off a terminal (a pipe, a cluster job's output file) there is no live
     line: a start line instead (``[3/12] siena eegpt_pretrained: embedding``),
@@ -56,11 +56,13 @@ from typing import Callable, Dict, List, Optional
 
 
 def clock(seconds: float) -> str:
-    """``1m 05s`` (``4h 47m`` from an hour on): the time on a live line."""
+    """``12s``, ``1m 05s`` (``4h 47m`` from an hour on): the time on a live
+    line, in the result line's format (:func:`duration`), counted in whole
+    seconds as they pass."""
     minutes, secs = divmod(int(max(0.0, seconds)), 60)
     if minutes >= 60:
         return f"{minutes // 60}h {minutes % 60:02d}m"
-    return f"{minutes}m {secs:02d}s"
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
 
 
 def duration(seconds: float) -> str:
@@ -251,6 +253,17 @@ def starting(command: str) -> "Progress":
                     start_line_off_tty=False, until_output=True)
 
 
+def reporting(command: str) -> "Progress":
+    """Around a command that prints a report (a table, JSON), on a terminal:
+    a live line on stderr from its first second -- "neuroatlas data status:
+    checking 40% (2/5 datasets, 3s)", the phases the code inside names --
+    gone for good when the report starts on stdout. A message on stderr
+    meanwhile clears it, and it comes back. Nothing at all off a terminal: a
+    pipe or a machine format gets the report alone."""
+    return Progress(f"neuroatlas {command}", verb="starting", stream=sys.stderr,
+                    start_line_off_tty=False, until_stdout=True, screen_only=True)
+
+
 def make_way() -> None:
     """Clear the live line, if one is on screen, before something else is written."""
     for item in list(_STACK):
@@ -279,13 +292,14 @@ class _Guard:
     is written first clears the live line, so it starts on a clean line (the
     next tick draws the live line again)."""
 
-    def __init__(self, inner, item: "Progress"):
+    def __init__(self, inner, item: "Progress", name: str = "stdout"):
         self._inner = inner
         self._item = item
+        self._name = name
 
     def write(self, text):
         if text and os.getpid() == self._item._pid:      # not from a forked loader worker
-            self._item._make_way()
+            self._item._make_way(output=self._name == "stdout")
         return self._inner.write(text)
 
     def __getattr__(self, name):
@@ -309,11 +323,16 @@ class Progress:
     def __init__(self, label: str, *, verb: str = "working", stream=None, every: float = 1.0,
                  start_line_off_tty: bool = True, phases: bool = True, steps: int = 10,
                  quiet_every: float = 300.0, min_gap: float = 5.0,
-                 until_output: bool = False):
+                 until_output: bool = False, until_stdout: bool = False,
+                 screen_only: bool = False):
         self.label, self.verb, self.every = label, verb, every
         # a command's "starting" line: drawn from its first second on, and
-        # gone for good at the command's first output (see starting())
+        # gone for good at the command's first output (see starting()); a
+        # report's line, at its first output on stdout (see reporting())
         self.until_output = until_output
+        self.until_stdout = until_stdout
+        # nothing at all off a terminal: no start line, no tenths
+        self.screen_only = screen_only
         self._retired = False
         self.stream = terminal(stream if stream is not None else sys.stdout)
         self.tty = isatty(self.stream)
@@ -354,6 +373,9 @@ class Progress:
         # from there, not from the phase's start (a loader's first batch, a
         # connection, take their time once)
         self._first: Optional[tuple] = None
+        # (time, done) at the latest move: between two moves of a count (a
+        # subject, a batch) the time left counts down from there, never up
+        self._last_move: Optional[tuple] = None
         self._poll: Optional[Callable[[], Optional[float]]] = None
         self._polled: Optional[float] = None
         self._next_step = self._step_of(self._done) + 1
@@ -390,11 +412,14 @@ class Progress:
         with self._lock:
             if total:
                 self._total = total
+            before = self._done
             self._done = (done if done is not None else self._done) + advance
             self._start_done += carried
             if note is not None:
                 self._note = note or None
             self._mark_first(self._done)
+            if self._done > before:
+                self._last_move = (time.monotonic(), self._done)
         self._after_update()
         return self
 
@@ -462,15 +487,27 @@ class Progress:
             moved = done - self._start_done
             note = self._note
             first = self._first
+            last = getattr(self, "_last_move", None)
         # the pace since the first move, once there has been a second; before
         # that, over the whole phase, if it has moved enough to say (a 1-byte
         # file appearing is not a rate)
+        since_last = 0.0
         if first is not None and done > first[1] and now > first[0]:
-            pace = (done - first[1]) / (now - first[0])
+            if unit != "bytes" and last is not None and last[1] > first[1] \
+                    and last[0] > first[0] and now >= last[0]:
+                # a count moves in steps: its pace up to the latest step, and
+                # the time since then taken off what is left
+                pace = (last[1] - first[1]) / (last[0] - first[0])
+                since_last = now - last[0]
+            else:
+                pace = (done - first[1]) / (now - first[0])
         elif moved > 0 and elapsed > 0 and (not total or moved >= 0.01 * total):
             pace = moved / elapsed
         else:
             pace = 0.0
+        # a count shows a time left from its second step on (one step says
+        # nothing about the next one's length); bytes flow, and show it at once
+        stepped = unit == "bytes" or (first is not None and done > first[1]) or moved > 1
         parts: List[str] = [note] if note else []
         head = what
         if total and done > total * 1.05:
@@ -495,8 +532,10 @@ class Progress:
         if unit == "bytes" and pace > 0 and elapsed >= 1 and running:
             parts.append(f"{size(pace)}/s")
         parts.append(clock(elapsed))
-        if total and unit and pace > 0 and done < total and elapsed >= 3 and self._eta:
-            parts.append(f"~{clock((total - done) / pace)} left")
+        left = (total - done) / pace - since_last if total and pace > 0 else 0
+        if total and unit and pace > 0 and done < total and elapsed >= 3 and self._eta \
+                and stepped and left >= 1:
+            parts.append(f"~{clock(left)} left")
         return f"{self.label}: {head} ({', '.join(parts)})"
 
     # -- output ------------------------------------------------------------
@@ -535,12 +574,13 @@ class Progress:
             self._shown = len(line)
             self._last_draw = now
 
-    def _make_way(self) -> None:
-        """Clear the live line before someone else writes."""
+    def _make_way(self, output: bool = False) -> None:
+        """Clear the live line before someone else writes (*output*: to
+        stdout, the command's own output)."""
         if not self.tty or os.getpid() != self._pid:     # not from a forked loader worker
             return
         with self._lock:
-            if self.until_output:
+            if self.until_output or (output and self.until_stdout):
                 self._retired = True
             if self._shown:
                 self._write(self._clear_text())
@@ -559,6 +599,8 @@ class Progress:
     def _after_update(self) -> None:
         if self.tty:
             self._draw()
+            return
+        if self.screen_only:
             return
         with self._lock:
             done = self._effective_done()
@@ -589,7 +631,7 @@ class Progress:
             self._poll_now()
             if self.tty:
                 self._draw(force=True)
-            elif self._active():
+            elif self._active() and not self.screen_only:
                 # off a terminal: a line now and then when there are no
                 # tenths to count (an unknown total), so a log shows life
                 with self._lock:
@@ -601,7 +643,12 @@ class Progress:
                     self._after_update()
 
     def __enter__(self) -> "Progress":
+        outers = list(_STACK)
         _STACK.append(self)
+        # an item inside another (a pair inside a report's line): only the
+        # innermost draws from here on, and the outer line is cleared first
+        for outer in outers:
+            outer._make_way()
         self._started = time.monotonic()
         self._reset_phase(None)
         if self.tty:
@@ -611,12 +658,12 @@ class Progress:
             # anything else printed meanwhile clears the live line first
             for name in ("stdout", "stderr"):
                 inner = getattr(sys, name)
-                guard = _Guard(inner, self)
+                guard = _Guard(inner, self, name)
                 setattr(sys, name, guard)
                 self._guards.append((name, guard, inner))
-        elif self.start_line_off_tty:
+        elif self.start_line_off_tty and not self.screen_only:
             self._line(f"{self.label}: {self.verb}")
-        if self.tty or self.phases:
+        if self.tty or (self.phases and not self.screen_only):
             self._thread = threading.Thread(target=self._tick, daemon=True)
             self._thread.start()
         return self

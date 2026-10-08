@@ -73,22 +73,15 @@ memmap-friendly layout:
   .schema_v1       # written last; marks completion
 ```
 
-Build (sharded, CPU-only, on Condor):
+Build (CPU-only; shard K of N, one per scheduler job):
 
 ```
-condor_submit <the job file, not shipped>     # 50 shards
+neuroatlas data prepare epilepsiae --shard 0/50
 ```
 
-Embed automatically uses the cache when `--cache-root` is passed:
-
-```
-python -m neuroatlas.entrypoints.embed_epilepsiae \
-    --model biot_pretrained --cache-root <cache-root> ...
-```
-
-The cached runtime Dataset (`dataio/epilepsiae_cached.py`) is signature-
-compatible with the EDF Dataset (same `__getitem__` return dict, same
-convenience properties), so every existing entrypoint / adapter keeps
-working. Float16 storage quantises to ≈0.1 µV at 100 µV — below sensor
+The benchmark's reader reads the raw corpus. The cache is read by
+`EpilepsiAECachedDataset` (`dataio/epilepsiae_cached.py`), which is
+signature-compatible with the EDF Dataset (same `__getitem__` return dict,
+same convenience properties). Float16 storage quantises to ≈0.1 µV at 100 µV — below sensor
 noise; no observable effect on downstream probes. The `.schema_v1`
 marker lets preprocess resume mid-run.

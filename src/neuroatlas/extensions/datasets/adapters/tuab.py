@@ -48,9 +48,9 @@ from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindo
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_abnormal/v3.0.1/edf"
+_DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/tuab"
 _DEFAULT_CACHE_ROOT = (
-    "${REPO_ROOT}/tuab_cache/hdf5"
+    "${EEG_CACHE_ROOT}/prepared/tuab"
 )
 
 
@@ -216,10 +216,26 @@ class TuabBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         signal_kind: str = "raw",
         **_unused: Any,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("tuab", type(self), normalize=normalize)
         if split_mode not in ("official", "kfold"):
             raise ValueError(f"split_mode must be 'official' or 'kfold', got {split_mode!r}")
         if label_mode != "binary":
-            raise ValueError(f"TUAB only supports label_mode='binary', got {label_mode!r}")
+            raise ValueError(f"tuab has one label mode, binary (normal or abnormal recording), "
+                             f"not label_mode={label_mode!r}")
+        montage = _unused.get("montage")
+        if montage is not None and str(montage).lower() != "unipolar":
+            # the reader keeps its 19 electrodes as recorded; a montage
+            # setting would otherwise be dropped in silence
+            from neuroatlas.cli import _msg
+
+            raise ValueError(_msg.compose(
+                f"tuab reads only its 19-electrode unipolar montage, so montage={montage} "
+                f"is not applied",
+                "neuroatlas embed --dataset tuab --help"))
 
         metadata = {
             "canonical_label_space": "binary",
@@ -263,13 +279,9 @@ class TuabBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
                 raw_root, cache_root,
             )
             if not Path(raw_root).exists():
-                raise FileNotFoundError(
-                    f"TUAB raw_root not found: {raw_root}\n"
-                    f"Either:\n"
-                    f"  - run `python -m neuroatlas.entrypoints.fetch --dataset tuab --download` to fetch it, or\n"
-                    f"  - point `raw_root` at an existing mirror, or\n"
-                    f"  - build the H5 cache and set `cache_root`."
-                )
+                from neuroatlas.extensions.datasets._missing import no_data
+
+                raise FileNotFoundError(no_data("tuab", raw_root, "raw_root"))
 
         # ----- Build per-split recording_indices -----
         # We need subject ids + is_abnormal labels per recording for the
@@ -492,8 +504,8 @@ class TuabBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
             ))
         if not parts:
             raise RuntimeError(
-                f"TUAB H5 backend produced 0 datasets for split={split!r} "
-                "in kfold mode — splits are empty?"
+                f"tuab fold {self._fold}: its {split} split has no recordings "
+                f"(n_folds={self._n_folds})"
             )
         if len(parts) == 1:
             return parts[0]

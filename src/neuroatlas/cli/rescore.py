@@ -19,20 +19,20 @@ from neuroatlas.cli._table import add_format_arg, render
 
 #: what each outcome reads as in the table
 _STATUS = {"same": "rescored, same", "changed": "rescored, changed",
-           "skipped": "skipped", "failed": "failed fold, left as is"}
+           "skipped": "skipped", "failed": "failed fold, not rescored"}
 
 
 def build_parser() -> Parser:
     p = Parser(prog="neuroatlas rescore", description=__doc__)
     p.add_argument("benchmark")
-    p.add_argument("--dataset", default=None, metavar="SLUGS",
+    p.add_argument("--dataset", default=None, metavar="NAMES",
                    help="Only these datasets, comma-separated (default: every dataset that "
                         "has results).")
     p.add_argument("-m", "--models", default=None,
-                   help=MODELS_HELP + " Default: every model that has results.")
+                   help=MODELS_HELP + " Default: every checkpoint that has results.")
     p.add_argument("--variant", default=None,
                    help="Only this variant's results (default: every variant).")
-    p.add_argument("--output-root", type=Path, default=None,
+    p.add_argument("--output-root", type=Path, default=None, metavar="DIR",
                    help="The results root (default: the configured output root).")
     add_format_arg(p)
     return p
@@ -65,12 +65,14 @@ def main(argv: Optional[List[str]] = None) -> None:
         # a table lists the skipped ones under it, with their fix
         if o.reason and not (table and o.status == "skipped"):
             notes[len(rows) - 1] = [o.reason]
-    head = metric_label(report.headline)
+    from neuroatlas import catalog
+
+    head = metric_label(report.headline, catalog.load(report.benchmark))
     render(rows, ["dataset", *(["variant"] if show_variant else []), "model", "fold", "result",
                   "before", "after"],
            args.format, notes,
            extra=["benchmark", "variant", "task", "metric", "predictions", "results_file", "fix"],
-           labels={"before": f"{head} before", "after": "after"},
+           labels={"model": "checkpoint", "before": f"{head} before", "after": "after"},
            formats={"before": "{:.6g}", "after": "{:.6g}"})
     if args.format != "table":
         return
@@ -78,11 +80,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     from neuroatlas.cli import _msg
 
     n_rescored = report.count("same") + report.count("changed")
+    # the files whose metrics changed (one rescored without a change keeps its
+    # numbers; only the time it was rescored is added)
+    updated = len({str(o.file) for o in report.outcomes if o.status == "changed"})
     print("\n" + _msg.counts(n_rescored, "rescored from saved predictions",
                              [("changed", report.count("changed")),
                               ("the same", report.count("same"))],
                              keep_zero=("changed", "the same"))
-          + f"; {_msg.plural(len(report.files_written), 'results.json file')} rewritten",
+          + (f"; {_msg.plural(updated, 'results file')} updated" if updated else ""),
           flush=True)
     failed = report.count("failed")
     if failed:

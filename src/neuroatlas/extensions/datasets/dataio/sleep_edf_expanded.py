@@ -1,7 +1,8 @@
 """Sleep-EDF Expanded (Cassette + Telemetry) loader for EEGBenchmarks.
 
-Reads raw PSG ``.edf`` files directly at runtime from the
-``sleep-edf-database-expanded-1.0.0`` directory. Hypnograms come from
+Reads raw PSG ``.edf`` files directly at runtime from the dataset's folder
+(what PhysioNet's ``sleep-edfx/1.0.0/`` holds: ``sleep-cassette/``,
+``sleep-telemetry/`` and the two subject tables). Hypnograms come from
 EDF+ annotation files. Subject demographics come from the bundled XLS
 spreadsheets (``SC-subjects.xls``, ``ST-subjects.xls``).
 
@@ -12,6 +13,7 @@ Both cassette and telemetry subsets share the same two EEG channels
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -93,8 +95,9 @@ class _STDemo:
     temazepam_night: int
 
 
-class DemographicsUnavailableError(RuntimeError):
-    """The subject spreadsheet exists in the download but cannot be read."""
+class DemographicsUnavailableError(OSError):
+    """The subject spreadsheet exists in the download but cannot be read
+    (an OSError: its text reaches the user as it is, with no class name)."""
 
 
 def _read_demographics_xls(xls_path: str):
@@ -106,24 +109,27 @@ def _read_demographics_xls(xls_path: str):
     poisoned brain age for good (F-069). Both failures are now loud.
     """
     if not os.path.exists(xls_path):
-        raise FileNotFoundError(
-            f"Sleep-EDF subject table not found: {xls_path}. It ships with the "
-            f"PhysioNet download (sleep-edf-database-expanded-1.0.0/"
-            f"{os.path.basename(xls_path)}) and is the only source of age and sex; "
-            f"check that data_root is the root of the full download."
-        )
+        # It ships with the PhysioNet download and is the only source of
+        # age and sex.
+        from neuroatlas.extensions.datasets._missing import no_data
+
+        raise FileNotFoundError(no_data(
+            "sleep_edf_expanded", xls_path, "data_root", what="no subject table at",
+            detail="the PhysioNet download puts it at the root of the dataset"))
     import pandas as pd
     try:
         return pd.read_excel(xls_path)
     except ImportError as exc:
+        # without it every row would carry age = null
         raise DemographicsUnavailableError(
-            f"cannot read {xls_path}: legacy .xls needs the 'xlrd' package "
-            f"(pip install xlrd). Without it every row would carry age = null. "
-            f"({exc})"
+            f"sleep_edf_expanded: cannot read {xls_path}: reading an .xls file needs "
+            f"the xlrd package\nfix: pip install xlrd"
         ) from exc
     except Exception as exc:
+        from neuroatlas.cli._msg import exception_text
+
         raise DemographicsUnavailableError(
-            f"cannot read {xls_path}: {type(exc).__name__}: {exc}"
+            f"sleep_edf_expanded: cannot read {xls_path} ({exception_text(exc)})"
         ) from exc
 
 
@@ -264,15 +270,17 @@ def scan_sleep_edf_expanded_subjects(
         missing = sorted({r.subject_id for r in rows if r.age is None})
         if rows and len(missing) == len({r.subject_id for r in rows}):
             raise DemographicsUnavailableError(
-                f"{xls} was read but gave an age for none of the "
-                f"{len(missing)} {subset} subjects; expected one row per subject "
-                f"with 'subject'/'age'/'sex (F=1)' columns (cassette) or the "
-                f"telemetry layout."
+                f"sleep_edf_expanded: {xls} gives an age for none of the "
+                f"{len(missing)} {subset} subjects: it does not have the layout of "
+                f"PhysioNet's {subset} subject table"
             )
         if missing:
-            print(f"[sleep_edf_expanded] warning: no age/sex in {os.path.basename(xls)} "
-                  f"for {len(missing)} {subset} subject(s): {', '.join(missing)}",
-                  flush=True)
+            from neuroatlas import quiet
+
+            quiet.warn_once(
+                logging.getLogger(__name__), f"sleep_edf_expanded no age:{subset}",
+                "Sleep-EDF: %s gives no age or sex for %d %s subject(s): %s",
+                os.path.basename(xls), len(missing), subset, ", ".join(missing))
 
     records.sort(key=lambda r: r.recording_id)
     return records

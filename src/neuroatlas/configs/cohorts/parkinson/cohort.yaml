@@ -14,7 +14,7 @@ domain: sleep
 paper_dataset: false
 
 description: >
-  Parkinson PSG benchmark adapter for patient-level downstream tasks.
+  Parkinson PSG for subject-level tasks.
 
 cohort:
   centre: Parkinson sleep cohort
@@ -50,7 +50,7 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/raw-sleep/Parkinson_data"
+  data_root: "${EEG_DATA_ROOT}/parkinson"
   fold: 0
   mode: single
   n_folds: 5

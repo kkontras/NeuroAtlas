@@ -5,7 +5,7 @@ the referential channels (C3, C4, A1/M1, A2/M2).
 
 Dataset location::
 
-    ${EEG_DATA_ROOT}/raw-sleep/mros/
+    ${EEG_DATA_ROOT}/mros/
     ├── polysomnography/edfs/{visit1,visit2}/mros-visit{1,2}-aa{id}.edf
     ├── polysomnography/annotations-events-nsrr/{visit1,visit2}/mros-visit{1,2}-aa{id}-nsrr.xml
     └── datasets/mros-visit{1,2}-harmonized-0.6.0.csv  (age, sex)
@@ -20,6 +20,7 @@ Bipolar derivations computed by this adapter:
 """
 from __future__ import annotations
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -30,7 +31,11 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from neuroatlas import progress
+
 from .base import BenchmarkDataModule
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Stage mapping: NSRR XML EventConcept → integer label
@@ -135,13 +140,14 @@ def _load_metadata(data_root: Path) -> Dict[int, Dict[str, Any]]:
     # recording is dropped as subject-less and the failure surfaced later as a
     # cross-validation error about folds.
     if not csvs:
-        raise FileNotFoundError(
-            f"MrOS demographics not found: no mros-visit*-harmonized-*.csv under "
-            f"{datasets_dir}. They ship with the NSRR download (datasets/) and are "
-            f"the only source of age and sex. "
-            f"Check that data_root={data_root} is the MrOS root "
-            f"(the polysomnography/ EDFs next to datasets/)."
-        )
+        # They ship with the NSRR download (datasets/) and are the only
+        # source of age and sex.
+        from neuroatlas.extensions.datasets._missing import no_data
+
+        raise FileNotFoundError(no_data(
+            "mros", datasets_dir, "data_root",
+            what="no demographics table (mros-visit*-harmonized-*.csv) in",
+            detail="the NSRR download puts it there, next to polysomnography/"))
     for csv_path in csvs:
         visit_match = re.search(r"visit(\d+)", csv_path.name)
         visit = int(visit_match.group(1)) if visit_match else 0
@@ -654,23 +660,23 @@ class MrOSRawBrainAgeDataModule(BenchmarkDataModule):
 
         self._all_records_info = _records_for(set(subject_set))
 
-        print(f"[mros] Indexing train split ({len(train_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the train split ({len(train_subs)} subjects)")
         self._train_ds = _MrOSRawDataset(
             _records_for(train_set), channels, crop_wake_mins,
             compute_recording_stats=self._compute_recording_stats,
         )
-        print(f"[mros] Indexing val split ({len(val_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the val split ({len(val_subs)} subjects)")
         self._val_ds = _MrOSRawDataset(
             _records_for(val_set), channels, crop_wake_mins,
             compute_recording_stats=self._compute_recording_stats,
         )
-        print(f"[mros] Indexing test split ({len(test_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the test split ({len(test_subs)} subjects)")
         self._test_ds = _MrOSRawDataset(
             _records_for(test_set), channels, crop_wake_mins,
             compute_recording_stats=self._compute_recording_stats,
         )
-        print(f"[mros] Indexed: train={len(self._train_ds)} val={len(self._val_ds)} test={len(self._test_ds)} epochs "
-              f"(EDF loading is lazy, {len(all_records)} recordings across {len(subject_set)} subjects)", flush=True)
+        logger.info(f"[mros] Indexed: train={len(self._train_ds)} val={len(self._val_ds)} test={len(self._test_ds)} epochs "
+                    f"(EDF loading is lazy, {len(all_records)} recordings across {len(subject_set)} subjects)")
 
     # ------------------------------------------------------------------
     # Global embedding cache support

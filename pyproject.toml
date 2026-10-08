@@ -70,12 +70,13 @@ ts = [
     "chronos-forecasting>=1.5.2,<2",   # 1.5.0/1.5.1 cap transformers below 4.48
     "accelerate>=0.32,<2",
 ]
-# Exactly what reproduction/neuroatlas_minimal_repro.ipynb needs.
+# What reproduction/neuroatlas_minimal_repro.ipynb imports. momentfm is not
+# here: install it with --no-deps (reproduction/README.md), since its declared
+# pins would downgrade transformers and numpy.
 notebook = [
     "torch",
     "transformers",
     "safetensors",
-    "momentfm",             # generic time-series FM
     "chronos-forecasting",  # generic time-series FM
     "matplotlib",           # hypnogram plot
     "pyyaml",               # src/neuroatlas/configs/channel_maps/*.yaml

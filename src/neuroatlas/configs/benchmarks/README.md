@@ -8,9 +8,8 @@ executes one.
 Every command a benchmark expands to is equivalent to a line of
 `run/default_runs.sh`, the record of what the paper ran: `show` spells it
 `neuroatlas <verb>` where the script has `python -m
-neuroatlas.entrypoints.<verb>`. The development test suite
-(`tests/test_benchmark_catalog.py`, not shipped) fails if the two drift
-apart. So a file here never invents a protocol -- it names one.
+neuroatlas.entrypoints.<verb>`, and the two agree line for line. So a file
+here never invents a protocol: it names one.
 
 ## Fields
 
@@ -22,29 +21,48 @@ rules.
     paper                           where the paper reports it (App. C.x)
     task                            probe task preset; omitted = each dataset's own
     embed / probe                   extra arguments to `embed` / `probe`, one string
-    datasets                        the full suite: a slug, or {slug, task, note, embed};
+    datasets                        all datasets (`--dataset full`): a name, or
+                                    {slug, task, note, embed};
                                     a dataset's own `embed` replaces the benchmark's
-    single                          the one-dataset quick suite; one of `datasets`
-    planned                         cohorts the paper names that nothing here runs yet,
-                                    each {name, reason}
+    single                          the quick dataset (`--dataset single`); one of
+                                    `datasets`
+    planned                         datasets the paper names that this benchmark does
+                                    not run, each {name, reason}
     excluded_models                 model families the benchmark does not evaluate,
                                     each {families: [...], reason}: an alias or group
                                     leaves them out, naming one is refused (exit 2),
                                     and `show` spells `--models all,-<family>,...`
                                     for the verbs
-    metrics.headline                the number `results` summarises over folds
-    metrics.higher_is_better        false for errors such as MAE (default true)
-    metrics.dummy                   what a trivial predictor scores; a number,
-                                    {slug: number}, or omitted when it depends on
-                                    the split (normalised scores are then n/a)
-    metrics.secondary               reported beside the headline
-    metrics.tolerance               how far from the paper's number still counts as
-                                    reproduced (`results --reference`); the paper's
-                                    numbers would live in ../reference/<benchmark>.csv,
-                                    and no benchmark ships one yet
+    metrics.headline                the number `results` summarises over folds: a key
+                                    of the metric registry (src/neuroatlas/metrics_info.py),
+                                    which holds its column label, meaning, direction
+                                    and chance level
+    metrics.higher_is_better        false for errors such as MAE (default true); must
+                                    agree with the registry
+    metrics.secondary               reported beside the headline (registry keys too)
+    metrics.at                      for a task that fits several probes per fold, the
+                                    one every number of a row is read from:
+                                    `field@<seconds>s` (ahi_fraction@10.0s) or
+                                    `<seconds>s` (3.0s); never another threshold's
+    metrics.unit                    one scored item: "30 s epoch", "subject", "trial"
+    metrics.describe                the headline in one line (unit, classes or
+                                    threshold, pooling); the `results` title and `show`
+    metrics.fold                    what a fold is (and how the probe is fitted)
+    metrics.spread                  what ± is over, and which SD (population or sample);
+                                    omitted for one pooled value (no ± column)
+    metrics.note                    one more line under the title (BCI: Eq. 4)
+    metrics.chance                  the headline's chance level when the registry's
+                                    does not hold: a number, prevalence or 1/C
+                                    (`dummy` is read as the same key)
+    default_variant                 {description, paper}: the default variant in the
+                                    paper's words, and the figure it reproduces
     variants                        other cells the paper also runs, each with a
-                                    description, its own embed/probe arguments and
-                                    an optional dataset subset (`default` is implicit)
+                                    description, the paper figure it reproduces
+                                    (`paper`), other names it answers to (`aliases`:
+                                    --variant takes them, and results folders named
+                                    after them are read as the variant's), its
+                                    own embed/probe arguments and an optional dataset
+                                    subset (`default` is implicit)
     derived_from                    a benchmark computed from another's output
                                     (hypnograms), with no embed or probe of its own
 

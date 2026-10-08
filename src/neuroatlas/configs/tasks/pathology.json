@@ -1,5 +1,6 @@
 {
-  "_doc": "ISRUC diagnosis classification. Was probe_isruc_pathology_fm.py; min_diagnosis_prevalence and diagnosis_filter stay available via --set.",
+  "about": "ISRUC diagnosis classification, one prediction per subject.",
+  "_doc": "ISRUC diagnosis classification; min_diagnosis_prevalence and diagnosis_filter stay available via --set.",
   "task": {
     "name": "patient_classification",
     "aggregation": "mean,mean_std"

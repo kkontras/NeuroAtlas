@@ -1,16 +1,20 @@
 """Whether each checkpoint's weights are on this machine, and fetching them.
 
-States, as `models status` prints them:
+States (``ModelStatus.state``, the code) and the words `models status`,
+`check` and every message print for them (:data:`STATE_WORDS`):
 
-    found            the weights are on disk
-    auto             not here; `models download` can fetch them
-    hub              a Hugging Face model loaded through a hub cache, not cached yet
-    hub (cached)     ... already in the cache
-    manual           must be fetched by hand; the note says from where and how
-    nothing needed   an untrained baseline that needs no files
-    package missing  the Python package the wrapper imports is not installed;
-                     the note gives the command (weights are reported in the note)
-    planned          the wrapper is not ready
+    found            found                   the weights are on disk
+    auto             downloadable            not here; `models download` can fetch them
+    hub              downloadable            a Hugging Face model, not in its cache yet
+    hub (cached)     in Hugging Face cache   already in Hugging Face's cache
+    manual           manual                  must be fetched by hand; the note says from where
+    nothing needed   no weights needed       an untrained (random-init) baseline
+    package missing  package missing         the Python package the model needs is not
+                                             installed; the note gives the command (and
+                                             the weights' own state)
+
+A registry entry that is not ``ready`` is not part of the release: no
+command lists or selects it (:mod:`neuroatlas.selectors`).
 
 Only :func:`download` uses the network.
 """
@@ -28,6 +32,54 @@ from neuroatlas import _paths
 AUTO_SOURCES = {"github_release", "github_release_asset", "github_commit_files", "huggingface",
                 "google_drive_zip", "docker_image"}
 
+#: state code -> the word a user reads (tables, JSON, messages)
+STATE_WORDS = {
+    "found": "found",
+    "auto": "downloadable",
+    "hub": "downloadable",
+    "hub (cached)": "in Hugging Face cache",
+    "manual": "manual",
+    "nothing needed": "no weights needed",
+    "package missing": "package missing",
+}
+
+#: word -> its meaning, for the legend under `models status` and `check`
+STATE_MEANINGS = {
+    "found": "the weights are on this machine",
+    "downloadable": "not here yet; `neuroatlas models download <checkpoint>` fetches them",
+    "in Hugging Face cache": "already in Hugging Face's local cache: nothing to download",
+    "manual": "must be fetched by hand; the line under the row says from where",
+    "no weights needed": "an untrained (random-init) baseline: it has no weights",
+    "package missing": "a Python package the model needs is not installed; the line under "
+                       "the row gives the command",
+}
+
+#: source type -> where the weights come from, as `list models` and
+#: `models status` print it (JSON keeps the source type)
+SOURCE_WORDS = {
+    "github_release": "GitHub release",
+    "github_release_asset": "GitHub release",
+    "github_commit_files": "GitHub repository",
+    "huggingface": "Hugging Face",
+    "google_drive_zip": "Google Drive",
+    "docker_image": "Docker image",
+    "random_init": "none (random init)",
+    "local": "local file",
+}
+
+
+def state_word(state: Optional[str]) -> str:
+    """The word for a state code (``auto`` -> ``downloadable``)."""
+    return STATE_WORDS.get(str(state), str(state))
+
+
+def source_word(source_type: Optional[str], family: Optional[str] = None) -> str:
+    """Where a checkpoint's weights come from, in words. REVE's untrained
+    control has no weights, but its config and code come from Hugging Face."""
+    if source_type == "random_init" and family == "reve":
+        return "Hugging Face (config only)"
+    return SOURCE_WORDS.get(str(source_type), str(source_type))
+
 # families that load straight from the hub, with the cache each one uses
 _HUB_CACHE_FAMILIES = {"chronos", "moirai", "moment"}
 
@@ -43,8 +95,9 @@ _HUB_CACHE_FAMILIES = {"chronos", "moirai", "moment"}
 PACKAGES = {
     "moment": ("momentfm", "momentfm", 'pip install --no-deps "momentfm==0.1.4"'),
     "chronos": ("chronos", "chronos-forecasting", 'pip install "chronos-forecasting>=1.5.2,<2"'),
-    "moirai": ("uni2ts", "uni2ts", "Moirai runs in its own environment: see requirements-tsfm.txt "
-                                   "(Python 3.10, torch 2.4.1, jax)"),
+    "moirai": ("uni2ts", "uni2ts", "pip install -r requirements-tsfm.txt (in a separate Python "
+                                   "3.10 environment, from your NeuroAtlas clone: uni2ts needs "
+                                   "torch 2.4.1)"),
 }
 
 # Per-checkpoint instructions for what `models download` cannot do on its own,
@@ -52,16 +105,11 @@ PACKAGES = {
 _NOTES = {
     "reve_pretrained": "REVE Responsible Use License v1.0 (https://huggingface.co/brain-bzh/reve-base): "
                        "downloading it accepts the licence",
-    "core_sleep_shhs_fold0": "a private release asset: needs a GitHub token that can read "
-                             "kkontras/NeuroAtlas (neuroatlas config token github)",
     "seizure_transformer_pretrained": "pulled out of the authors' Docker image yujjio/seizure_transformer "
                                       "(streams up to 3.4 GB of image layers; keeps the 168 MB model.pth)",
-    "eegpt_pretrained": "fetched from the bit-identical hub copy eeg-telecom-paris/eegpt-large-official "
-                        "(upstream's Figshare share is browser-only)",
+    "eegpt_pretrained": "from Hugging Face (eeg-telecom-paris/eegpt-large-official), byte-identical "
+                        "to the authors' Figshare release",
 }
-_NOTES["core_sleep_shhs_fold0_seq1"] = _NOTES["core_sleep_shhs_fold0"]
-_NOTES["sleep_transformer_shhs_fold0"] = _NOTES["core_sleep_shhs_fold0"]
-_NOTES["sleep_transformer_shhs_fold0_seq1"] = _NOTES["core_sleep_shhs_fold0"]
 
 
 @dataclass
@@ -191,8 +239,8 @@ def status(spec) -> ModelStatus:
     st = ModelStatus(spec.identifier, spec.model_family, spec.source_type, "manual",
                      spec.checkpoint_path)
     if spec.status != "ready":
-        st.state = "planned"
-        st.notes.append(spec.notes or "wrapper not ready")
+        # not part of this release (no command lists or selects it)
+        st.state = "not in this release"
         return st
     _weights_status(spec, st)
     if spec.identifier in _NOTES and not st.ready:
@@ -209,13 +257,8 @@ def status(spec) -> ModelStatus:
     if package:
         st.weights, st.state = st.state, "package missing"
         st.notes.insert(0, f"{package} is not installed: {PACKAGES[spec.model_family][2]}"
-                           f" (weights: {st.weights})")
+                           f" (weights: {state_word(st.weights)})")
     return st
-
-
-#: Checkpoints whose download needs a GitHub token (private release assets).
-_GITHUB_TOKEN_NEEDED = ("core_sleep_shhs_fold0", "core_sleep_shhs_fold0_seq1",
-                        "sleep_transformer_shhs_fold0", "sleep_transformer_shhs_fold0_seq1")
 
 
 def weights_problem(st: ModelStatus) -> Optional[tuple]:
@@ -231,17 +274,14 @@ def weights_problem(st: ModelStatus) -> Optional[tuple]:
     if state in ("auto", "hub"):
         what = "weights not downloaded" + (f" ({incomplete})" if incomplete else "")
         ident = getattr(st, "identifier", None) or "<checkpoint>"
-        fix = f"neuroatlas models download {ident}"
-        if ident in _GITHUB_TOKEN_NEEDED:
-            fix = f"neuroatlas config token github, then {fix} (a private release asset)"
-        return what, fix
+        return what, f"neuroatlas models download {ident}"
     if state == "manual":
         manual = next((n for n in st.notes if n.startswith(("get it from", "no public source"))),
                       None)
-        return "weights not here (no automatic download)", manual
-    if state == "planned":
-        return "the wrapper is not ready", None
-    return f"weights {state}", None
+        return "weights not here, and they must be fetched by hand", manual
+    if state == "not in this release":
+        return ("not a checkpoint of this release", "neuroatlas list models")
+    return f"weights {state_word(state)}", None
 
 
 def download(spec) -> ModelStatus:

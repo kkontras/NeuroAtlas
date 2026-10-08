@@ -45,7 +45,7 @@ import numpy as np
 import torch
 
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     read_sampling_rate,
@@ -311,10 +311,10 @@ class CBraModBackbone(BenchmarkModelWrapper):
         meta = batch.get("meta") or []
         assert_batch_homogeneity(meta, where="cbramod:input")
 
-        # ESAT-8 adaptive epoch_seconds: use 30 s from batch meta instead
-        # of spec.expected_epoch_seconds (which may be 10 s on NeuroAtlas).
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the
+        # batch meta instead of spec.expected_epoch_seconds (which may be 10 s).
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -359,11 +359,11 @@ class CBraModBackbone(BenchmarkModelWrapper):
         else:
             src_sfreq_f = current_len / epoch_sec
 
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(
             x, src_sfreq_f, float(_TARGET_SFREQ), backend=_backend
         )
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             x = snap_to_epoch_length(x, float(_TARGET_SFREQ), meta)
         if x.shape[-1] != target_len:
             raise ValueError(

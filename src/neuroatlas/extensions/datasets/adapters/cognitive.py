@@ -20,6 +20,7 @@ from neuroatlas.extensions.datasets.dataio.bci import (
     DATASET_CONFIGS,
     get_subject_split,
     load_preprocessed_dataset,
+    resolve_n_folds,
 )
 
 from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
@@ -28,6 +29,27 @@ from ._runtime_keys import BCI_TRIALS, PREPARED_FILTERS, RAW_ONLY
 from .base import BenchmarkDataModule
 from .cho2017 import _PreprocessedDataset, _collate
 
+
+
+def _no_preprocessed_file(slug: str, preprocessed_path: Optional[str]) -> str:
+    """The error for a bci_cognitive dataset whose preprocessed file is not
+    here: the file it reads (``EEGMat_preprocessed_*.pkl``), where it was
+    looked for, and how to get it."""
+    import os
+    import re
+
+    from neuroatlas.extensions.datasets.dataio.bci_paths import PREPROCESSED_SEARCH_PATHS
+
+    candidates = list(PREPROCESSED_SEARCH_PATHS.get(slug, []))
+    name = (re.sub(r"_preprocessed_[^_/]+\.pkl$", "_preprocessed_*.pkl",
+                   os.path.basename(candidates[0])) if candidates
+            else "its preprocessed file")
+    where = preprocessed_path or (os.path.dirname(candidates[0]) if candidates else None)
+    head = (f"{slug}: no file at {preprocessed_path}" if preprocessed_path
+            else f"{slug}: {name} is not in {where}")
+    return (f"{head} (the authors provide it on request)\n"
+            f"fix: ask the authors for {name}, then neuroatlas config set "
+            f"{slug}.preprocessed_path FILE")
 
 class _LoaderAdapter:
     """Emit the standard batch for one cohort, with *its* rate and channels.
@@ -121,7 +143,10 @@ class _PickleCohortDataModule(BenchmarkDataModule):
             "channel_policy": ["eeg"],
             "signal_kind": "raw",
             "fold": fold,
-            "n_folds": n_folds,
+            # "loso" as the fold count it means (one per subject): results
+            # read it as the protocol's folds, and embed and probe key their
+            # per-fold caches by the same number whether given "loso" or it
+            "n_folds": resolve_n_folds(n_folds, len(subjects)) if isinstance(n_folds, str) else n_folds,
             "n_channels": len(channels),
             "sfreq": cfg.resample_sfreq,
             "sampling_rate": float(cfg.resample_sfreq),
@@ -133,12 +158,9 @@ class _PickleCohortDataModule(BenchmarkDataModule):
 
         mat = load_preprocessed_dataset(self.SLUG, preprocessed_path=preprocessed_path)
         if mat is None:
-            raise FileNotFoundError(
-                f"{self.SLUG}: no preprocessed pickle found. This cohort is read "
-                f"only from the files preprocess_{self.SLUG}.py produced; there is "
-                f"no download path. Point --set preprocessed_path=<file> at one, or "
-                f"place it where dataio/bci.py's PREPROCESSED_SEARCH_PATHS expects."
-            )
+            # read only from the authors' preprocessed file (as `data status`
+            # says); nothing downloads it
+            raise FileNotFoundError(_no_preprocessed_file(self.SLUG, preprocessed_path))
 
         names = np.asarray(mat["subject_name"]).squeeze()
         index = {int(np.asarray(names[i]).flat[0]): i for i in range(names.shape[0])}

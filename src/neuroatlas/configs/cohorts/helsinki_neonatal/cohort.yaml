@@ -14,11 +14,11 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  Helsinki Neonatal EEG Dataset (Stevenson 2019) — binary seizure
-  detection from 19-channel unipolar EEG at 256 Hz. 79 neonates, three
-  independent expert annotations (A/B/C). Default consensus is majority
-  (>=2/3); per-expert window labels are kept in meta. Patient-level k-fold
-  evaluation. EDF-direct backend only.
+  Helsinki Neonatal EEG Dataset (Stevenson 2019): binary seizure detection
+  from 19-channel unipolar EEG at 256 Hz. 79 neonates, three independent
+  expert annotations (A/B/C); the label is the majority (at least 2 of 3),
+  and each expert's window labels are kept too. Patient-level k-fold
+  evaluation.
 
 cohort:
   centre: "Helsinki University Central Hospital, Finland"

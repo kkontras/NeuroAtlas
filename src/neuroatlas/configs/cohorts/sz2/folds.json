@@ -6,8 +6,8 @@
  "split_mode": "subject",
  "subject_independent": true,
  "generator": "replay probe_sz1_sklearn._build_patient_splits seed42",
- "generator_notes": "The paper's epilepsy probe (probe_sz1_sklearn, run on sofia over artifacts/benchmarks/<ds>/embeddings_w10s_s10s_sofia/<model>/embeddings.npz) split every cohort with _build_patient_splits: StratifiedKFold(5, shuffle=True, random_state=42) over sorted(unique subjects), stratum = 'subject has any seizure window'; an inner StratifiedKFold(5, seed 42) on the rest picks val with fold (k+1) % 5. This file is that replay, committed as configs/folds/sz2.json in 3c6721c and frozen here so the reader's own splitter (different strata/subject set) cannot move it.",
- "verified": "not re-derivable on esat: the only SeizeIT2 embeddings there (na_seizure_probe, Jul 2026) are a later extraction with 401 subjects (26 SUBJ-6 subjects more); the 375 here are all among them",
+ "generator_notes": "The paper's epilepsy probe split every dataset with _build_patient_splits: StratifiedKFold(5, shuffle=True, random_state=42) over sorted(unique subjects), stratum = 'subject has any seizure window'; an inner StratifiedKFold(5, seed 42) on the rest picks val with fold (k+1) % 5. This file is that replay, frozen so the reader's own splitter (different strata/subject set) cannot move it.",
+ "verified": "not re-derived: the SeizeIT2 embeddings at hand are a later extraction with 401 subjects (26 SUBJ-6 subjects more); the 375 here are all among them",
  "folds": {
   "0": {
    "train": [

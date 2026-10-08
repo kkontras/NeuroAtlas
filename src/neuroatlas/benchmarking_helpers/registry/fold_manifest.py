@@ -177,7 +177,8 @@ def load_fold_split(
     folds = _folds_container(payload)
     n_folds = int(payload.get("n_folds", len(folds)))
     if not 0 <= fold < n_folds:
-        raise ValueError(f"{dataset}: fold {fold} out of range [0, {n_folds})")
+        raise ValueError(f"{dataset} has {n_folds} folds (0 to {n_folds - 1}); there is no "
+                         f"fold {fold}")
 
     entry = folds.get(str(fold))
     if entry is None:
@@ -304,19 +305,20 @@ def recording_indices_for_split(
         missing = manifest_subjects - observed
         if missing:
             raise ValueError(
-                f"{split.dataset} fold {split.fold}: {len(missing)} manifest subject(s) absent "
-                f"from the data: {sorted(missing)[:10]}. The download or preprocessing is "
-                f"incomplete, or subject-id conventions differ "
-                f"(manifest e.g. {sorted(manifest_subjects)[:3]}, "
-                f"data e.g. {sorted(observed)[:3]}). "
-                f"Pass strict=False to run on the intersection (not comparable to the paper)."
+                f"{split.dataset} fold {split.fold}: {_some(missing)} of the benchmark's "
+                f"folds {'is' if len(missing) == 1 else 'are'} not in the data: the data is "
+                f"incomplete, or names its subjects differently. The folds name subjects such "
+                f"as {', '.join(sorted(manifest_subjects)[:3])}; the data "
+                f"{', '.join(sorted(observed)[:3]) or 'has none'}."
+                f"\nfix: neuroatlas data status {split.dataset}"
             )
         unassigned = observed - manifest_subjects
         if unassigned:
             raise ValueError(
-                f"{split.dataset} fold {split.fold}: {len(unassigned)} subject(s) in the data "
-                f"belong to no split: {sorted(unassigned)[:10]}. The manifest is stale relative "
-                f"to this cache."
+                f"{split.dataset} fold {split.fold}: {_some(unassigned)} in the data "
+                f"{'is' if len(unassigned) == 1 else 'are'} in none of the benchmark's "
+                f"folds: the folder holds subjects the benchmark does not use."
+                f"\nfix: neuroatlas data status {split.dataset}"
             )
 
     out: Dict[str, List[int]] = {"train": [], "val": [], "test": []}
@@ -326,6 +328,13 @@ def recording_indices_for_split(
                 out[name].append(idx)
                 break
     return out
+
+
+def _some(subjects) -> str:
+    """``3 subjects (P01, P07, P09)``, ``12 subjects (P01, P02, P03 and 9 more)``."""
+    ids = sorted(str(s) for s in subjects)
+    shown = ", ".join(ids[:3]) + (f" and {len(ids) - 3} more" if len(ids) > 3 else "")
+    return f"{len(ids)} subject{'' if len(ids) == 1 else 's'} ({shown})"
 
 
 def fold_source_label(split: FoldSplit) -> str:
@@ -365,24 +374,29 @@ def recording_splits_from_manifest(
     """
     split = load_fold_split(dataset, fold)
     if int(n_folds) != split.n_folds:
+        fix = None
+        try:
+            from neuroatlas.cli import corrected_command
+
+            fix = (corrected_command({f"n_folds={n_folds}": f"n_folds={split.n_folds}"})
+                   or corrected_command({f"num_folds={n_folds}": f"num_folds={split.n_folds}"}))
+        except Exception:
+            fix = None
         raise ValueError(
-            f"{dataset}: n_folds={n_folds}, but its published folds are the "
-            f"{split.n_folds} in {split.source_path}. Ask for {split.n_folds} "
-            f"folds, or pass --set folds_manifest=none to `neuroatlas embed` and "
-            f"`neuroatlas probe` to derive {n_folds} folds with the reader's own "
-            f"splitter (these are not the paper's folds)."
+            f"{dataset} has {split.n_folds} folds in the benchmark, not {n_folds}. With --set folds_manifest=none, `neuroatlas embed` and "
+            f"`neuroatlas probe` cut {n_folds} folds with the dataset's own splitter instead "
+            f"(not the benchmark's folds)." + (f"\nfix: {fix}" if fix else "")
         )
     try:
         recs = recording_indices_for_split(
             [str(s) for s in subject_ids_per_recording], split, strict=strict,
         )
     except ValueError as exc:
+        text, _, fix = str(exc).partition("\nfix: ")
         raise ValueError(
-            f"{exc} --set strict_folds=false (on `neuroatlas embed` and `neuroatlas "
-            f"probe`; `neuroatlas show <benchmark>` prints their commands, `run` "
-            f"takes no --set) runs on the subjects the data and "
-            f"{split.source_path.name} share (each keeps its published role; the "
-            f"result is not comparable to the paper)."
+            f"{text} With --set strict_folds=false, `neuroatlas embed` and `neuroatlas "
+            f"probe` run on the subjects the data and the folds share, each in its fold's "
+            f"role (not the benchmark's folds)." + (f"\nfix: {fix}" if fix else "")
         ) from exc
     return recs["train"], recs["val"], recs["test"], split
 

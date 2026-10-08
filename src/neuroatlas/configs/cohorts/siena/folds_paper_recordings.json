@@ -6,7 +6,7 @@
  "n_folds": 5,
  "what": "The folds the published Siena numbers (Figure 2, Figure 7, Tables 3-5) were drawn on. NOT patient-disjoint: the paper's probe saw subject id 'raw' for every window, fell back to grouping by recording, and split the 40 recordings; 30 of the 33 (fold, test patient) pairs also have recordings in train or val.",
  "derivation": "probe_sz1_sklearn._build_patient_splits, 'Fallback A': _grouped_kfold over the 40 sorted rec_ids, stratum = any seizure window, StratifiedKFold(5, shuffle=True, random_state=42); val = inner StratifiedKFold(5, same seed) fold (k+1) % 5 of the outer train part. Window counts are the paper-era embedding's (10 s / 10 s, unipolar).",
- "evidence": "Replayed on na_seizure_probe/siena/*/embeddings.npz; equals n_train/n_val/n_test, the test rows, their rec_ids and labels of all 26 paper prediction files (sofia_inbox/siena/embeddings_w10s_s10s_sofia/*/preds_fold{k}_sklearn.npz).",
+ "evidence": "Replayed on the paper's Siena embeddings; equals n_train/n_val/n_test, the test rows, their rec_ids and labels of all 26 of the paper's prediction files.",
  "stratum": {
   "sub-00/ses-01/eeg/sub-00_ses-01_task-szMonitoring_run-00_eeg.edf": "seiz",
   "sub-00/ses-01/eeg/sub-00_ses-01_task-szMonitoring_run-01_eeg.edf": "seiz",

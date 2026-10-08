@@ -59,6 +59,14 @@ VERDICTS = ("done", "partial", "failed", "exited", "stopped", "removed",
             "running", "idle", "held", "missing", "waiting", "skipped")
 # A job in one of these is still the scheduler's: never queue it again.
 ACTIVE = ("running", "idle", "held")
+#: How a verdict reads in `status` and `submit` text (jobs.json and the
+#: machine formats keep the code): a job that never ran is "not run", not
+#: "missing", the word `data status` uses for a dataset.
+VERDICT_WORDS = {"missing": "not run"}
+
+
+def verdict_word(verdict: str) -> str:
+    return VERDICT_WORDS.get(verdict, verdict)
 # What each --mode queues. "exited N", "stopped" and "removed" are failures
 # that left no results, so retry takes them.
 _MODES = {"cached": {"missing"},
@@ -288,6 +296,11 @@ _CONDOR_STATUS = {"1": "idle", "2": "running", "3": "removed", "4": "exited", "5
 def _run_quiet(cmd: List[str], timeout: int = 60) -> Optional[str]:
     if shutil.which(cmd[0]) is None:
         return None
+    # the command's live line meanwhile (stderr, a terminal only): a busy
+    # scheduler takes up to a minute to answer
+    from neuroatlas import progress
+
+    progress.current().phase(f"asking {cmd[0]}")
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
@@ -404,7 +417,8 @@ def condor_events(logs: Path) -> Dict[str, QueueEntry]:
             rv = re.search(r"return value (\d+)", text)
             sig = re.search(r"signal (\d+)", text)
             n = int(rv.group(1)) if rv else 128 + int(sig.group(1)) if sig else None
-            entry = QueueEntry(sid, jid, "exited", sid, f"exited {n}" if n is not None else "exited ?")
+            entry = QueueEntry(sid, jid, "exited", sid, f"exited {n}" if n is not None
+                               else "exited (no exit code in the log)")
             if n == 0:
                 entry.verdict = "failed"
                 entry.detail = f"{sid} exited 0 without writing results"
@@ -434,7 +448,7 @@ def count_parts(states: List[JobState], include=VERDICTS) -> List[str]:
     for v in include:
         if not kinds.get(v):
             continue
-        text = f"{kinds[v]} {v}"
+        text = f"{kinds[v]} {verdict_word(v)}"
         if v == "exited":
             codes = sorted({s.verdict.split(" ", 1)[1] for s in states if s.kind == "exited"},
                            key=lambda c: (not c.isdigit(), int(c) if c.isdigit() else 0, c))
@@ -503,23 +517,33 @@ def _script(job_cmd: List[str], env: Dict[str, str], job_id: str, result_dir: Pa
 
 
 #: The skip reason of a pair whose dataset's channel map has no entry for the
-#: model's family (`check`'s `invalid`). Like an n/a pair it never gets a
-#: job, not even with --force.
-INVALID_PAIR = "invalid (channel map)"
+#: model's family (`check`'s `invalid`). Like a ruled-out pair it never gets
+#: a job, not even with --force.
+INVALID_PAIR = "invalid (no channel map entry)"
+#: The skip reason of a pair the dataset's channel map rules out.
+RULED_OUT_PAIR = "ruled out by the channel map"
 
 
 def forceable(skip: Dict[str, str]) -> bool:
     """Whether --force would write a job for this skipped pair: data or
-    weights missing, yes; a channel map that rules it out, never."""
-    return not str(skip.get("reason", "")).startswith(("n/a", "invalid"))
+    weights missing, yes; a channel map that rules it out, never. (``n/a``:
+    the word a jobs.json written before `ruled out` holds.)"""
+    return not str(skip.get("reason", "")).startswith(("n/a", "invalid", "ruled out"))
 
 
 def _ready(data_state, model_state) -> Optional[str]:
     """Why a pair cannot run offline, or None."""
     if data_state is not None and not data_state.found and data_state.state != "fetched on first use":
-        return f"data {data_state.state}"
+        return f"data {data_state.state.split(' (')[0]}"
     if model_state is not None and not model_state.ready:
-        return f"weights {model_state.state}"
+        from neuroatlas import models
+
+        if model_state.state == "package missing":
+            return models.weights_problem(model_state)[0]
+        state = getattr(model_state, "weights", None) or model_state.state
+        return {"auto": "weights not downloaded", "hub": "weights not downloaded",
+                "manual": "weights to fetch by hand"}.get(
+            state, f"weights {models.state_word(state)}")
     return None
 
 
@@ -535,6 +559,7 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
     bench = catalog.load(benchmark)
+    variant = bench.variant(variant).name       # an earlier name: the variant's (W1)
     ids = bench.select_models(models)
     by_id = {s.identifier: s for s in checkpoint_registry()}
     env = {k: os.environ[k] for k in _PASS_ENV if os.environ.get(k)}
@@ -565,12 +590,14 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
             job_models = []
             for i in ids:
                 if i in ruled_out:
-                    skipped.append({"dataset": dataset, "model": i, "reason": "n/a (channel map)"})
+                    skipped.append({"dataset": dataset, "model": i, "reason": RULED_OUT_PAIR,
+                                    "detail": cmap.state_for(by_id[i].model_family)[1]})
                     continue
                 if i in invalid_pairs:
                     # no map entry for the family: as `check` and `run` say, invalid
                     skipped.append({"dataset": dataset, "model": i, "reason": INVALID_PAIR,
-                                    "detail": cmap.state_for(invalid_pairs[i])[1]})
+                                    "detail": f"the {dataset} channel map has no entry for "
+                                              f"{runmod.family_text([invalid_pairs[i]])}"})
                     continue
                 why = _ready(ds_state, weights[i])
                 if why and not force:
@@ -601,15 +628,21 @@ def plan_jobs(benchmark: str, models: str, suite: str, variant: str, out: Path,
                             depends_on=bench.derived_from, depends_dir=depends_dir,
                             models=selector))
     return {"benchmark": bench.name, "suite": suite, "variant": variant, "models": ids,
-            "jobs": jobs, "skipped": skipped, "invalid": invalid}
+            "selector": models, "jobs": jobs, "skipped": skipped, "invalid": invalid}
+
+
+def _reason_word(reason: str) -> str:
+    """A skip reason as this version says it (a jobs.json written before
+    `ruled out` says ``n/a (channel map)``)."""
+    return RULED_OUT_PAIR if str(reason).startswith("n/a") else str(reason)
 
 
 def skip_summary(skipped: List[Dict[str, str]]) -> str:
-    """'171 pairs skipped: 165 data missing, 6 weights manual'."""
+    """'171 pairs without a job: 165 data missing, 6 weights to fetch by hand'."""
     from collections import Counter
 
-    counts = Counter(s.get("reason", "n/a (channel map)") for s in skipped)
-    text = f"{len(skipped)} pair{'s' if len(skipped) != 1 else ''} skipped"
+    counts = Counter(_reason_word(s.get("reason", RULED_OUT_PAIR)) for s in skipped)
+    text = f"{len(skipped)} pair{'s' if len(skipped) != 1 else ''} without a job"
     if counts:
         text += ": " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
     return text
@@ -694,7 +727,7 @@ def torch_min_capability() -> Tuple[Optional[str], str]:
         if m:
             caps.append((int(m.group(1)), int(m.group(2))))
     if not caps:
-        return None, f"torch {torch.__version__} has no CUDA kernels (a CPU build?)"
+        return None, f"torch {torch.__version__} is a CPU-only build (no CUDA kernels)"
     lo = min(caps)
     return f"{lo[0]}.{lo[1]}", f"torch {torch.__version__} is built for {' '.join(archs)}"
 
@@ -796,7 +829,7 @@ def save_manifest(out: Path, planned: Dict[str, Any], backend: str, mode: str,
 def load_manifest(out: Path) -> Dict[str, Any]:
     path = out / "jobs.json"
     if not path.is_file():
-        raise FileNotFoundError(f"{out} holds no jobs ({path.name} does not exist)\n"
+        raise FileNotFoundError(f"{out} holds no jobs written by `neuroatlas submit`\n"
                                 f"fix: neuroatlas submit <benchmark> -m MODELS --out {out}")
     data = json.loads(path.read_text())
     known = set(Job.__dataclass_fields__)

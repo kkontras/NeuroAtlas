@@ -11,15 +11,17 @@ import torch
 
 from .base import BenchmarkBackbone
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     is_bci_batch,
     resample_poly_with_fallback,
+    run_names,
     snap_to_epoch_length,
     strip_zero_channels,
     unit_to_uv,
 )
+from neuroatlas import quiet
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 from neuroatlas._paths import models_dir
 
@@ -292,11 +294,11 @@ class REVEBackbone(BenchmarkBackbone):
         dataset = meta[0].get("dataset") if meta else None
         bci = is_bci_batch(meta)
 
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             x = x - x.mean(dim=-1, keepdim=True)
 
-        # ESAT-8 adaptive epoch_seconds
-        if dataset in _ESAT_DATASETS:
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -319,9 +321,9 @@ class REVEBackbone(BenchmarkBackbone):
         else:
             src_sfreq_f = T / epoch_sec
 
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, _ = resample_poly_with_fallback(x, src_sfreq_f, self.target_sfreq, backend=_backend)
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             x = snap_to_epoch_length(x, float(self.target_sfreq), meta)
         if bci:
             # BCI parity: keep whole 200-sample (1 s) patches.
@@ -356,6 +358,7 @@ class REVEBackbone(BenchmarkBackbone):
             per_row_means = []
             per_row_stds = []
             all_ok = bool(meta) and len(meta) >= B_in
+            stats_missing = not all_ok
             if all_ok:
                 for i in range(B_in):
                     m_i = meta[i] if i < len(meta) else {}
@@ -363,6 +366,7 @@ class REVEBackbone(BenchmarkBackbone):
                     rs = m_i.get("recording_std")
                     if rm is None or rs is None or not _stats_shape_matches(rm, rs, x.shape[1]):
                         all_ok = False
+                        stats_missing = rm is None or rs is None
                         break
                     per_row_means.append(rm)
                     per_row_stds.append(rs)
@@ -380,15 +384,12 @@ class REVEBackbone(BenchmarkBackbone):
                 x = (x - mu) / sigma.clamp(min=1e-6)
                 norm_source = "recording_stats_per_window"
             else:
-                if not self._warned_missing_stats:
-                    self._warned_missing_stats = True
-                    logger.warning(
-                        "REVE: recording_mean/recording_std missing or shape "
-                        "mismatch — falling back to per-window z-score. Set "
-                        "compute_recording_stats=True on the adapter (or let "
-                        "the runner auto-inject for reve/biot/sleepfm) to "
-                        "restore the paper's recording-level normalization."
-                    )
+                # Each window z-scored per channel on its own. BCI trials never
+                # carry recording statistics (the BCI readers do not compute
+                # them): the expected path there, said at DEBUG. Elsewhere the
+                # dataset gives none (or none that fit its channels): a
+                # warning once per command, dataset and checkpoint.
+                self._warn_window_zscore(meta, bci, stats_missing)
                 mu = x.mean(dim=-1, keepdim=True)
                 sigma = x.std(dim=-1, keepdim=True).clamp(min=1e-6)
                 x = (x - mu) / sigma
@@ -411,6 +412,20 @@ class REVEBackbone(BenchmarkBackbone):
         self._last_norm_source = norm_source
         assert_finite(x, where="reve:after_norm")
         return x
+
+    def _warn_window_zscore(self, meta, bci: bool, stats_missing: bool) -> None:
+        checkpoint = getattr(getattr(self, "spec", None), "identifier", "") or ""
+        dataset, checkpoint = run_names(meta, checkpoint)
+        if bci:
+            logger.debug("REVE: %s trials carry no per-recording statistics; each trial is "
+                         "z-scored per channel on its own", dataset or "BCI")
+            return
+        what = ("no per-recording statistics" if stats_missing
+                else "per-recording statistics that do not match its channels")
+        quiet.warn_once(
+            logger, f"reve window z-score:{dataset}:{checkpoint}",
+            "%s gives %s %s, so each window is z-scored per channel on its own",
+            dataset or "this dataset", checkpoint or "REVE", what)
 
     def _filter_bci_channels(self, x, ch_names, batch):
         """For BCI: drop channels not in the position bank, select from tensor."""
@@ -446,10 +461,10 @@ class REVEBackbone(BenchmarkBackbone):
         x = self._prepare_input(batch)
         ch_names = self._channel_names(batch)
 
-        # ESAT-8: strip all-zero channels before position resolution
+        # _PAPER_PREPROC_DATASETS: strip all-zero channels before position resolution
         meta = batch.get("meta") or [{}]
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS and ch_names:
+        if dataset in _PAPER_PREPROC_DATASETS and ch_names:
             x, ch_names, _ = strip_zero_channels(x, ch_names)
 
         x, ch_names = self._filter_bci_channels(x, ch_names, batch)

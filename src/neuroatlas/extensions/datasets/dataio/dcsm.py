@@ -38,7 +38,7 @@ DCSM_STAGES_MAP: Dict[str, int] = {
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/raw/dcsm/data/sleep/DCSM"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/dcsm"
 
 DEFAULT_CHANNELS: List[str] = [
     "C3-M2", "C4-M1", "F3-M2", "F4-M1", "O1-M2", "O2-M1",
@@ -63,9 +63,15 @@ class SubjectRecord:
 def scan_dcsm_subjects(
     data_root: str,
 ) -> List[SubjectRecord]:
-    """Scan DCSM directory for subject directories with psg.h5 + hypnogram.ids."""
+    """Scan DCSM directory for subject directories with psg.h5 + hypnogram.ids.
+
+    ``data_root`` is the dataset's folder: the subject folders sit in it, or
+    in the ``data/sleep/DCSM`` folder the published archive unpacks to.
+    """
+    from neuroatlas.extensions.datasets._layout import descend
+
     records: List[SubjectRecord] = []
-    root = Path(data_root)
+    root = descend(data_root, ["data/sleep/DCSM"], "*/psg.h5")
     for entry in sorted(os.listdir(root)):
         subject_dir = root / entry
         if not subject_dir.is_dir():

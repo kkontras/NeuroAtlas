@@ -20,7 +20,7 @@ from ._runtime_keys import RAW_ONLY
 from .base import BenchmarkDataModule
 from neuroatlas.benchmarking_helpers import dataloader_worker_init_fn
 
-_DATA_ROOT_DEFAULT = "${EEG_DATA_ROOT}/raw-sleep/Parkinson_data"
+_DATA_ROOT_DEFAULT = "${EEG_DATA_ROOT}/parkinson"
 
 
 def _collate_fn(batch):

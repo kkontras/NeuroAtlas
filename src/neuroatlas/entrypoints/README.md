@@ -14,8 +14,8 @@ This package contains thin command entrypoints for the benchmark system.
 Keep orchestration logic out of entrypoint modules when it belongs in the reusable
 benchmark architecture:
 
-- discovery belongs in `benchmarking_helpers/discovery.py`
-- run orchestration belongs in `benchmarking_helpers/runner.py`
+- discovery belongs in `benchmarking_helpers/registry/discovery.py`
+- run orchestration belongs in `benchmarking_helpers/runtime/runner.py`
 - evaluation behavior belongs in `extensions/tasks/`
 
 Entrypoint modules should mainly:
@@ -24,5 +24,6 @@ Entrypoint modules should mainly:
 - build config
 - call the runner or a focused helper
 
-The contributor-facing shell wrappers in `run/` should call modules from this
-package.
+`run/default_runs.sh` calls the modules of this package
+(`python -m neuroatlas.entrypoints.<verb>`); `neuroatlas <verb>` runs the same
+code.

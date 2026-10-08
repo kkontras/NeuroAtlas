@@ -13,11 +13,9 @@ name: Cleveland Family Study (CFS)
 domain: sleep
 paper_dataset: true
 description: >
-  CFS (Cleveland Family Study, NSRR visit5) raw EDF — bipolar C3-M2 +
-  C4-M1, 128 → 256 Hz online, 0.5 Hz HP + 60 Hz notch (Butterworth-SOS),
-  µV-canonical. Carries both nsrr_age and sleep_stage in items.json so the
-  same cache serves brain-age regression and sleep-stage classification
-  probes.
+  Cleveland Family Study (NSRR, visit 5): PSG, bipolar C3-M2 and C4-M1 read
+  from the raw EDFs and resampled from 128 to 256 Hz (0.5 Hz high-pass, 60
+  Hz notch); used for sleep staging and brain age.
 
 cohort:
   centre: "Cleveland Family Study (NSRR), USA"
@@ -28,6 +26,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: cfs
+  folders: [polysomnography/edfs, polysomnography/annotations-events-nsrr, datasets]
 
 signal:
   notch_freq: null
@@ -75,7 +74,7 @@ runtime_defaults:
     - C3-M2
     - C4-M1
   crop_wake_mins: null
-  data_root: "${EEG_DATA_ROOT}/raw-sleep/cfs"
+  data_root: "${EEG_DATA_ROOT}/cfs"
   fold: 0
   n_folds: 5
   name: cfs
@@ -101,10 +100,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- two pre-restructure protocols disagree on
-       CFS sleep-staging folds. This reader's age-binned folds are the
-       brain-age protocol (05fd2a8 datasets/cfs: one cache for both tasks);
-       the c-tuned staging probes (artifacts/probes_perC_sleep3/cfs_bp_2ch)
-       used 3c6721c configs/folds/cfs_bp_2ch.json, a subject round-robin
-       (seed 42). The two share about a fifth of each test fold."

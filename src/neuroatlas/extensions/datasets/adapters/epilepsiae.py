@@ -195,6 +195,12 @@ class EpilepsiAEBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataMod
         strict_folds: bool = True,
         **kwargs,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("epilepsiae", type(self), normalize=normalize,
+                                   overlap_threshold=overlap_threshold)
         metadata = {
             "canonical_label_space": "seizure_detection" if label_mode == "binary" else label_mode,
             "epoch_seconds": window_s,

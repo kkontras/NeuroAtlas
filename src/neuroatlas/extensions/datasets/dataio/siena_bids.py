@@ -343,15 +343,19 @@ class SienaBIDSDataset(Dataset):
             return
         self._signal_cache_size = max(self._signal_cache_size, n)
 
-        from tqdm.auto import tqdm
+        from neuroatlas import progress
 
         rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         t0 = time.perf_counter()
         cold = 0
-        for i in tqdm(rec_indices, desc="preload Siena shard", unit="rec", leave=False):
+        # on the item's live line, not a bar under it
+        item = progress.current()
+        item.phase("reading the recordings into memory", total=n, unit="recordings")
+        for i in rec_indices:
             if i not in self._signal_cache:
                 cold += 1
             self._load_signals(i)
+            item.update(advance=1)
 
         elapsed = time.perf_counter() - t0
         rss1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

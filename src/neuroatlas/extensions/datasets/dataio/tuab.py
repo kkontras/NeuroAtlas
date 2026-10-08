@@ -121,10 +121,12 @@ def discover_tuab_recordings(
     lazily by :class:`TuabEdfDataset` on first access (and then cached
     in-memory for the lifetime of the dataset).
     """
+    from neuroatlas.extensions.datasets._layout import descend
+
     out: List[Dict[str, Any]] = []
-    raw_root_p = Path(raw_root)
     for split in splits:
-        split_dir = raw_root_p / split
+        # the dataset's folder, or the edf/ (or <version>/edf/) folder TUH serves
+        split_dir = descend(raw_root, ["edf", "*/edf"], split) / split
         if not split_dir.exists():
             logger.warning("TUAB split dir not found, skipping: %s", split_dir)
             continue
@@ -232,8 +234,8 @@ class TuabEdfDataset(Dataset):
 
         if not recs:
             raise RuntimeError(
-                "TuabEdfDataset has zero recordings after filtering — "
-                "check raw_root, montage_filter, and recording_indices."
+                f"tuab: none of its {len(recordings)} recordings is left after "
+                f"montage_filter and the fold's selection"
             )
         self._recordings: List[Dict[str, Any]] = recs
 
@@ -261,9 +263,8 @@ class TuabEdfDataset(Dataset):
         )
         if len(self._index) == 0:
             raise RuntimeError(
-                f"TuabEdfDataset produced 0 windows for window_s={window_s}, "
-                f"stride_s={self._stride_s}.  All {len(recs)} recordings are "
-                f"shorter than {self._window_samples} samples?"
+                f"tuab: no {window_s:g} s window fits in any of these {len(recs)} "
+                f"recordings (each is shorter than {window_s:g} s)"
             )
 
         logger.info(

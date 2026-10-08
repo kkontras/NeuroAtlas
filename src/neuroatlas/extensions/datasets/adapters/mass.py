@@ -182,7 +182,8 @@ class MASSBenchmarkDataModule(BenchmarkDataModule):
     ) -> None:
         if signal_kind != "raw":
             raise ValueError(
-                f"MASS currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"mass reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         meta: Dict[str, object] = {
             "canonical_label_space": ["W", "N1", "N2", "N3", "REM"],

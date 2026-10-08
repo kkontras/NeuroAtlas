@@ -81,9 +81,9 @@ per_model:
   steegformer: skip
 
 notes:
-  eegnetv4: "Not run on the 20-pair bipolar montage: the EEGNetv4 wrapper reads C3, Cz and C4 by name, none of which is a channel here, so every window became zeros and embedded identically."
+  eegnetv4: "Not run on the 20-pair bipolar montage: EEGNetv4 reads C3, Cz and C4, and none of them is a channel here."
   steegformer: "Not run on the 20-pair bipolar montage: S-TEEGformer resolves monopolar 10-20 names only, and none of the 20 pairs matches its vocabulary (0 of 20 matched)."
-  deepsoz_hem: "Not run on the 20-pair bipolar montage: DeepSOZ-HEM's channel transformer has a slot for 16 of the pairs (each routed to an anchor electrode) and none for the central chain T3-C3, C3-CZ, CZ-C4, C4-T4, so the wrapper rejects the input. It runs on the 19-electrode unipolar montage (checked on Helsinki)."
+  deepsoz_hem: "Not run on the 20-pair bipolar montage: DeepSOZ-HEM has no input for the four central pairs (T3-C3, C3-CZ, CZ-C4, C4-T4); it runs on 19-electrode unipolar montages."
   biot: "Exact renames, not approximations: T3=T7, T4=T8, T5=P7, T6=P8, so F7-T3 is BIOT's F7-T7 slot. All 16 slots filled directly; the four central-chain pairs feed none."
   reve: "AUB-Med — TCP bipolar montage. REVE midpoints each pair using 10-20 electrode positions."
   cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged."

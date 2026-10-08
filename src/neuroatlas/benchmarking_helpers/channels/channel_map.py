@@ -110,10 +110,10 @@ class ChannelMap:
             return "skip", self.notes.get(model_family, "")
         if not self.has_entry(model_family):
             # what is wrong, then (its own line) the fix: neuroatlas.cli._msg
+            fix = command_leaving_out(model_family)
             return "invalid", (
-                f"the {self.dataset} channel map has no entry for the {model_family} family\n"
-                f"fix: add one to configs/channel_maps/{self.dataset}.yaml: a mapping, "
-                f"`mode: label_pass_through` or `skip`")
+                f"the {self.dataset} channel map has no entry for the {model_family} family, "
+                f"so it is not run on {self.dataset}" + (f"\nfix: {fix}" if fix else ""))
         if model_family in self.pass_through:
             return "applied", "pass-through"
         return "applied", ""
@@ -126,6 +126,29 @@ class ChannelMap:
                 f"{model_family!r} (found {entry!r})."
             )
         return dict(entry)
+
+
+def command_leaving_out(model_family: str) -> Optional[str]:
+    """The command being run with *model_family* left out of its model
+    selection (``-m all`` -> ``-m all,-eegnetv4``), or None when no command
+    line is known (the API) or it selects no models by flag."""
+    try:
+        from neuroatlas import cli
+    except Exception:       # pragma: no cover - the CLI is part of the package
+        return None
+    line = list(getattr(cli, "_COMMAND_LINE", None) or [])
+    for i, token in enumerate(line):
+        if token in ("-m", "--models") and i + 1 < len(line):
+            line[i + 1] = f"{line[i + 1]},-{model_family}"
+            break
+        if token.startswith(("--models=", "-m=")):
+            line[i] = f"{token},-{model_family}"
+            break
+    else:
+        return None
+    import shlex
+
+    return "neuroatlas " + " ".join(shlex.quote(t) for t in line)
 
 
 def _configs_dir() -> Path:
@@ -312,7 +335,7 @@ CHANNEL_MAP_STATES = {
     "none": "the dataset has no channel map: the model receives the dataset's own "
             "channel labels and resolves them itself",
     "skip": "the map marks this model `skip`: the pair is not run and reported "
-            "n/a, with the map's note as the reason",
+            "ruled out, with the map's note as the reason",
     "invalid": "the map fails validation, or has no entry for this model: the pair "
                "cannot run until the map is fixed",
 }
@@ -349,24 +372,20 @@ def resolve_labels(
             ``labels`` is not covered by the mapping.
     """
     if cmap.is_skip(model_family):
+        note = cmap.notes.get(model_family, "")
         raise ChannelMapSkip(
-            f"({cmap.dataset!r}, {model_family!r}) explicitly skipped by "
-            f"dataset config; remove from benchmark matrix or remove the "
-            f"skip marker."
+            f"{model_family} on {cmap.dataset}: ruled out by the {cmap.dataset} channel map"
+            + (f" ({note})" if note else "")
         )
     if not cmap.has_entry(model_family):
-        raise ValueError(
-            f"channel map {cmap.dataset!r}: no mapping for model "
-            f"{model_family!r}."
-        )
+        raise ValueError(cmap.state_for(model_family)[1])
     mapping = cmap.mapping_for(model_family)
     resolved: List[str] = []
     for label in labels:
         if label not in mapping:
             raise ValueError(
-                f"channel map {cmap.dataset!r}: label {label!r} has no "
-                f"per-model target for {model_family!r} (available: "
-                f"{sorted(mapping)!r})."
+                f"the {cmap.dataset} channel map gives the {model_family} family no "
+                f"channel for {label!r} (it maps {', '.join(sorted(mapping))})"
             )
         resolved.append(mapping[label])
     return resolved

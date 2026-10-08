@@ -1,5 +1,6 @@
 {
-  "_doc": "Respiratory-event detection over the 9 per-epoch fraction fields. Was probe_{physionet2026,ucddb}_respevt_fm.py.",
+  "about": "Respiratory-event detection: one binary probe per event (apneas, hypopneas, RERAs and their sums) and threshold, positive when the epoch holds more than that many seconds of it (sleep_respiratory reports apnea or hypopnea at 10 s).",
+  "_doc": "Respiratory-event detection over the 9 per-epoch fraction fields.",
   "task": {
     "name": "respiratory_event_detection",
     "event_fields": [

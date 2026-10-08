@@ -27,8 +27,11 @@ _INDEX_MEMO: Dict[tuple, "BIDSRecordingIndex"] = {}
 
 
 def find_bids_root(base: Path | str) -> Optional[Path]:
-    """Find the directory containing ``sub-*`` folders."""
+    """Find the directory containing ``sub-*`` folders (None when *base* is
+    not a folder, or holds none within two levels)."""
     base = Path(base)
+    if not base.is_dir():
+        return None
     if list(base.glob("sub-*")):
         return base
     for d in base.iterdir():
@@ -116,7 +119,8 @@ class BIDSRecordingIndex:
     # -- Construction -------------------------------------------------------
 
     @classmethod
-    def from_bids_root(cls, bids_root: str | Path) -> "BIDSRecordingIndex":
+    def from_bids_root(cls, bids_root: str | Path,
+                       dataset: Optional[str] = None) -> "BIDSRecordingIndex":
         """Scan a BIDS directory and build the recording index.
 
         Memoised per process: one datamodule used to scan the tree four times
@@ -124,7 +128,8 @@ class BIDSRecordingIndex:
         model. The scan is a recursive glob plus one JSON and one TSV read per
         recording, which on NFS is seconds per call. Keyed on the resolved
         root and the mtimes of it and its ``sub-*`` folders, so a tree that
-        gains subjects or sessions is rescanned.
+        gains subjects or sessions is rescanned. *dataset*: the name messages
+        give the tree (``siena``); its folder's name otherwise.
         """
         bids_root = Path(bids_root)
         if not bids_root.exists():
@@ -137,28 +142,45 @@ class BIDSRecordingIndex:
             key = None
         if key is not None and key in _INDEX_MEMO:
             return _INDEX_MEMO[key]
-        index = cls._scan(bids_root)
+        index = cls._scan(bids_root, dataset)
         if key is not None:
             _INDEX_MEMO[key] = index
         return index
 
     @classmethod
-    def _scan(cls, bids_root: Path) -> "BIDSRecordingIndex":
+    def _scan(cls, bids_root: Path, dataset: Optional[str] = None) -> "BIDSRecordingIndex":
 
         # Find all JSON sidecars (one per EDF)
         json_files = sorted(bids_root.rglob("*_eeg.json"))
+        name = dataset or bids_root.name
         if not json_files:
-            raise RuntimeError(f"No *_eeg.json files found in {bids_root}")
+            if dataset:
+                from neuroatlas.extensions.datasets._missing import no_data
+
+                raise FileNotFoundError(no_data(dataset, bids_root, "bids_root",
+                                                what="no recordings (*_eeg.json) in"))
+            raise FileNotFoundError(f"{name}: no recordings (*_eeg.json) in {bids_root}")
 
         recordings: List[BIDSRecording] = []
+        # one sidecar per recording: the item's live line counts them; a
+        # recording without its EDF is counted once per run (which, in the log)
+        from neuroatlas import progress, quiet
+
+        item = progress.current()
+        item.phase("indexing recordings", total=len(json_files), unit="recordings")
+        missing_text = (f"{name}: {{hit}} of {{of}} recordings left out: their .edf file is "
+                        f"missing (-v names them)")
+        quiet.count(f"bids no edf:{bids_root}", missing_text, hit=[], of=len(json_files))
 
         for idx, json_path in enumerate(json_files):
+            item.update(advance=1)
             # Derive paths
             edf_path = json_path.with_name(json_path.name.replace("_eeg.json", "_eeg.edf"))
             events_path = json_path.with_name(json_path.name.replace("_eeg.json", "_events.tsv"))
 
             if not edf_path.exists():
-                logger.warning("EDF not found for %s, skipping", json_path)
+                logger.info("%s: no .edf file for %s, left out", name, json_path)
+                quiet.count(f"bids no edf:{bids_root}", missing_text, hit=[str(json_path)])
                 continue
 
             # Parse JSON sidecar
@@ -203,11 +225,12 @@ class BIDSRecordingIndex:
             ))
 
         logger.info(
-            "BIDSRecordingIndex: %s — %d recordings, %d subjects, %d with seizures",
-            bids_root,
+            "%s: %d recordings, %d subjects, %d with seizures (%s)",
+            name,
             len(recordings),
             len({r.subject_id for r in recordings}),
             sum(1 for r in recordings if r.seizure_intervals_s),
+            bids_root,
         )
 
         return cls(bids_root=str(bids_root), recordings=recordings)

@@ -12,8 +12,8 @@ paper_dataset: true          # App. B.2, one of the 15 sleep cohorts; paper [101
 
 description: >
   Stanford Technology Analytics and Genomics in Sleep: clinical PSG pooled
-  across 13 sites, with four different channel naming conventions that the
-  loader normalises to a common bipolar montage.
+  across 13 sites, whose four channel naming conventions are normalised to
+  one bipolar montage.
 
 cohort:
   centre: "13 sites (BOGN, GSBB, GSDV, GSLH, GSSA, GSSW, MSMI, MSNF, MSQW, MSTH, MSTR, STLK, STNF)"
@@ -23,6 +23,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: stages
+  folders: ["original/STAGES PSGs", datasets]
 
 signal:
   notch_freq: 60.0
@@ -61,7 +62,7 @@ pipeline:
 runtime_defaults:
   # The loader appends `original/STAGES PSGs/<SITE>` itself, so the root is
   # the release directory above that.
-  data_root: "${EEG_DATA_ROOT}/data/Guido/stages"
+  data_root: "${EEG_DATA_ROOT}/stages"
   batch_size: 8
   num_workers: 0
   fold: 0
@@ -82,12 +83,3 @@ spec:
 
 provenance:
   last_verified: null
-  known_issues:
-    - "Never loaded. STAGES' corpus is not on the machine this was written on."
-    - "The loader defaults to recording='first', so a subject's repeat `_1`
-       recording is excluded. The fold manifests are keyed on base subject
-       ids, which matches, but this has not been run to confirm."
-    - "App. B.3 uses STAGES for brain age, but the loader surfaces no
-       demographics, so there is no `age` label mode and brain age cannot run
-       on it. Demographics exist in stages-harmonized-dataset-0.3.0.csv,
-       which the loader reads for other purposes but does not publish."

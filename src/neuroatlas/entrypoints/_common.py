@@ -48,27 +48,69 @@ def resolve_models_arg(value: Optional[str]) -> List[str]:
     try:
         return expand_models(value)
     except SelectionError as exc:
-        raise SystemExit(f"error: {exc}") from None
+        # a usage error (exit 2), as `neuroatlas run` reports it
+        from neuroatlas.cli import _msg
+
+        _msg.error(str(exc))
+        raise SystemExit(2) from None
 
 
-def report_results(verb: str, results, where: str) -> bool:
+def report_results(verb: str, results, where: str, *, extraction: bool = False) -> bool:
     """The closing lines of `embed` and `probe`: one ``error:`` line per failed
     (dataset, model, fold) -- its message's first sentence, whole with -v --
     then a line of counts. A failure the runner already reported as it
-    happened (``runtime_failure``) is counted, not repeated. Returns whether
-    any failed."""
+    happened (it failed, or its data or weights are missing) is counted, not
+    repeated; a pair the channel map rules out is neither said nor a
+    failure, and one the map has no entry for (invalid) is said as a
+    warning. *extraction*: count (dataset, checkpoint) pairs, whatever folds
+    their extraction went through, not runs. Returns whether any run failed
+    or was skipped (the command's exit status)."""
+    from neuroatlas.benchmarking_helpers.runtime.runner import (
+        INVALID_CODE,
+        RULED_OUT_CODE,
+        SKIPPED_CODES,
+        outcome_word,
+    )
     from neuroatlas.cli import _msg
 
-    failures = [r for r in results if r.failure is not None]
-    for r in failures:
-        if r.failure.code == "runtime_failure":
+    said_already = ("runtime_failure", RULED_OUT_CODE, *SKIPPED_CODES)
+    invalid_said = set()
+    for r in results:
+        if r.failure is None or r.failure.code in said_already:
             continue
         fold = (r.metadata or {}).get("fold")
-        where_pair = f"{r.dataset_name}/{r.checkpoint_id}" + (
-            f" (fold {fold})" if fold not in (None, "all") else "")
-        _msg.error(f"{where_pair}: {_msg.brief(r.failure.message)} [{r.failure.code}]")
-    print(f"{verb}: {len(results) - len(failures)} ok, {len(failures)} failed ({where})")
-    return bool(failures)
+        pair = f"{r.dataset_name}/{r.checkpoint_id}"
+        where_pair = pair + (f" fold {fold}" if fold not in (None, "all") else "")
+        if r.failure.code == INVALID_CODE:
+            # one line per (dataset, checkpoint): no fold of it runs
+            if pair not in invalid_said:
+                invalid_said.add(pair)
+                _msg.warning(f"{pair}: {_msg.brief(r.failure.message)}")
+            continue
+        _msg.error(f"{where_pair}: {_msg.brief(r.failure.message)}")
+
+    if extraction:
+        # a pair's word: the worst of its folds' (one failed fold fails it)
+        pairs: Dict[Tuple[str, str], str] = {}
+        rank = ("ok", "ruled out", "invalid", "skipped", "failed")
+        for r in results:
+            key = (r.dataset_name, r.checkpoint_id)
+            word = outcome_word(r)
+            if rank.index(word) >= rank.index(pairs.get(key, "ok")):
+                pairs[key] = word
+        tally = {w: sum(1 for v in pairs.values() if v == w) for w in rank}
+        datasets = ", ".join(dict.fromkeys(d for d, _ in pairs))
+        head = (f"{verb}: {tally['ok']} of {_msg.plural(len(pairs), 'checkpoint')} ok"
+                + (f" on {datasets}" if datasets else ""))
+    else:
+        tally = {w: 0 for w in ("ok", "ruled out", "invalid", "skipped", "failed")}
+        for r in results:
+            tally[outcome_word(r)] += 1
+        head = f"{verb}: {_msg.plural(tally['ok'], 'run')} ok"
+    rest = [f"{tally['failed']} failed"] + [
+        f"{tally[w]} {w}" for w in ("skipped", "ruled out", "invalid") if tally[w]]
+    print(f"{head}, {', '.join(rest)} ({where})")
+    return bool(tally["failed"] or tally["skipped"])
 
 
 def apply_task_override(config: Dict[str, Any], args: argparse.Namespace) -> None:
@@ -180,11 +222,10 @@ def check_dataset_paths(slug: str, config: Dict[str, Any],
     )
     if absent:
         raise MissingDatasetPath(
-            f"error: {slug} requires " + ", ".join(absent)
-            + ", and the manifest declares no default for "
-            + ("it" if len(absent) == 1 else "them") + ".\n"
-            + "\n".join(f"    --set {key}=/path/to/{key.replace('_', '-')}"
-                         for key in absent)
+            f"error: {slug} needs " + ", ".join(absent)
+            + ", and no default folder is set for "
+            + ("it" if len(absent) == 1 else "them") + "\n"
+            + "\n".join(f"fix: neuroatlas config set {slug}.{key} DIR" for key in absent)
         )
 
     unresolved = unresolved_paths(config)
@@ -193,9 +234,15 @@ def check_dataset_paths(slug: str, config: Dict[str, Any],
             var for key in unresolved
             for var in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", str(config[key]))
         })
-        detail = "\n".join(f"    {key} = {config[key]}" for key in unresolved)
+        detail = "\n".join(f"  {key} = {config[key]}" for key in unresolved)
+        from neuroatlas import config as user_config
+
+        settings = {s.env: s.key for s in user_config.SETTINGS.values()}
+        fixes = [f"neuroatlas config set {settings[v]} DIR" if v in settings
+                 else f"export {v}=DIR" for v in wanted]
+        names = " and no ".join(settings.get(v, v).replace("_", " ") for v in wanted)
         raise MissingDatasetPath(
-            f"error: {slug} still has unresolved paths:\n{detail}\n"
-            f"Export {' and '.join(wanted)}, or pass the value directly, e.g.\n"
-            f"    --set {unresolved[0]}=/path/to/data"
+            f"error: {slug}: no {names} is set, so these folders are unknown:\n{detail}\n"
+            + "\n".join(f"fix: {f}" for f in fixes)
+            + f"\nfix: neuroatlas config set {slug}.{unresolved[0]} DIR (this dataset alone)"
         )

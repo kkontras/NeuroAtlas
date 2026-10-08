@@ -168,8 +168,8 @@ def _map_to_motor_channels(
         mapped[:, out_idx] = x[:, src_idx]
         matched.append(target)
     if not matched:
-        # Every window would reach the network as zeros and embed identically
-        # (round 1 measured every Siena window zero): refuse, by name.
+        # Every window would reach the network as zeros and embed identically:
+        # refuse, by name.
         shown = [str(name) for name in source_channels if str(name)][:12]
         raise ValueError(
             "EEGNetv4: none of the channels its checkpoints were trained on "

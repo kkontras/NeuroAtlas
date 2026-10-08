@@ -58,6 +58,9 @@ from neuroatlas._paths import configs_dir, output_dir
 
 TASKS_DIR = configs_dir("tasks")
 
+#: The probe command's iteration cap when none is given.
+DEFAULT_MAX_ITER = 10_000
+
 
 # --------------------------------------------------------------------------
 # argument coercion — shared with embed.py's --set
@@ -99,11 +102,20 @@ def _coerce(raw: str) -> Any:
     return raw
 
 
+def usage_error(text: str, fix: str) -> "SystemExit":
+    """A usage error from a verb: ``error:`` and ``fix:`` on stderr, exit 2."""
+    from neuroatlas.cli import _msg
+
+    _msg.error(text, fix)
+    return SystemExit(2)
+
+
 def _parse_set(pairs: Optional[List[str]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for pair in pairs or []:
         if "=" not in pair:
-            raise SystemExit(f"--set expects key=value, got {pair!r}")
+            raise usage_error(f"--set expects key=value, got {pair!r}",
+                              f"neuroatlas probe --set KEY=VALUE (e.g. --set window_s=10)")
         key, _, value = pair.partition("=")
         out[key.strip()] = _coerce(value)
     return out
@@ -113,7 +125,9 @@ def _parse_checkpoints(pairs: Optional[List[str]]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for pair in pairs or []:
         if "=" not in pair:
-            raise SystemExit(f"--checkpoint expects model=path, got {pair!r}")
+            raise usage_error(f"--checkpoint expects ID=PATH, got {pair!r}",
+                              f"neuroatlas probe --checkpoint ID=PATH (e.g. "
+                              f"--checkpoint biot_pretrained=/my/weights.ckpt)")
         model, _, path = pair.partition("=")
         out[model.strip()] = {"checkpoint_path": path.strip(), "status": "ready"}
     return out
@@ -162,60 +176,87 @@ def load_task_preset(name: str) -> Dict[str, Any]:
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = ErrorParser(
         prog="neuroatlas probe",
-        description="Fit a probe on extracted embeddings for any dataset/model/task.",
+        description="Fit a probe on extracted embeddings: any dataset, checkpoint and task.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
     )
-    parser.add_argument("--config", default=None,
-                        help="Run a JSON benchmark config verbatim (the former "
-                             "`benchmark` entrypoint). Mutually exclusive with --dataset.")
-    parser.add_argument("--dataset", default=None, help="DatasetSpec slug.")
+    parser.add_argument("--config", default=None, metavar="FILE",
+                        help="Run a benchmark config file (JSON) as written; not with "
+                             "--dataset.")
+    parser.add_argument("--dataset", default=None,
+                        help="A dataset name (`neuroatlas list datasets --all`).")
     parser.add_argument("-m", "--models", default=None,
                         help="An alias (all_fm, all_ts, all_supervised, all_random), a "
                              "group, a family or checkpoint ids, comma-separated; `all` "
-                             "(the default) is every checkpoint in the registry. See "
-                             "`neuroatlas list aliases`.")
+                             "(the default) is every checkpoint (`neuroatlas list models`). "
+                             "See `neuroatlas list aliases`.")
     parser.add_argument("--task", default=None,
-                        help="Task slug or preset name. Default: the dataset's "
-                             "DatasetSpec.default_task.")
+                        help="A task or preset (`neuroatlas list tasks`). Default: the "
+                             "dataset's own task.")
     parser.add_argument("--set", dest="overrides", action="append", metavar="KEY=VALUE",
-                        help="Dataset config override, repeatable.")
+                        help="Change one of the dataset's settings, repeatable; the same "
+                             "--set as the embed that made the embeddings (`neuroatlas probe "
+                             "--dataset DATASET --help` lists them).")
     parser.add_argument("--checkpoint", dest="checkpoints", action="append",
-                        metavar="MODEL=PATH", help="Override a checkpoint path, repeatable.")
+                        metavar="ID=PATH",
+                        help="Read a checkpoint's weights from PATH instead, repeatable.")
     parser.add_argument("--folds", default=None,
                         help="Fold indices: '0,1,2' or a range '0-4'. "
-                             "Default: the dataset's fold count.")
-    parser.add_argument("--data-root", default=None)
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--num-workers", type=int, default=None)
+                             "Default: every fold of the dataset.")
+    parser.add_argument("--data-root", default=None, metavar="DIR",
+                        help="Read the dataset from DIR instead of its configured folder.")
+    parser.add_argument("--batch-size", type=int, default=None, metavar="N",
+                        help="Windows per batch (default: the dataset's own).")
+    parser.add_argument("--num-workers", type=int, default=None, metavar="N",
+                        help="Data-loading worker processes (default: the dataset's own, "
+                             "else the CPUs this job may use minus one, at most 16).")
     parser.add_argument("--probe-type", default="linear",
-                        choices=["linear", "sklearn_linear", "nonlinear"])
-    parser.add_argument("--hidden-dims", default="256,128",
+                        choices=["linear", "sklearn_linear", "nonlinear"],
+                        help="linear: the benchmarks' logistic regression (default); "
+                             "sklearn_linear: the same; nonlinear: an MLP.")
+    parser.add_argument("--hidden-dims", default="256,128", metavar="N,N",
                         help="Hidden sizes for --probe-type nonlinear.")
-    parser.add_argument("--max-iter", type=int, default=10_000)
-    parser.add_argument("--class-weight", choices=["balanced"], default=None)
-    parser.add_argument("--selection-metric", default="macro_f1",
-                        help="Validation metric that picks the probe's C (and seed). Seizure "
-                             "detection: auprc (the paper's), auroc, or event_sens_fa_auc "
-                             "(the event-level Sens@FA AUC on the validation fold).")
-    parser.add_argument("--tune-c", default=None,
-                        help="Comma-separated C values for the regularisation sweep.")
-    parser.add_argument("--aggregation", default=None,
+    parser.add_argument("--max-iter", type=int, default=DEFAULT_MAX_ITER, metavar="N",
+                        help="The solver's iteration cap (default 10000; the BCI benchmarks "
+                             "pass 1000, and seizure detection keeps its 500 unless given "
+                             "another).")
+    parser.add_argument("--class-weight", choices=["balanced"], default=None,
+                        help="balanced: weight each class by the inverse of its frequency "
+                             "(default: unweighted, unless the task fixes it).")
+    parser.add_argument("--selection-metric", default="macro_f1", metavar="METRIC",
+                        help="Validation metric that picks the seed. Seizure detection also "
+                             "ranks its C grid by it: auprc (the paper's), auroc, or "
+                             "event_sens_fa_auc (the event-level Sens@FA AUC on the validation "
+                             "fold); the other logistic-regression probes choose their --tune-c "
+                             "C on validation Cohen's kappa.")
+    parser.add_argument("--tune-c", default=None, metavar="C,C,...",
+                        help="Comma-separated C values for the regularisation sweep (a "
+                             "logistic-regression probe; a task that fits none refuses it).")
+    parser.add_argument("--aggregation", default=None, metavar="NAME[,NAME]",
                         help="Subject aggregation for subject-level tasks, e.g. "
                              "'mean' or 'mean,mean_std' (runs once per value).")
-    parser.add_argument("--seeds", default="0,1,2")
-    parser.add_argument("--seed-mode", choices=["fold", "shared"], default="fold")
+    parser.add_argument("--seeds", default="0,1,2", metavar="N,N,...",
+                        help="The probe's seeds, comma-separated, with --seed-mode shared "
+                             "(default 0,1,2).")
+    parser.add_argument("--seed-mode", choices=["fold", "shared"], default="fold",
+                        help="fold (default): one seed per fold, the fold's number; shared: "
+                             "every fold fits each of --seeds.")
     parser.add_argument("--pooling", choices=["mean", "per_patch"], default="mean",
                         help="Which cached embeddings to probe, for each "
                              "window. mean: the one vector averaged over that "
                              "window's patch tokens. per_patch: that window's "
                              "tokens kept separate. Must match what `embed "
                              "--pooling` produced.")
-    parser.add_argument("--seed", type=int, default=42, help="Global random seed.")
-    parser.add_argument("--output-root", default=None)
-    parser.add_argument("--cache-root", default=None,
-                        help="Embedding cache root. Default: $EEG_CACHE_ROOT, else the "
-                             "shared cache.")
+    parser.add_argument("--seed", type=int, default=42, metavar="N",
+                        help="Global random seed.")
+    parser.add_argument("--output-root", default=None, metavar="DIR",
+                        help="Where results.json and the fold probes are written (default: "
+                             "$NEUROATLAS_OUTPUT_ROOT, else $NEUROATLAS_HOME/artifacts/"
+                             "benchmarks, by dataset and task).")
+    parser.add_argument("--cache-root", default=None, metavar="DIR",
+                        help="Where the embeddings are read. Default: the cache_root "
+                             "setting ($EEG_CACHE_ROOT), else "
+                             "$NEUROATLAS_HOME/artifacts/embedding_cache.")
     parser.add_argument("--reprobe", action="store_true",
                         help="Fit every fold again. Without it, a fold whose "
                              "predictions.npz is already in its probe folder -- same "
@@ -223,14 +264,19 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
                              "weights and embeddings -- is not fitted again: its "
                              "metrics are recomputed from the saved predictions.")
     parser.add_argument("--extract-only", action="store_true",
-                        help="Extract embeddings and exit (prefer `embed`).")
-    parser.add_argument("--embed-chunk", default=None, metavar="K/N")
-    parser.add_argument("--no-recording-norm", action="store_true")
-    parser.add_argument("--no-amplitude-scale", action="store_true")
+                        help="Extract the embeddings and exit (what `neuroatlas embed` does).")
+    parser.add_argument("--embed-chunk", default=None, metavar="K/N",
+                        help="With --extract-only: extract subject chunk K of N, e.g. 0/4.")
+    parser.add_argument("--no-recording-norm", action="store_true",
+                        help="Probe the embeddings of `embed --no-recording-norm` (an "
+                             "ablation).")
+    parser.add_argument("--no-amplitude-scale", action="store_true",
+                        help="Probe the embeddings of `embed --no-amplitude-scale` (an "
+                             "ablation).")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the resolved config as JSON and exit.")
+                        help="Print the resolved settings as JSON and exit without probing.")
     parser.add_argument("--list-tasks", action="store_true",
-                        help="List registered tasks and presets, then exit.")
+                        help="List the tasks and their presets, then exit.")
     return parser
 
 
@@ -259,7 +305,7 @@ def _resolve_dataset(slug: str):
         near = near or difflib.get_close_matches(slug, slugs, n=5, cutoff=0.6)
         if near and "--dataset" not in message:
             message += " (did you mean " + ", ".join(near) + "?)"
-        raise SystemExit(f"error: {message}\nfix: neuroatlas probe --list-datasets names them all")
+        raise usage_error(message, "neuroatlas list datasets --all (names every one)")
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
@@ -294,6 +340,10 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
     dataset_config["num_workers"] = resolve_num_workers(args.num_workers, dataset_config)
 
     if args.folds is not None:
+        # n_folds stays as given ("loso" too): the dataset config then equals
+        # the one `run` hands `embed` for the same folds. The BCI readers
+        # record what "loso" counts to (one fold per subject) in the result's
+        # metadata, so a --debug run of one fold reads "LOSO 1/9", not "1/1".
         dataset_config["folds"] = _parse_int_list(args.folds)
     elif "folds" not in dataset_config:
         n_folds = dataset_config.get("n_folds") or dataset_config.get("num_folds")
@@ -388,11 +438,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.list_tasks:
         from neuroatlas.benchmarking_helpers.registry.discovery import task_specs
 
-        print("registered tasks:")
+        print("tasks:")
         for spec in task_specs():
             print(f"  {spec.slug:<28} {spec.description}")
         presets = available_tasks()
-        print("\npresets in src/neuroatlas/configs/tasks/:" if presets else "\nno presets in src/neuroatlas/configs/tasks/")
+        print("\npresets (a registered task with its settings):" if presets
+              else "\nno presets")
         for name in presets:
             preset = json.loads((TASKS_DIR / f"{name}.json").read_text())
             print(f"  {name:<28} task={preset['task'].get('name')}")
@@ -407,6 +458,10 @@ def main(argv: Optional[List[str]] = None) -> None:
             config.setdefault("benchmark", {})["reprobe"] = True
     else:
         config = build_config(args)
+
+    # A probe flag the task would not apply is refused before anything runs
+    # (a dry run included): the run would otherwise look as asked and not be.
+    _refuse_ignored_probe_flags(config, args, argv)
 
     if args.dry_run:
         json.dump(config, sys.stdout, indent=2, sort_keys=True, default=str)
@@ -437,13 +492,181 @@ def main(argv: Optional[List[str]] = None) -> None:
     # deanston, where the probe ran 2.5x slower than on an 8-core desktop.
     threads = (contextlib.nullcontext() if config["benchmark"].get("extract_only")
                else limit_probe_threads())
-    with embedding_pooling(args.pooling), threads:
+    from neuroatlas.benchmarking_helpers.probes import probe as probe_fit
+
+    with embedding_pooling(args.pooling), threads, \
+            probe_fit.max_iter_changed(_changed_max_iter(args, argv)):
         results = runner.run()
+        note = probe_fit.user_cap_note()
+    if note:
+        from neuroatlas.cli import _msg
+
+        _msg.note(note)
 
     from neuroatlas.entrypoints._common import report_results
 
-    if report_results("probe", results, f"results: {runner.output_root}"):
+    extract = bool(config["benchmark"].get("extract_only"))
+    if report_results("probe", results,
+                      f"embeddings in {runner.cache_root}" if extract
+                      else f"results in {runner.output_root}", extraction=extract):
         sys.exit(1)
+
+
+
+def _changed_max_iter(args, argv: List[str]) -> Optional[int]:
+    """The benchmark protocol's iteration cap when the command line sets
+    another (``--max-iter``), else None: the cap in use is the protocol's.
+    The protocol's cap is the ``--max-iter`` the benchmark's probe line
+    passes for this dataset (BCI: 1000), or the probe command's default
+    where it passes none (seizure detection keeps its own, whatever this
+    says)."""
+    if args.config or not args.dataset or not _given(argv, "--max-iter"):
+        return None
+    caps = set()
+    try:
+        from neuroatlas import catalog
+
+        for name in catalog.benchmarks_using(args.dataset):
+            bench = catalog.load(name)
+            if bench.derived_from:
+                continue
+            entry = next(e for e in bench.datasets if e.slug == args.dataset)
+            for variant in bench.variant_names():
+                try:
+                    line = bench.probe_args(entry, variant)
+                except catalog.CatalogError:
+                    continue
+                caps.add(_flag_int(line, "--max-iter") or DEFAULT_MAX_ITER)
+    except Exception:       # a catalog that does not load: no protocol to compare with
+        return None
+    caps = caps or {DEFAULT_MAX_ITER}
+    return None if int(args.max_iter) in caps else min(caps)
+
+
+def _flag_int(argv, flag: str) -> Optional[int]:
+    """The integer after *flag* in *argv* (``--flag N`` or ``--flag=N``)."""
+    argv = list(argv)
+    for i, a in enumerate(argv):
+        try:
+            if a == flag and i + 1 < len(argv):
+                return int(argv[i + 1])
+            if a.startswith(flag + "="):
+                return int(a.split("=", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
+#: The probe flags each task applies, of --class-weight (``class_weight``)
+#: and --tune-c (``c_values``); a task not listed applies both, as far as
+#: this check knows (seizure_detection checks its own: probe_settings).
+#: Each line says why the others would be ignored.
+_TASK_APPLIES: Dict[str, tuple] = {
+    "patient_classification": ((), "it fits an unweighted logistic regression at C = 1 on each "
+                                   "subject's mean embedding (the published diagnosis probe)"),
+    "brain_age": ((), "it fits a ridge regression of age and picks its alpha by nested "
+                      "cross-validation"),
+    "native_head_eval": ((), "it scores the checkpoint's own classifier head; no probe is fitted"),
+    "lstm_probe": (("class_weight",), "it trains a neural probe, which has no C"),
+    "attention_probe": (("class_weight",), "it trains a neural probe, which has no C"),
+    "attention_probe_patient": (("class_weight",), "it trains a neural probe, which has no C"),
+}
+#: Tasks whose probe is train_probe: --probe-type nonlinear there is an MLP,
+#: which takes neither a class weight nor a C.
+_TRAIN_PROBE_TASKS = ("linear_probe", "arousal_detection", "respiratory_event_detection",
+                      "patient_classification")
+_FLAGS = {"class_weight": "--class-weight", "c_values": "--tune-c"}
+
+
+def _given(argv: List[str], flag: str) -> bool:
+    """Whether *flag* is on the command line (``--flag v`` or ``--flag=v``)."""
+    return any(a == flag or a.startswith(flag + "=") for a in argv)
+
+
+def _without(argv: List[str], flags) -> List[str]:
+    """*argv* less *flags* and their values: the command that runs."""
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a in flags:
+            skip = True
+            continue
+        if any(a.startswith(f + "=") for f in flags):
+            continue
+        out.append(a)
+    return out
+
+
+def _refuse_ignored_probe_flags(config, args, argv: List[str]) -> None:
+    """Refuse (exit 2, before anything runs) a probe flag the run would not
+    apply: one the task preset fixes to another value (sleep_staging fixes
+    the C grid, the selection metric and an unweighted loss), or one the task
+    does not use at all (--class-weight / --tune-c on diagnosis or brain age,
+    --tune-c on a neural probe, either on an MLP probe)."""
+    from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
+
+    task = (config.get("task") or {}).get("name")
+    if not task:
+        tasks = {load_dataset_spec(slug).default_task for slug in config.get("datasets", {})}
+        task = next(iter(tasks)) if len(tasks) == 1 else None
+    problems, drop = [], []
+    probe = config.get("probe") or {}
+    if args.config:
+        # a JSON config: its probe block is what the user set
+        given = {k for k in _FLAGS if probe.get(k) not in (None, [], "")}
+        preset_name, fixed = None, {}
+    else:
+        given = {k for k, flag in _FLAGS.items() if _given(argv, flag)}
+        preset_name = args.task or load_dataset_spec(args.dataset).default_task
+        fixed = load_task_preset(preset_name).get("probe") or {}
+        cli = {"type": ("--probe-type", args.probe_type),
+               "class_weight": ("--class-weight", args.class_weight),
+               "c_values": ("--tune-c", [float(c) for c in _parse_csv(args.tune_c)]
+                            if args.tune_c else None),
+               "selection_metric": ("--selection-metric", args.selection_metric),
+               "max_iter": ("--max-iter", args.max_iter)}
+        clash = [(flag, key) for key, (flag, value) in cli.items()
+                 if key in fixed and _given(argv, flag) and fixed[key] != value]
+        if clash:
+            what = "; ".join(f"{_SETTING[key]} {_setting_text(key, fixed[key])}"
+                             for _, key in clash)
+            problems.append(f"the {preset_name} task fixes {what}, so "
+                            f"{' and '.join(flag for flag, _ in clash)} would be ignored")
+            drop += [flag for flag, _ in clash]
+            given -= {key for _, key in clash}
+    applies, why = _TASK_APPLIES.get(task, (tuple(_FLAGS), ""))
+    if task in _TRAIN_PROBE_TASKS and str(probe.get("type") or "linear") == "nonlinear":
+        applies, why = (), "--probe-type nonlinear fits an MLP, which takes no class weight or C"
+    ignored = [k for k in _FLAGS if k in given and k not in applies]
+    if ignored:
+        flags = [_FLAGS[k] for k in ignored]
+        problems.append(f"the {preset_name or task} task does not apply "
+                        f"{' or '.join(flags)}: {why}")
+        drop += flags
+    if problems:
+        from neuroatlas.cli import _msg
+
+        import shlex
+
+        _msg.error("; ".join(problems),
+                   "neuroatlas probe " + shlex.join(_without(argv, set(drop))))
+        raise SystemExit(2)
+
+
+#: A task preset's probe setting, in words (_refuse_ignored_probe_flags).
+_SETTING = {"type": "the probe type", "class_weight": "the class weight",
+            "c_values": "the C grid", "selection_metric": "the selection metric",
+            "max_iter": "the iteration cap"}
+
+
+def _setting_text(key: str, value) -> str:
+    if key == "class_weight" and value is None:
+        return "(none: an unweighted loss)"
+    if isinstance(value, list):
+        return "(" + ", ".join(f"{v:g}" if isinstance(v, float) else str(v) for v in value) + ")"
+    return f"({value})"
 
 
 def _refuse_unsupported_probe_settings(config) -> None:

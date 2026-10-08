@@ -14,7 +14,7 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  EPILEPSIAE multi-center scalp EEG seizure detection benchmark.
+  EPILEPSIAE: multi-centre scalp EEG, binary seizure detection.
 
 cohort:
   centre: "EPILEPSIAE consortium (Freiburg, Coimbra, Paris)"
@@ -23,6 +23,7 @@ cohort:
 
 acquisition:
   kind: manual
+  expect: {glob: "*.head"}                 # one header per recording block (.head + .data)
   upstream: https://campus-technologies.de/en/the-european-epilepsy-database-2/   # www.epilepsy-database.eu redirects here
   note: >
     Licensed, not free: the European Epilepsy Database is sold by its
@@ -82,7 +83,7 @@ pipeline:
 
 runtime_defaults:
   batch_size: 64
-  data_root: "${EEG_DATA_ROOT}/Epillepsie"
+  data_root: "${EEG_DATA_ROOT}/epilepsiae"
   fold: 0
   label_mode: binary
   montage: bipolar
@@ -117,13 +118,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "default_task is `linear_probe`, but this is a continuously
-       labelled cohort (one label per 10 s window) like chbmit, siena,
-       sz1/sz2, tusz, aub_med and helsinki_neonatal — all of which use
-       `seizure_detection`. The three cohorts that legitimately use
-       linear_probe (bonn, nmt, tuab) are all recording-level. So
-       Epilepsiae is scored WITHOUT the event-level metrics the other
-       continuous cohorts get. run/configs/benchmark_epilepsiae_test.json
-       agrees with the spec, so this is what was actually run — changing
-       it is a scientific decision, not a bug fix. Needs a maintainer."

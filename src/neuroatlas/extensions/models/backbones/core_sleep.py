@@ -11,7 +11,7 @@ import torch
 from .core_sleep_model import Sleep_CoRe, SleepEnc
 
 from .base import BenchmarkBackbone
-from ._preproc import _ESAT_DATASETS, resample_poly_with_fallback, snap_to_epoch_length
+from ._preproc import _PAPER_PREPROC_DATASETS, resample_poly_with_fallback, snap_to_epoch_length
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 from neuroatlas.benchmarking_helpers.runtime.sequential_epochs import rows_per_labelled_epoch
 
@@ -88,16 +88,20 @@ def _model_args() -> easydict.EasyDict:
     })
 
 
-def load_core_sleep_model(checkpoint_path: str | Path, device: str | None = None) -> torch.nn.Module:
+def load_core_sleep_model(checkpoint_path: str | Path, device: str | None = None,
+                          identifier: str | None = None) -> torch.nn.Module:
     device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     enc_eeg = SleepEnc(args=_encoder_args("eeg"))
     enc_eog = SleepEnc(args=_encoder_args("eog"))
     model = Sleep_CoRe(args=_model_args(), encs=[enc_eeg, enc_eog])
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
+        command = (f"neuroatlas models download {identifier}" if identifier
+                   else "neuroatlas models status (each checkpoint's weights, and the "
+                        "command that fetches them)")
         raise FileNotFoundError(
-            f"CoRe-Sleep checkpoint not found at {checkpoint_path}. "
-            "Keep the local artifact in place or update the registry."
+            f"no weights for {identifier or 'CoRe-Sleep'} at {checkpoint_path}\n"
+            f"fix: {command}"
         )
     checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
@@ -156,8 +160,10 @@ class CoreSleepBackbone(BenchmarkBackbone):
             spec.checkpoint_path or "",
             source_type=spec.source_type,
             source_reference=spec.source_reference,
+            identifier=spec.identifier,
         )
-        self.model = load_core_sleep_model(checkpoint_path, device=self.device)
+        self.model = load_core_sleep_model(checkpoint_path, device=self.device,
+                                           identifier=spec.identifier)
         nf = np.load(str(_STFT_NORM_PATH))
         self._stft_log_norm = (
             torch.from_numpy(nf["mean"]).float().to(self.device),
@@ -195,7 +201,7 @@ class CoreSleepBackbone(BenchmarkBackbone):
         x = eeg_tensor[:, channel_idx : channel_idx + 1, :]  # (B, 1, T)
         T = x.shape[-1]
         dataset = meta[0].get("dataset", "") if meta else ""
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, _ = resample_poly_with_fallback(x, float(src_fs), _TARGET_SFREQ, backend=_backend)
         x = snap_to_epoch_length(x, _TARGET_SFREQ, meta)
         if x.shape[-1] != _TARGET_LEN:

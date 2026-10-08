@@ -9,7 +9,7 @@ data leakage across visits.
 from __future__ import annotations
 
 import functools
-
+import logging
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -25,6 +25,8 @@ from neuroatlas.extensions.datasets.dataio.wsc import (
 )
 
 from .base import BenchmarkDataModule
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +205,7 @@ class WSCBenchmarkDataModule(BenchmarkDataModule):
     def __init__(
         self,
         data_root: str,
-        csv_path: str = "${EEG_DATA_ROOT}/data/raw/wsc/datasets/wsc-dataset-0.8.0.csv",
+        csv_path: str = "${EEG_DATA_ROOT}/wsc/datasets/wsc-dataset-0.8.0.csv",
         visits: Optional[Sequence[int]] = None,
         batch_size: int = 32,
         fold: int = 0,
@@ -221,7 +223,8 @@ class WSCBenchmarkDataModule(BenchmarkDataModule):
     ) -> None:
         if signal_kind != "raw":
             raise ValueError(
-                f"WSC currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"wsc reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(
@@ -260,9 +263,8 @@ class WSCBenchmarkDataModule(BenchmarkDataModule):
                 self._fold_assignments.setdefault(r.subject_id, {})[fold_key] = "valid"
             for r in test_f:
                 self._fold_assignments.setdefault(r.subject_id, {})[fold_key] = "test"
-            print(
-                f"[WSC folds] fold {f}: train={len(train_f)} val={len(val_f)} test={len(test_f)}"
-            )
+            logger.debug("WSC fold %d: train=%d val=%d test=%d recordings",
+                         f, len(train_f), len(val_f), len(test_f))
 
         self._ds_kwargs = dict(
             channel_specs=channel_specs,

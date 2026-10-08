@@ -14,7 +14,8 @@ usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]
                  traceback, to FILE
   --online       allow downloads for this run (off by default, except for the
                  commands that exist to download)
-  -V, --version  print the version
+  -V, --version  print the version (and the commit, when run from a source
+                 clone)
 ```
 
 
@@ -25,16 +26,16 @@ usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]
 | [`config`](#config) | Set up and inspect where data, caches, results and weights live. |
 | [`list`](#list) | What exists: benchmarks, datasets, models, aliases, tasks. |
 | [`show`](#show) | Explain one benchmark and print the commands it runs. |
-| [`data`](#data) | Is each dataset here; download it; build its cache. |
+| [`data`](#data) | Is each dataset here; download it; build its optional prepared file. |
 | [`models`](#models) | Are a selection's weights here; download them. |
-| [`check`](#check) | Push one real batch through each dataset x model pair, then stop. |
+| [`check`](#check) | Push one real batch through each dataset x checkpoint pair, then stop. |
 | [`run`](#run) | Run a benchmark here: embed where missing, probe, write results. |
 | [`submit`](#submit) | Write cluster jobs (HTCondor or SLURM) for a whole benchmark. |
 | [`status`](#status) | How each job of a `submit` is doing. |
-| [`results`](#results) | Summarise a benchmark's results: mean, spread, normalised score. |
+| [`results`](#results) | Summarise a benchmark's results: its headline metric over the folds, and the others. |
 | [`rescore`](#rescore) | Recompute results' metrics from their saved test predictions. |
-| [`fetch`](#fetch) | Obtain a dataset's raw corpus, or say exactly how to. |
-| [`prepare`](#prepare) | Build a dataset's optional cache (no benchmark needs one). |
+| [`fetch`](#fetch) | Download a dataset, or say exactly how to (as `data download`). |
+| [`prepare`](#prepare) | Build a dataset's optional prepared file (as `data prepare`). |
 | [`embed`](#embed) | Extract frozen-backbone embeddings for a dataset. |
 | [`probe`](#probe) | Fit a probe on extracted embeddings. |
 | [`hypnogram`](#hypnogram) | Reconstruct hypnograms and sleep-architecture features. |
@@ -80,7 +81,7 @@ options:
   --data-root DIR       Raw datasets, one sub-folder each.
   --cache-root DIR      Saved embeddings and prepared datasets (prepared/); can grow
                         large. Default: $NEUROATLAS_HOME/artifacts/embedding_cache.
-  --output-root DIR     Probe results (results.json, results.csv). Default:
+  --output-root DIR     Probe results (results.json). Default:
                         $NEUROATLAS_HOME/artifacts/benchmarks.
   --models-root DIR     Model weights. Default: $NEUROATLAS_HOME/artifacts/models.
   --dataset-path DATASET.KEY=PATH
@@ -155,8 +156,9 @@ usage: neuroatlas config token [-h] [--remove] {github,hf,nsrr}
 
 Save a token where neuroatlas reads it: $NEUROATLAS_HOME/<name>_token, chmod 600. It
 is asked for without being shown, or read from stdin (`neuroatlas config token hf <
-file`), and never printed. hf: gated model weights (REVE, ...); github: private
-release assets (CoRe-Sleep, SleepTransformer); nsrr: the NSRR sleep cohorts.
+file`), and never printed. hf: Hugging Face, needed only for a gated repository;
+github: needed only when a GitHub download is refused with an access error (401, 403
+or 404); nsrr: `data download` of the NSRR sleep datasets.
 
 positional arguments:
   {github,hf,nsrr}  Which token.
@@ -183,7 +185,7 @@ positional arguments:
     datasets  Every paper dataset: domain, access, size, benchmarks.
     models    Checkpoints: family, group, input rate and window, embedding size.
     aliases   Names for groups of checkpoints, for -m / --models.
-    tasks     Registered probe tasks and the presets built on them.
+    tasks     Probe tasks, and the settings each benchmark runs them with.
 
 options:
   -h, --help  show this help message and exit
@@ -201,7 +203,8 @@ What each benchmark predicts, on which datasets, scored how.
 options:
   -h, --help            show this help message and exit
   --grep TEXT           Only rows mentioning TEXT.
-  -v, --verbose         Also list each benchmark's datasets.
+  -v, --verbose         Also show each dataset's full name, how it is obtained and its
+                        task.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -220,12 +223,14 @@ Every paper dataset: domain, access, size, benchmarks.
 options:
   -h, --help            show this help message and exit
   --grep TEXT           Only rows mentioning TEXT.
-  -v, --verbose         Also show where each dataset comes from (URL or DOI).
+  -v, --verbose         Also show where each dataset comes from (its web page, or its
+                        MOABB name).
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
                         for a missing value.
-  --all                 Include registered datasets the paper does not evaluate.
+  --all                 Also list the datasets readable here that the paper does not
+                        evaluate.
 ```
 
 
@@ -233,7 +238,7 @@ options:
 
 ```
 usage: neuroatlas list models [-h] [--grep TEXT] [-v] [--format {table,csv,md,json}]
-                              [--all] [--benchmark NAME]
+                              [--benchmark NAME]
                               [selector]
 
 Checkpoints: family, group, input rate and window, embedding size.
@@ -250,9 +255,8 @@ options:
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
                         for a missing value.
-  --all                 Include planned checkpoints.
   --benchmark NAME      Only the checkpoints this benchmark evaluates: the selector
-                        (default: every ready one) without the model families the
+                        (default: every checkpoint) without the model families the
                         benchmark leaves out.
 ```
 
@@ -280,12 +284,12 @@ options:
 ```
 usage: neuroatlas list tasks [-h] [--grep TEXT] [-v] [--format {table,csv,md,json}]
 
-Registered probe tasks and the presets built on them.
+Probe tasks, and the settings each benchmark runs them with.
 
 options:
   -h, --help            show this help message and exit
   --grep TEXT           Only rows mentioning TEXT.
-  -v, --verbose         Print each description in full.
+  -v, --verbose         Also list the tasks no benchmark runs, and each one's kind.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -298,7 +302,7 @@ options:
 Explain one benchmark and print the commands it runs.
 
 ```
-usage: neuroatlas show [-h] [--dataset single|full|SLUGS] [--variant VARIANT]
+usage: neuroatlas show [-h] [--dataset single|full|NAMES] [--variant VARIANT]
                        [-m MODELS]
                        benchmark
 
@@ -309,28 +313,29 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --dataset single|full|SLUGS
-                        Which suite's commands to print (default: full).
+  --dataset single|full|NAMES
+                        Whose commands to print: single (the quick dataset), full (all
+                        datasets, the default) or dataset names.
   --variant VARIANT     Which variant (default: default).
   -m MODELS, --models MODELS
-                        Put this model selection into the printed commands.
+                        Put this checkpoint selection into the printed commands.
 ```
 
 
 ## data
 
-Is each dataset here; download it; build its cache.
+Is each dataset here; download it; build its optional prepared file.
 
 ```
 usage: neuroatlas data [-h] <action> ...
 
-Is each dataset here, how to get it, and build its cache.
+Is each dataset here; download it; build its optional prepared file.
 
 positional arguments:
   <action>
     status    Is each dataset of a benchmark on this machine?
     download  Fetch a dataset, or print how to.
-    prepare   Build a dataset's optional cache (no benchmark needs one).
+    prepare   Build a faster-to-read copy of an epilepsy dataset (optional).
 
 options:
   -h, --help  show this help message and exit
@@ -351,7 +356,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -v, --verbose         Show every path, and the setting that moves it, as columns.
+  -v, --verbose         Show every path, the setting that moves it and whether a
+                        channel map ships, as columns, and explain every value.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -363,10 +369,10 @@ options:
 
 ```
 usage: neuroatlas data download [-h] [--dry-run] [--mirror {physionet,aws}]
-                                [--keep-archive]
+                                [--keep-archive] [--first N]
                                 datasets [datasets ...]
 
-Fetch datasets into the folder their reader expects (under the data root; MOABB ones
+Fetch datasets into the folder each is read from (under the data root; MOABB ones
 under $MNE_DATA). Credentialed and manual ones print where to get them. Exit 0 done, 1
 a transfer failed, 2 refused.
 
@@ -382,20 +388,23 @@ options:
                         open-data copy on AWS (anonymous, usually much faster).
   --keep-archive        Keep a downloaded .zip after unpacking it (default: delete
                         it).
+  --first N             Fetch only the first N recordings, with the files they share,
+                        for a smoke test: `neuroatlas check` runs on them, `run` needs
+                        the whole dataset. PhysioNet, NSRR and file-by-file Zenodo
+                        downloads only.
 ```
 
 
 ### data prepare
 
 ```
-usage: neuroatlas data prepare [-h] [--set KEY=VALUE] [--dest DEST] [--shard K/N]
+usage: neuroatlas data prepare [-h] [--set KEY=VALUE] [--dest PATH] [--shard K/N]
                                [--dry-run] [--list]
                                [dataset]
 
-Build a dataset's optional prepared file: a speed-up for a few epilepsy cohorts, or
-dataio/bci.py's pickle for five MOABB motor-imagery ones, which `embed` and `run` do
-not read. Refuses until the raw data is there (`data download` first), and writes
-under <cache root>/prepared.
+Build a faster-to-read copy of bonn, epilepsiae, sz1, tuab or tusz. It is optional:
+every benchmark runs without it. Refuses until the raw data is there (`data download`
+first), and writes under <cache root>/prepared.
 
 positional arguments:
   dataset
@@ -403,10 +412,10 @@ positional arguments:
 options:
   -h, --help       show this help message and exit
   --set KEY=VALUE  Override a dataset setting, e.g. raw_root=/data.
-  --dest DEST      Where the prepared file goes. Default: under <cache root>/prepared.
-  --shard K/N      Build shard K of N, for scheduler fan-out (epilepsy builders).
-  --dry-run        Print the builder command; run nothing.
-  --list           Which datasets have a build step, and whether it is required.
+  --dest PATH      Where the prepared file goes. Default: under <cache root>/prepared.
+  --shard K/N      Build shard K of N, to split one build across cluster jobs.
+  --dry-run        Print the build command; run nothing.
+  --list           Which datasets have a build step (every one is optional).
 ```
 
 
@@ -422,8 +431,8 @@ Are a selection's weights here, and fetch them.
 positional arguments:
   <action>
     status    Whether each checkpoint's weights are here. No network.
-    download  Fetch the weights a selection is missing; exit 1 unless every one ends
-              up usable.
+    download  Fetch the weights a selection is missing; exit 1 if one could not be
+              fetched.
 
 options:
   -h, --help  show this help message and exit
@@ -433,7 +442,8 @@ options:
 ### models status
 
 ```
-usage: neuroatlas models status [-h] [-v] [--format {table,csv,md,json}] [selector]
+usage: neuroatlas models status [-h] [-m SELECTOR] [-v] [--format {table,csv,md,json}]
+                                [selector]
 
 Whether each checkpoint's weights are here. No network.
 
@@ -442,7 +452,9 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -v, --verbose         Show where each is expected.
+  -m SELECTOR, --models SELECTOR
+                        The same selection, as run and check take it.
+  -v, --verbose         Show where each is expected, and explain every state.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -453,29 +465,31 @@ options:
 ### models download
 
 ```
-usage: neuroatlas models download [-h] selector
+usage: neuroatlas models download [-h] [-m SELECTOR] [selector]
 
-Fetch the weights a selection is missing; exit 1 unless every one ends up usable.
+Fetch the weights a selection is missing; exit 1 if one could not be fetched.
 
 positional arguments:
-  selector    An alias, group, family or ids, e.g. all_fm.
+  selector              An alias, group, family or ids, e.g. all_fm.
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
+  -m SELECTOR, --models SELECTOR
+                        The same selection, as run and check take it.
 ```
 
 
 ## check
 
-Push one real batch through each dataset x model pair, then stop.
+Push one real batch through each dataset x checkpoint pair, then stop.
 
 ```
-usage: neuroatlas check [-h] -m MODELS [--dataset single|full|SLUGS]
+usage: neuroatlas check [-h] -m MODELS [--dataset single|full|NAMES]
                         [--variant VARIANT] [--num-workers N] [--strict]
                         [--format {table,csv,md,json}]
                         benchmark
 
-One real batch through every (dataset, model) pair, before you spend GPU hours.
+One real batch through every (dataset, checkpoint) pair, before you spend GPU hours.
 
 positional arguments:
   benchmark
@@ -483,17 +497,22 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
-                        An alias (all_fm, all_ts, ...), group, family or checkpoint
-                        ids, comma-separated; `-name` removes one (all,-reve). A
-                        family the benchmark leaves out (`neuroatlas show
-                        <benchmark>`) is skipped by an alias and refused by name.
-  --dataset single|full|SLUGS
-                        Which datasets (default: single).
-  --variant VARIANT
+                        An alias (all_fm, all_ts, all_supervised, all_random), group,
+                        family or checkpoint ids, comma-separated; `-name` removes one
+                        (all,-reve). An alias or group leaves out the families a
+                        benchmark does not evaluate (`neuroatlas show <benchmark>`),
+                        and naming one of them is refused.
+  --dataset single|full|NAMES
+                        Which datasets (default: single). single: the benchmark's
+                        quick dataset (`neuroatlas list benchmarks` names it); full:
+                        all its datasets; or dataset names, comma-separated.
+  --variant VARIANT     A benchmark variant (default: default; `neuroatlas show
+                        <benchmark>` lists them).
   --num-workers N       Data-loader workers for the one batch (default 0: read in-
                         process, the fastest way to get a single batch).
-  --strict              Exit 1 if any pair was skipped (data or weights missing), not
-                        only if one failed or none could be checked.
+  --strict              Exit 1 if any pair was skipped (data or weights missing) or
+                        invalid (no channel map entry), not only if one failed or none
+                        could be checked.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -506,12 +525,13 @@ options:
 Run a benchmark here: embed where missing, probe, write results.
 
 ```
-usage: neuroatlas run [-h] -m MODELS [--dataset single|full|SLUGS] [--variant VARIANT]
-                      [--dry-run] [--debug] [--folds FOLDS] [--limit-batches N]
-                      [--skip-embed] [--reprobe] [--num-workers N]
-                      [--cache-root CACHE_ROOT] [--output-root OUTPUT_ROOT]
-                      [--checkpoint-override ID.KEY=VALUE] [--per-model-output]
-                      [--allow-partial] [--format {table,csv,md,json}]
+usage: neuroatlas run [-h] -m MODELS [--dataset single|full|NAMES] [--variant VARIANT]
+                      [--dry-run] [--debug] [--folds LIST] [--limit-batches N]
+                      [--skip-embed] [--reprobe] [--num-workers N] [--cache-root DIR]
+                      [--output-root DIR]
+                      [--checkpoint-override ID.checkpoint_path=PATH]
+                      [--per-model-output] [--allow-partial]
+                      [--format {table,csv,md,json}]
                       benchmark
 
 Run a benchmark on this machine: for each dataset, `embed` (a no-op where the cache
@@ -524,25 +544,26 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
-                        An alias (all_fm, all_ts, ...), group, family or checkpoint
-                        ids, comma-separated; `-name` removes one (all,-reve). A
-                        family the benchmark leaves out (`neuroatlas show
-                        <benchmark>`) is skipped by an alias and refused by name.
-  --dataset single|full|SLUGS
-                        The one-dataset quick suite (default), every dataset, or a
-                        comma list.
+                        An alias (all_fm, all_ts, all_supervised, all_random), group,
+                        family or checkpoint ids, comma-separated; `-name` removes one
+                        (all,-reve). An alias or group leaves out the families a
+                        benchmark does not evaluate (`neuroatlas show <benchmark>`),
+                        and naming one of them is refused.
+  --dataset single|full|NAMES
+                        Which datasets (default: single). single: the benchmark's
+                        quick dataset (`neuroatlas list benchmarks` names it); full:
+                        all its datasets; or dataset names, comma-separated.
   --variant VARIANT     A benchmark variant (see `neuroatlas show`).
-  --dry-run             Print the plan -- datasets, models, folds, runs, data state --
-                        and stop.
-  --debug               Fold 0 only. Most datasets keep one embedding cache for every
-                        fold: it is extracted in full, and a later full run reuses it.
-                        Those that cache per fold and split -- HMC, MESA, STAGES and
-                        HomePAP (the PhysioEx-format sleep cohorts), SHHS, the four
-                        bci_cognitive cohorts, TUAB's H5 fast path, CHB-MIT's HDF5
-                        backend, any run with a stride other than the window --
-                        extract fold 0 only, and the full run extracts the other
-                        folds.
-  --folds FOLDS         Comma list of folds, instead of all.
+  --dry-run             Print the plan (datasets, checkpoints, folds, runs, whether
+                        the data is here) and stop.
+  --debug               Fold 0 only. Most datasets save one set of embeddings for
+                        every fold: it is extracted in full, and a later full run
+                        reuses it. A few save them per fold (HMC, MESA, STAGES,
+                        HomePAP, SHHS, the four bci_cognitive datasets, TUAB and CHB-
+                        MIT when read from an HDF5 file, and any run with a stride
+                        other than the window): those extract fold 0 only, and the
+                        full run extracts the other folds.
+  --folds LIST          Only these folds: 0,1 or 0-4 (default: all of them).
   --limit-batches N     Stop each extraction after N batches: a smoke test. Uses its
                         own cache, <cache root>/_limited, and writes its results under
                         <output root>/_limited; too few subjects may leave a fold with
@@ -555,17 +576,17 @@ options:
   --num-workers N       Data-loader workers for extraction. Default: the CPUs this job
                         may use (CPU affinity and cgroup quota) minus one, at most 16,
                         unless the dataset pins its own.
-  --cache-root CACHE_ROOT
-                        Embedding cache for this run.
-  --output-root OUTPUT_ROOT
-                        Results root for this run.
-  --checkpoint-override ID.KEY=VALUE
-                        Change a checkpoint field for this run, e.g.
-                        biot_pretrained.checkpoint_path=/my/weights.ckpt (only
-                        checkpoint_path for now; the file must exist). ID is a
-                        checkpoint id or family among the -m selection. Needs --cache-
-                        root: the cache is keyed by checkpoint id, not by weights.
-  --per-model-output    Results in <dataset>/<model>/ (what `submit`'s jobs use).
+  --cache-root DIR      Where this run saves and reads embeddings (default: the cache
+                        root).
+  --output-root DIR     Where this run writes results (default: the output root).
+  --checkpoint-override ID.checkpoint_path=PATH
+                        Run checkpoint ID (a checkpoint id or family among the -m
+                        selection) from other weights, e.g.
+                        biot_pretrained.checkpoint_path=/my/weights.ckpt; the file
+                        must exist. Needs --cache-root: saved embeddings are filed
+                        under the checkpoint id, not its weights, so other weights
+                        need a cache folder of their own.
+  --per-model-output    Results in <dataset>/<checkpoint>/ (what `submit`'s jobs use).
   --allow-partial       Run on a dataset that `data status` calls partial or empty (a
                         half-finished download). Without it, run refuses: the results
                         would silently cover only the subjects that arrived.
@@ -581,22 +602,22 @@ options:
 Write cluster jobs (HTCondor or SLURM) for a whole benchmark.
 
 ```
-usage: neuroatlas submit [-h] -m MODELS [--dataset single|full|SLUGS]
-                         [--variant VARIANT] --out OUT [--backend {condor,slurm}]
-                         [--mode {cached,retry,all}] [--output-root OUTPUT_ROOT]
-                         [--force] [--reprobe] [-v] [--gpus GPUS] [--cpus CPUS]
-                         [--memory SIZE] [--time H:MM:SS] [--walltime SECONDS]
+usage: neuroatlas submit [-h] -m MODELS [--dataset single|full|NAMES]
+                         [--variant VARIANT] --out DIR [--backend {condor,slurm}]
+                         [--mode {cached,retry,all}] [--output-root DIR] [--force]
+                         [--reprobe] [-v] [--gpus N] [--cpus N] [--memory SIZE]
+                         [--time H:MM:SS] [--walltime SECONDS]
                          [--gpu-capability auto|none|X.Y] [--partition PARTITION]
                          [--no-mem] [--requirements REQUIREMENTS]
                          [--walltime-attr NAME] [--extra LINE]
                          [--format {table,csv,md,json}]
                          benchmark
 
-Write one job per (dataset, model) -- each a `neuroatlas run` of that pair -- and an
+Write one job per (dataset, checkpoint), each a `neuroatlas run` of that pair, and an
 HTCondor or SLURM file to queue them. Nothing is queued here; the last line prints the
 command that does. Jobs run offline, so a pair whose data or weights are not on this
-machine, or that its dataset's channel map rules out, gets no job: it is listed as
-skipped with the reason.
+machine (skipped), or that its dataset's channel map rules out, gets no job: it is
+listed with the reason.
 
 positional arguments:
   benchmark
@@ -604,36 +625,43 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m MODELS, --models MODELS
-                        An alias (all_fm, all_ts, ...), group, family or checkpoint
-                        ids, comma-separated; `-name` removes one (all,-reve). A
-                        family the benchmark leaves out (`neuroatlas show
-                        <benchmark>`) is skipped by an alias and refused by name.
-  --dataset single|full|SLUGS
-                        Default: full -- this is for the whole suite.
-  --variant VARIANT
-  --out OUT             Folder for the job files and logs.
+                        An alias (all_fm, all_ts, all_supervised, all_random), group,
+                        family or checkpoint ids, comma-separated; `-name` removes one
+                        (all,-reve). An alias or group leaves out the families a
+                        benchmark does not evaluate (`neuroatlas show <benchmark>`),
+                        and naming one of them is refused.
+  --dataset single|full|NAMES
+                        Which datasets (default: full, since this is for a whole
+                        benchmark). single: the benchmark's quick dataset (`neuroatlas
+                        list benchmarks` names it); full: all its datasets; or dataset
+                        names, comma-separated.
+  --variant VARIANT     A benchmark variant (default: default; `neuroatlas show
+                        <benchmark>` lists them).
+  --out DIR             Folder for the job files and logs.
   --backend {condor,slurm}
+                        The scheduler to write for: condor (HTCondor, the default) or
+                        slurm.
   --mode {cached,retry,all}
-                        cached: only jobs that never ran (default; re-running submit
-                        never repeats finished work). retry: also failed, partial and
-                        exited ones. all: everything. A job still in the queue
-                        (running, idle, held) is never queued again.
-  --output-root OUTPUT_ROOT
-                        Results root for the jobs.
+                        cached (default): queue only the jobs that never ran, so
+                        running submit again never repeats finished work. retry: also
+                        the failed, partial and exited ones. all: every job. A job
+                        still in the queue (running, idle, held) is never queued
+                        again.
+  --output-root DIR     Where the jobs write results (default: the output root).
   --force               Write jobs for pairs whose data or weights are not found here
                         (the channel map is still obeyed).
   --reprobe             The jobs fit every fold again (`run --reprobe`) instead of
                         recomputing the metrics of folds whose saved predictions
                         match. With --mode all to re-run jobs that finished.
-  -v, --verbose         List every skipped pair.
+  -v, --verbose         List every pair without a job, and why.
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
                         for a missing value.
 
 resources (per job):
-  --gpus GPUS
-  --cpus CPUS
+  --gpus N              GPUs per job (default 1).
+  --cpus N              CPUs per job (default 4).
   --memory SIZE         With a unit: 32G, 1500M (default 32G).
   --time H:MM:SS        Wall time per job, both backends (default 24:00:00). SLURM:
                         --time; HTCondor: +RequestWalltime and +MaxRuntime, in
@@ -664,11 +692,13 @@ How each job of a `submit` is doing.
 usage: neuroatlas status [-h] --out OUT [-v] [--no-scheduler]
                          [--format {table,csv,md,json}]
 
-One verdict per job of a `submit`: done, partial, failed (results, none ok), exited N
-(died before writing results), stopped (started, then vanished from the queue without
-an exit), removed, running, idle (queued, not started), held, missing (never ran),
-waiting; skipped pairs are counted. The scheduler (condor_q / squeue) is asked when it
-is on this machine; run status where you submitted.
+The state of each job of a `submit`: done, partial (some folds failed or are missing),
+failed (results, none ok), exited N (died before writing results), stopped (started,
+then vanished from the queue without an exit), removed, running, idle (queued, not
+started), held (the scheduler holds it until released), missing (never ran), waiting
+(for another benchmark's results); pairs without a job are counted. The scheduler
+(condor_q / squeue) is asked when it is on this machine; run status where you
+submitted.
 
 options:
   -h, --help            show this help message and exit
@@ -684,18 +714,19 @@ options:
 
 ## results
 
-Summarise a benchmark's results: mean, spread, normalised score.
+Summarise a benchmark's results: its headline metric over the folds, and the others.
 
 ```
-usage: neuroatlas results [-h] [--variant VARIANT] [--reference] [--all-metrics]
-                          [--output-root OUTPUT_ROOT] [-v]
+usage: neuroatlas results [-h] [--variant VARIANT] [--output-root DIR] [-v]
                           [--format {table,csv,md,json}]
                           benchmark [paths ...]
 
-One row per (dataset, variant, model): the headline metric's mean and spread over the
-folds that succeeded, how many of the protocol's folds that is, the normalised score
-(0 = dummy, 1 = perfect; for benchmarks with a dummy) and the secondary metrics. A
-variant's results (run --variant) are their own rows, never merged with the default's.
+One row per (dataset, variant, checkpoint): the headline metric's mean and spread over
+the folds that succeeded, how many of the protocol's folds that is (LOSO: one fold per
+subject), the chance level where it differs per row (AUPRC: the test prevalence; BCI:
+1/C) and the secondary metrics. The title says what the headline is computed over,
+what a fold is and what ± is over. A variant's results (run --variant) are their own
+rows, never merged with the default's.
 
 positional arguments:
   benchmark
@@ -706,10 +737,7 @@ options:
   -h, --help            show this help message and exit
   --variant VARIANT     Only this variant's results (default: every variant;
                         `neuroatlas show <benchmark>` lists them).
-  --reference           Put the paper's numbers beside yours, with the difference.
-  --all-metrics         With --reference: compare every metric, not just the headline.
-  --output-root OUTPUT_ROOT
-                        The results root to read (default: the configured output
+  --output-root DIR     The results root to read (default: the configured output
                         root).
   -v, --verbose         Show why failed folds failed: the message each one recorded.
   --format {table,csv,md,json}
@@ -724,8 +752,8 @@ options:
 Recompute results' metrics from their saved test predictions.
 
 ```
-usage: neuroatlas rescore [-h] [--dataset SLUGS] [-m MODELS] [--variant VARIANT]
-                          [--output-root OUTPUT_ROOT] [--format {table,csv,md,json}]
+usage: neuroatlas rescore [-h] [--dataset NAMES] [-m MODELS] [--variant VARIANT]
+                          [--output-root DIR] [--format {table,csv,md,json}]
                           benchmark
 
 Recompute every result's metrics from the test predictions its probe saved, and
@@ -736,17 +764,17 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --dataset SLUGS       Only these datasets, comma-separated (default: every dataset
+  --dataset NAMES       Only these datasets, comma-separated (default: every dataset
                         that has results).
   -m MODELS, --models MODELS
-                        An alias (all_fm, all_ts, ...), group, family or checkpoint
-                        ids, comma-separated; `-name` removes one (all,-reve). A
-                        family the benchmark leaves out (`neuroatlas show
-                        <benchmark>`) is skipped by an alias and refused by name.
-                        Default: every model that has results.
+                        An alias (all_fm, all_ts, all_supervised, all_random), group,
+                        family or checkpoint ids, comma-separated; `-name` removes one
+                        (all,-reve). An alias or group leaves out the families a
+                        benchmark does not evaluate (`neuroatlas show <benchmark>`),
+                        and naming one of them is refused. Default: every checkpoint
+                        that has results.
   --variant VARIANT     Only this variant's results (default: every variant).
-  --output-root OUTPUT_ROOT
-                        The results root (default: the configured output root).
+  --output-root DIR     The results root (default: the configured output root).
   --format {table,csv,md,json}
                         Output format (default: table). csv, md and json carry the
                         table's indented note lines as a `note` column; json uses null
@@ -756,97 +784,75 @@ options:
 
 ## fetch
 
-Obtain a dataset's raw corpus, or say exactly how to.
+Download a dataset, or say exactly how to (as `data download`).
 
 ```
-usage: neuroatlas fetch [-h] [--dataset DATASET] [--dest DEST] [--download] [--list]
+usage: neuroatlas fetch [-h] [--dataset DATASET] [--dest DIR] [--download] [--list]
 
-Obtain a dataset's raw corpus, or say exactly how to. The old name of `neuroatlas data download`; it runs the same code.
+Download a dataset's raw data, or say exactly how to get it. `neuroatlas data download` runs the same code.
 
 options:
   -h, --help         show this help message and exit
-  --dataset DATASET  DatasetSpec slug.
-  --dest DEST        The data root to plan against (default: the configured
-                     data_root). The corpus lands in the sub-folder its reader expects
-                     under it.
+  --dataset DATASET  A dataset name, as `neuroatlas list datasets` shows it.
+  --dest DIR         The data root to plan against (default: the data_root setting).
+                     The data lands in the dataset's own folder under it.
   --download         Actually transfer. Without it, the plan is printed and nothing
                      leaves or enters this machine.
   --list             Show every paper dataset and how it is obtained.
 
-datasets (--dataset):
-  bci (22):
+the paper's datasets (--dataset), 43:
+  bci (18):
     arithmetic_task, bi2013a, bi2014a, bnci2014_001, bnci2014_004,
-    bnci2014_008, bnci2015_001, cho2017, dreamer_arousal, dreamer_valence,
-    dreyer2023, eegmat, epflp300, erpcore2021_n170, hinss2021,
-    kim2025betarange, lee2019_mi, liu2024, nakanishi2015, physionet_mi,
-    shin2017a, weibo2014
-  epilepsy (11):
-    aub_med, bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1,
-    sz2, tuab, tusz
-  sleep (17):
-    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros, parkinson,
-    physionet2026, shhs, sleep_edf, sleep_edf_expanded, stages, ucddb, wsc
-  additionally loadable, not in the paper: 138 MOABB datasets
-  --list-datasets shows all 188; --list-datasets --paper-only shows the paper's cohorts
-
-tasks (--task):
-  arousal_detection, attention_probe, attention_probe_patient, brain_age,
-  linear_probe, lstm_probe, native_head_eval, patient_classification,
-  respiratory_event_detection, seizure_detection
-  presets in src/neuroatlas/configs/tasks/:
-    arousal, brain_age, cognitive, limb, mass_arousal, osa, pathology,
-    respiratory, sex, sleep_staging
-
-for one dataset's --set keys and label modes:
-  ... --dataset <slug> --help
+    bnci2014_008, bnci2015_001, dreamer_arousal, dreamer_valence,
+    dreyer2023, eegmat, epflp300, erpcore2021_n170, kim2025betarange,
+    liu2024, nakanishi2015, shin2017a, weibo2014
+  epilepsy (10):
+    bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab,
+    tusz
+  sleep (15):
+    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros,
+    physionet2026, shhs, sleep_edf_expanded, stages, ucddb, wsc
+  also readable, not in the paper: aub_med, cho2017, hinss2021, lee2019_mi,
+    parkinson, physionet_mi, sleep_edf and 138 MOABB datasets
+  `neuroatlas list datasets --all` lists all 188
 ```
 
 
 ## prepare
 
-Build a dataset's optional cache (no benchmark needs one).
+Build a dataset's optional prepared file (as `data prepare`).
 
 ```
 usage: neuroatlas prepare [-h] [--dataset DATASET] [--set KEY=VALUE] [--dest DEST]
                           [--shard K/N] [--dry-run] [--list]
 
-Build a dataset's optional cache: a fast path for a few epilepsy cohorts, or dataio/bci.py's pickle for five MOABB motor-imagery ones, which `embed` does not read.
+Build a faster-to-read copy of bonn, epilepsiae, sz1, tuab or tusz (optional: every benchmark runs without it). `neuroatlas data prepare` is the same, and refuses until the raw data is there; it writes under <cache root>/prepared.
 
 options:
   -h, --help         show this help message and exit
-  --dataset DATASET  DatasetSpec slug.
+  --dataset DATASET  A dataset name, as `neuroatlas list datasets` shows it.
   --set KEY=VALUE    Override a dataset config key, e.g. --set raw_root=/data.
-  --dest DEST        Where the cache is written. Default: the manifest's cache_root.
+  --dest DEST        Where the prepared file is written. Default: under <cache
+                     root>/prepared.
   --shard K/N        Build shard K of N, for scheduler fan-out.
-  --dry-run          Print the builder command and exit.
-  --list             Show which datasets have a build step and whether it is required.
+  --dry-run          Say what would be built, and from where, and exit.
+  --list             Show which datasets have a build step (every one is optional).
 
-datasets (--dataset):
-  bci (22):
+the paper's datasets (--dataset), 43:
+  bci (18):
     arithmetic_task, bi2013a, bi2014a, bnci2014_001, bnci2014_004,
-    bnci2014_008, bnci2015_001, cho2017, dreamer_arousal, dreamer_valence,
-    dreyer2023, eegmat, epflp300, erpcore2021_n170, hinss2021,
-    kim2025betarange, lee2019_mi, liu2024, nakanishi2015, physionet_mi,
-    shin2017a, weibo2014
-  epilepsy (11):
-    aub_med, bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1,
-    sz2, tuab, tusz
-  sleep (17):
-    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros, parkinson,
-    physionet2026, shhs, sleep_edf, sleep_edf_expanded, stages, ucddb, wsc
-  additionally loadable, not in the paper: 138 MOABB datasets
-  --list-datasets shows all 188; --list-datasets --paper-only shows the paper's cohorts
-
-tasks (--task):
-  arousal_detection, attention_probe, attention_probe_patient, brain_age,
-  linear_probe, lstm_probe, native_head_eval, patient_classification,
-  respiratory_event_detection, seizure_detection
-  presets in src/neuroatlas/configs/tasks/:
-    arousal, brain_age, cognitive, limb, mass_arousal, osa, pathology,
-    respiratory, sex, sleep_staging
-
-for one dataset's --set keys and label modes:
-  ... --dataset <slug> --help
+    bnci2014_008, bnci2015_001, dreamer_arousal, dreamer_valence,
+    dreyer2023, eegmat, epflp300, erpcore2021_n170, kim2025betarange,
+    liu2024, nakanishi2015, shin2017a, weibo2014
+  epilepsy (10):
+    bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab,
+    tusz
+  sleep (15):
+    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros,
+    physionet2026, shhs, sleep_edf_expanded, stages, ucddb, wsc
+  also readable, not in the paper: aub_med, cho2017, hinss2021, lee2019_mi,
+    parkinson, physionet_mi, sleep_edf and 138 MOABB datasets
+  `neuroatlas list datasets --all` lists all 188
 ```
 
 
@@ -856,98 +862,90 @@ Extract frozen-backbone embeddings for a dataset.
 
 ```
 usage: neuroatlas embed [-h] [--dataset DATASET] [-m MODELS] [--set KEY=VALUE]
-                        [--checkpoint MODEL=PATH] [--folds FOLDS]
-                        [--data-root DATA_ROOT] [--batch-size BATCH_SIZE]
-                        [--num-workers NUM_WORKERS] [--cache-root CACHE_ROOT]
-                        [--output-root OUTPUT_ROOT] [--limit-batches N]
-                        [--embed-chunk K/N]
-                        [--expected-epoch-seconds EXPECTED_EPOCH_SECONDS]
-                        [--no-recording-norm] [--no-amplitude-scale]
-                        [--pooling {mean,per_patch}] [--seed SEED] [--dry-run]
-                        [--list-datasets] [--paper-only]
+                        [--checkpoint ID=PATH] [--folds FOLDS] [--data-root DIR]
+                        [--batch-size N] [--num-workers N] [--cache-root DIR]
+                        [--limit-batches N] [--embed-chunk K/N]
+                        [--expected-epoch-seconds S] [--no-recording-norm]
+                        [--no-amplitude-scale] [--pooling {mean,per_patch}] [--seed N]
+                        [--dry-run] [--list-datasets] [--paper-only]
 
-Extract frozen-backbone embeddings for any registered dataset.
+Extract frozen-backbone embeddings for any dataset `neuroatlas list datasets --all` shows.
 
 options:
   -h, --help            show this help message and exit
-  --dataset DATASET     DatasetSpec slug (see --list-datasets).
+  --dataset DATASET     A dataset name (see --list-datasets).
   -m MODELS, --models MODELS
                         An alias (all_fm, all_ts, all_supervised, all_random), a
                         group, a family or checkpoint ids, comma-separated; `all` (the
-                        default) is every checkpoint in the registry. See `neuroatlas
-                        list aliases`.
-  --set KEY=VALUE       Dataset config override, repeatable. Merged on top of
-                        DatasetSpec.config_defaults (e.g. --set num_folds=10).
-  --checkpoint MODEL=PATH
-                        Override a model's checkpoint path, repeatable.
+                        default) is every checkpoint (`neuroatlas list models`). See
+                        `neuroatlas list aliases`.
+  --set KEY=VALUE       Change one of the dataset's settings, repeatable: it goes on
+                        top of the dataset's defaults (e.g. --set window_s=10;
+                        `neuroatlas embed --dataset DATASET --help` lists them).
+  --checkpoint ID=PATH  Read a checkpoint's weights from PATH instead, repeatable.
   --folds FOLDS         Comma-separated fold indices. Default: the dataset's
                         configured fold only (--set fold=K; usually 0). Most datasets
-                        keep one cache that serves every fold, so one pass is enough.
-                        Those that cache per fold and split -- HMC, MESA, STAGES and
-                        HomePAP (the PhysioEx-format sleep cohorts), SHHS, the four
-                        bci_cognitive cohorts, TUAB's H5 fast path, CHB-MIT's HDF5
-                        backend, any run with a stride other than the window -- need
-                        every fold the probe will read (`neuroatlas run` passes them).
-  --data-root DATA_ROOT
-                        Override the dataset's data root.
-  --batch-size BATCH_SIZE
-  --num-workers NUM_WORKERS
-  --cache-root CACHE_ROOT
-                        Embedding cache root. Default: the cache_root setting
-                        ($EEG_CACHE_ROOT), else
+                        save one set of embeddings that serves every fold, so one pass
+                        is enough. A few save them per fold (HMC, MESA, STAGES,
+                        HomePAP, SHHS, the four bci_cognitive datasets, TUAB and CHB-
+                        MIT when read from an HDF5 file, and any run with a stride
+                        other than the window): those need every fold the probe will
+                        read (`neuroatlas run` passes them).
+  --data-root DIR       Read the dataset from DIR instead of its configured folder.
+  --batch-size N        Windows per batch (default: the dataset's own).
+  --num-workers N       Data-loading worker processes (default: the dataset's own,
+                        else the CPUs this job may use minus one, at most 16; 0 reads
+                        in this process).
+  --cache-root DIR      Where the embeddings are written. Default: the cache_root
+                        setting ($EEG_CACHE_ROOT), else
                         $NEUROATLAS_HOME/artifacts/embedding_cache.
-  --output-root OUTPUT_ROOT
-                        Run directory. Extraction writes no results here, but the
-                        runner creates it (default: artifacts/embeddings/<dataset>).
   --limit-batches N     Stop each extraction after N batches: a smoke test. Writes to
                         a cache of its own, <cache root>/_limited, so a later full
                         extraction never takes the truncated one for complete.
   --embed-chunk K/N     Extract subject chunk K of N for parallel jobs, e.g. '0/4'.
                         Chunks are merged automatically on the first read, so no
                         separate merge step is needed.
-  --expected-epoch-seconds EXPECTED_EPOCH_SECONDS
-                        Override each selected checkpoint's expected epoch length.
-                        This is the model-to-data contract: a backbone trained on 30 s
-                        epochs fed 10 s windows will extract, and be wrong. Every
-                        epilepsy launcher sets it, which is why it is here and not in
-                        --set (it belongs to the checkpoint, not the dataset).
-  --no-recording-norm   Disable per-recording normalization (BIOT q95, REVE z-score).
-  --no-amplitude-scale  Disable fixed amplitude scaling (EEGPT x1000, LaBraM /100,
-                        etc.).
+  --expected-epoch-seconds S
+                        The window length, in seconds, each selected checkpoint is
+                        told it receives (the epilepsy benchmark passes 10). Without
+                        it, each checkpoint expects its own window length.
+  --no-recording-norm   An ablation: no per-recording normalisation (BIOT's 95th
+                        percentile, REVE's z-score). Not the benchmark's protocol.
+  --no-amplitude-scale  An ablation: no fixed amplitude scaling (EEGPT x1000, LaBraM
+                        /100, ...). Not the benchmark's protocol.
   --pooling {mean,per_patch}
                         What a backbone hands back for each window (the window itself
                         is set by --set window_s/stride_s). mean: one vector per
                         window, averaged over that window's patch tokens. per_patch:
                         that window's tokens kept separate. Cached separately, so both
                         can coexist.
-  --seed SEED           Global random seed.
-  --dry-run             Print the resolved config as JSON and exit without extracting.
-                        Used by the config-parity tests.
-  --list-datasets       List registered dataset slugs and exit.
-  --paper-only          With --list-datasets, show only the cohorts the paper reports
-                        (excludes the ~150 additionally-loadable MOABB datasets).
+  --seed N              Global random seed.
+  --dry-run             Print the resolved settings as JSON and exit without
+                        extracting.
+  --list-datasets       List every dataset name and exit.
+  --paper-only          With --list-datasets, only the datasets the paper evaluates.
 
-datasets (--dataset):
-  bci (22):
+the paper's datasets (--dataset), 43:
+  bci (18):
     arithmetic_task, bi2013a, bi2014a, bnci2014_001, bnci2014_004,
-    bnci2014_008, bnci2015_001, cho2017, dreamer_arousal, dreamer_valence,
-    dreyer2023, eegmat, epflp300, erpcore2021_n170, hinss2021,
-    kim2025betarange, lee2019_mi, liu2024, nakanishi2015, physionet_mi,
-    shin2017a, weibo2014
-  epilepsy (11):
-    aub_med, bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1,
-    sz2, tuab, tusz
-  sleep (17):
-    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros, parkinson,
-    physionet2026, shhs, sleep_edf, sleep_edf_expanded, stages, ucddb, wsc
-  additionally loadable, not in the paper: 138 MOABB datasets
-  --list-datasets shows all 188; --list-datasets --paper-only shows the paper's cohorts
+    bnci2014_008, bnci2015_001, dreamer_arousal, dreamer_valence,
+    dreyer2023, eegmat, epflp300, erpcore2021_n170, kim2025betarange,
+    liu2024, nakanishi2015, shin2017a, weibo2014
+  epilepsy (10):
+    bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab,
+    tusz
+  sleep (15):
+    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros,
+    physionet2026, shhs, sleep_edf_expanded, stages, ucddb, wsc
+  also readable, not in the paper: aub_med, cho2017, hinss2021, lee2019_mi,
+    parkinson, physionet_mi, sleep_edf and 138 MOABB datasets
+  `neuroatlas list datasets --all` lists all 188
 
 tasks (--task):
   arousal_detection, attention_probe, attention_probe_patient, brain_age,
   linear_probe, lstm_probe, native_head_eval, patient_classification,
   respiratory_event_detection, seizure_detection
-  presets in src/neuroatlas/configs/tasks/:
+  task presets:
     arousal, brain_age, cognitive, limb, mass_arousal, osa, pathology,
     respiratory, sex, sleep_staging
 
@@ -956,8 +954,8 @@ models (--models, comma-separated families or checkpoint ids):
   eegpt, labram, moirai, moment, neurogpt, neurolm, neurorvq, reve,
   seizure_transformer, sleep_transformer, sleepfm, sleepyco, steegformer
 
-for one dataset's --set keys and label modes:
-  ... --dataset <slug> --help
+for one dataset's --set keys and label modes, add --dataset DATASET --help:
+  neuroatlas embed --dataset hmc --help
 ```
 
 
@@ -966,101 +964,117 @@ for one dataset's --set keys and label modes:
 Fit a probe on extracted embeddings.
 
 ```
-usage: neuroatlas probe [-h] [--config CONFIG] [--dataset DATASET] [-m MODELS]
-                        [--task TASK] [--set KEY=VALUE] [--checkpoint MODEL=PATH]
-                        [--folds FOLDS] [--data-root DATA_ROOT]
-                        [--batch-size BATCH_SIZE] [--num-workers NUM_WORKERS]
+usage: neuroatlas probe [-h] [--config FILE] [--dataset DATASET] [-m MODELS]
+                        [--task TASK] [--set KEY=VALUE] [--checkpoint ID=PATH]
+                        [--folds FOLDS] [--data-root DIR] [--batch-size N]
+                        [--num-workers N]
                         [--probe-type {linear,sklearn_linear,nonlinear}]
-                        [--hidden-dims HIDDEN_DIMS] [--max-iter MAX_ITER]
-                        [--class-weight {balanced}]
-                        [--selection-metric SELECTION_METRIC] [--tune-c TUNE_C]
-                        [--aggregation AGGREGATION] [--seeds SEEDS]
+                        [--hidden-dims N,N] [--max-iter N] [--class-weight {balanced}]
+                        [--selection-metric METRIC] [--tune-c C,C,...]
+                        [--aggregation NAME[,NAME]] [--seeds N,N,...]
                         [--seed-mode {fold,shared}] [--pooling {mean,per_patch}]
-                        [--seed SEED] [--output-root OUTPUT_ROOT]
-                        [--cache-root CACHE_ROOT] [--reprobe] [--extract-only]
-                        [--embed-chunk K/N] [--no-recording-norm]
+                        [--seed N] [--output-root DIR] [--cache-root DIR] [--reprobe]
+                        [--extract-only] [--embed-chunk K/N] [--no-recording-norm]
                         [--no-amplitude-scale] [--dry-run] [--list-tasks]
 
-Fit a probe on extracted embeddings for any dataset/model/task.
+Fit a probe on extracted embeddings: any dataset, checkpoint and task.
 
 options:
   -h, --help            show this help message and exit
-  --config CONFIG       Run a JSON benchmark config verbatim (the former `benchmark`
-                        entrypoint). Mutually exclusive with --dataset.
-  --dataset DATASET     DatasetSpec slug.
+  --config FILE         Run a benchmark config file (JSON) as written; not with
+                        --dataset.
+  --dataset DATASET     A dataset name (`neuroatlas list datasets --all`).
   -m MODELS, --models MODELS
                         An alias (all_fm, all_ts, all_supervised, all_random), a
                         group, a family or checkpoint ids, comma-separated; `all` (the
-                        default) is every checkpoint in the registry. See `neuroatlas
-                        list aliases`.
-  --task TASK           Task slug or preset name. Default: the dataset's
-                        DatasetSpec.default_task.
-  --set KEY=VALUE       Dataset config override, repeatable.
-  --checkpoint MODEL=PATH
-                        Override a checkpoint path, repeatable.
-  --folds FOLDS         Fold indices: '0,1,2' or a range '0-4'. Default: the dataset's
-                        fold count.
-  --data-root DATA_ROOT
-  --batch-size BATCH_SIZE
-  --num-workers NUM_WORKERS
+                        default) is every checkpoint (`neuroatlas list models`). See
+                        `neuroatlas list aliases`.
+  --task TASK           A task or preset (`neuroatlas list tasks`). Default: the
+                        dataset's own task.
+  --set KEY=VALUE       Change one of the dataset's settings, repeatable; the same
+                        --set as the embed that made the embeddings (`neuroatlas probe
+                        --dataset DATASET --help` lists them).
+  --checkpoint ID=PATH  Read a checkpoint's weights from PATH instead, repeatable.
+  --folds FOLDS         Fold indices: '0,1,2' or a range '0-4'. Default: every fold of
+                        the dataset.
+  --data-root DIR       Read the dataset from DIR instead of its configured folder.
+  --batch-size N        Windows per batch (default: the dataset's own).
+  --num-workers N       Data-loading worker processes (default: the dataset's own,
+                        else the CPUs this job may use minus one, at most 16).
   --probe-type {linear,sklearn_linear,nonlinear}
-  --hidden-dims HIDDEN_DIMS
-                        Hidden sizes for --probe-type nonlinear.
-  --max-iter MAX_ITER
+                        linear: the benchmarks' logistic regression (default);
+                        sklearn_linear: the same; nonlinear: an MLP.
+  --hidden-dims N,N     Hidden sizes for --probe-type nonlinear.
+  --max-iter N          The solver's iteration cap (default 10000; the BCI benchmarks
+                        pass 1000, and seizure detection keeps its 500 unless given
+                        another).
   --class-weight {balanced}
-  --selection-metric SELECTION_METRIC
-                        Validation metric that picks the probe's C (and seed). Seizure
-                        detection: auprc (the paper's), auroc, or event_sens_fa_auc
-                        (the event-level Sens@FA AUC on the validation fold).
-  --tune-c TUNE_C       Comma-separated C values for the regularisation sweep.
-  --aggregation AGGREGATION
+                        balanced: weight each class by the inverse of its frequency
+                        (default: unweighted, unless the task fixes it).
+  --selection-metric METRIC
+                        Validation metric that picks the seed. Seizure detection also
+                        ranks its C grid by it: auprc (the paper's), auroc, or
+                        event_sens_fa_auc (the event-level Sens@FA AUC on the
+                        validation fold); the other logistic-regression probes choose
+                        their --tune-c C on validation Cohen's kappa.
+  --tune-c C,C,...      Comma-separated C values for the regularisation sweep (a
+                        logistic-regression probe; a task that fits none refuses it).
+  --aggregation NAME[,NAME]
                         Subject aggregation for subject-level tasks, e.g. 'mean' or
                         'mean,mean_std' (runs once per value).
-  --seeds SEEDS
+  --seeds N,N,...       The probe's seeds, comma-separated, with --seed-mode shared
+                        (default 0,1,2).
   --seed-mode {fold,shared}
+                        fold (default): one seed per fold, the fold's number; shared:
+                        every fold fits each of --seeds.
   --pooling {mean,per_patch}
                         Which cached embeddings to probe, for each window. mean: the
                         one vector averaged over that window's patch tokens.
                         per_patch: that window's tokens kept separate. Must match what
                         `embed --pooling` produced.
-  --seed SEED           Global random seed.
-  --output-root OUTPUT_ROOT
-  --cache-root CACHE_ROOT
-                        Embedding cache root. Default: $EEG_CACHE_ROOT, else the
-                        shared cache.
+  --seed N              Global random seed.
+  --output-root DIR     Where results.json and the fold probes are written (default:
+                        $NEUROATLAS_OUTPUT_ROOT, else
+                        $NEUROATLAS_HOME/artifacts/benchmarks, by dataset and task).
+  --cache-root DIR      Where the embeddings are read. Default: the cache_root setting
+                        ($EEG_CACHE_ROOT), else
+                        $NEUROATLAS_HOME/artifacts/embedding_cache.
   --reprobe             Fit every fold again. Without it, a fold whose predictions.npz
                         is already in its probe folder -- same probe and task
                         settings, dataset settings, fold, seeds, weights and
                         embeddings -- is not fitted again: its metrics are recomputed
                         from the saved predictions.
-  --extract-only        Extract embeddings and exit (prefer `embed`).
-  --embed-chunk K/N
-  --no-recording-norm
-  --no-amplitude-scale
-  --dry-run             Print the resolved config as JSON and exit.
-  --list-tasks          List registered tasks and presets, then exit.
+  --extract-only        Extract the embeddings and exit (what `neuroatlas embed`
+                        does).
+  --embed-chunk K/N     With --extract-only: extract subject chunk K of N, e.g. 0/4.
+  --no-recording-norm   Probe the embeddings of `embed --no-recording-norm` (an
+                        ablation).
+  --no-amplitude-scale  Probe the embeddings of `embed --no-amplitude-scale` (an
+                        ablation).
+  --dry-run             Print the resolved settings as JSON and exit without probing.
+  --list-tasks          List the tasks and their presets, then exit.
 
-datasets (--dataset):
-  bci (22):
+the paper's datasets (--dataset), 43:
+  bci (18):
     arithmetic_task, bi2013a, bi2014a, bnci2014_001, bnci2014_004,
-    bnci2014_008, bnci2015_001, cho2017, dreamer_arousal, dreamer_valence,
-    dreyer2023, eegmat, epflp300, erpcore2021_n170, hinss2021,
-    kim2025betarange, lee2019_mi, liu2024, nakanishi2015, physionet_mi,
-    shin2017a, weibo2014
-  epilepsy (11):
-    aub_med, bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1,
-    sz2, tuab, tusz
-  sleep (17):
-    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros, parkinson,
-    physionet2026, shhs, sleep_edf, sleep_edf_expanded, stages, ucddb, wsc
-  additionally loadable, not in the paper: 138 MOABB datasets
-  --list-datasets shows all 188; --list-datasets --paper-only shows the paper's cohorts
+    bnci2014_008, bnci2015_001, dreamer_arousal, dreamer_valence,
+    dreyer2023, eegmat, epflp300, erpcore2021_n170, kim2025betarange,
+    liu2024, nakanishi2015, shin2017a, weibo2014
+  epilepsy (10):
+    bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab,
+    tusz
+  sleep (15):
+    cfs, dcsm, dod, hmc, hpap_lab_full, isruc, mass, mesa, mros,
+    physionet2026, shhs, sleep_edf_expanded, stages, ucddb, wsc
+  also readable, not in the paper: aub_med, cho2017, hinss2021, lee2019_mi,
+    parkinson, physionet_mi, sleep_edf and 138 MOABB datasets
+  `neuroatlas list datasets --all` lists all 188
 
 tasks (--task):
   arousal_detection, attention_probe, attention_probe_patient, brain_age,
   linear_probe, lstm_probe, native_head_eval, patient_classification,
   respiratory_event_detection, seizure_detection
-  presets in src/neuroatlas/configs/tasks/:
+  task presets:
     arousal, brain_age, cognitive, limb, mass_arousal, osa, pathology,
     respiratory, sex, sleep_staging
 
@@ -1069,8 +1083,8 @@ models (--models, comma-separated families or checkpoint ids):
   eegpt, labram, moirai, moment, neurogpt, neurolm, neurorvq, reve,
   seizure_transformer, sleep_transformer, sleepfm, sleepyco, steegformer
 
-for one dataset's --set keys and label modes:
-  ... --dataset <slug> --help
+for one dataset's --set keys and label modes, add --dataset DATASET --help:
+  neuroatlas embed --dataset hmc --help
 ```
 
 
@@ -1079,7 +1093,7 @@ for one dataset's --set keys and label modes:
 Reconstruct hypnograms and sleep-architecture features.
 
 ```
-usage: neuroatlas hypnogram [-h] [--datasets [SLUG ...]] [--dry-run]
+usage: neuroatlas hypnogram [-h] [--datasets [DATASET ...]] [--dry-run]
                             [--results-dir RESULTS_DIR] [--models MODELS]
                             [--folds FOLDS] [--splits SPLITS] [--group-by GROUP_BY]
                             [--compute-metrics] [--output OUTPUT]
@@ -1088,7 +1102,7 @@ usage: neuroatlas hypnogram [-h] [--datasets [SLUG ...]] [--dry-run]
 
 Hypnogram reconstruction and sleep-architecture features.
 
-The fifth verb, and the only paper result that is not a probe: Appendix C.2's
+The only paper result that is not a probe: Appendix C.2's
 hypnogram features (Table 2) are computed *from* sleep-staging predictions, so
 this runs after `probe --task sleep_staging` rather than instead of it. There
 is no embedding pass and no model here.
@@ -1113,7 +1127,6 @@ Where it looks for a dataset's staging results (first match wins; pass
   <output>/sleep_stage/<dataset>/          written by `neuroatlas run sleep_stage`
   <output>/sleep_stage/<dataset>/<model>/  the same, one job per model (`submit`)
   <output>/<dataset>/sleep_staging/        written by `neuroatlas probe --task sleep_staging`
-  <output>/<dataset>/.../sklearn_linear/   the layout of the paper's own runs
 
 <output> is the output root (the output_root setting, or $NEUROATLAS_OUTPUT_ROOT).
 Each results directory gets its hypnograms.json; the feature CSVs go to the
@@ -1129,15 +1142,14 @@ Stage encoding is 0=W, 1=N1, 2=N2, 3=N3, 4=REM, at 30 s per epoch.
 
 positional arguments:
   {reconstruct,features}
-    reconstruct         probe results -> hypnograms.json
-    features            hypnograms.json -> feature CSVs
+    reconstruct         Rebuild hypnograms.json from the sleep staging results.
+    features            Compute the feature CSVs from hypnograms.json.
 
 options:
   -h, --help            show this help message and exit
-  --datasets [SLUG ...]
-                        Dataset slugs (default: every one with staging results: dcsm,
-                        dod, isruc, mass, physionet2026, sleep_edf_expanded, ucddb,
-                        wsc).
+  --datasets [DATASET ...]
+                        Datasets (default: every one with staging results: dcsm, dod,
+                        isruc, mass, physionet2026, sleep_edf_expanded, ucddb, wsc).
   --dry-run             Print what would run and exit.
   --results-dir RESULTS_DIR
                         Probe-results directory holding results.json and probes/. Omit
@@ -1162,7 +1174,7 @@ usage: neuroatlas hypnogram reconstruct [-h] [--results-dir RESULTS_DIR]
                                         [--models MODELS] [--folds FOLDS]
                                         [--splits SPLITS] [--group-by GROUP_BY]
                                         [--compute-metrics] [--output OUTPUT]
-                                        [--datasets [SLUG ...]] [--dry-run]
+                                        [--datasets [DATASET ...]] [--dry-run]
 
 options:
   -h, --help            show this help message and exit
@@ -1176,7 +1188,7 @@ options:
                         group, site_id).
   --compute-metrics     Also compute classification metrics per group.
   --output OUTPUT       Output JSON (default: <results-dir>/hypnograms.json).
-  --datasets [SLUG ...]
+  --datasets [DATASET ...]
   --dry-run
 ```
 
@@ -1185,13 +1197,13 @@ options:
 
 ```
 usage: neuroatlas hypnogram features [-h] [--output-dir OUTPUT_DIR] [--no-summary]
-                                     [--datasets [SLUG ...]] [--dry-run]
+                                     [--datasets [DATASET ...]] [--dry-run]
 
 options:
   -h, --help            show this help message and exit
   --output-dir OUTPUT_DIR
                         Where the CSVs are written (default: the output root).
   --no-summary          Skip the per-feature error summary.
-  --datasets [SLUG ...]
+  --datasets [DATASET ...]
   --dry-run
 ```

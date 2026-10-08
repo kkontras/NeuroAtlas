@@ -24,7 +24,7 @@ import torch.nn as nn
 
 from .base import BenchmarkBackbone
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     clip_uv,
@@ -45,7 +45,7 @@ _EMBED_DIM = 200
 _N_BRANCHES = 4
 _CLIP_UV = 500.0  # paper §3.1
 
-# ESAT token-budget channel cap: when C × n_time > 256, keep channels
+# Token-budget channel cap (_PAPER_PREPROC_DATASETS): when C × n_time > 256, keep channels
 # in sleep-staging priority order.
 _CHANNEL_PRIORITY = [
     b'c3', b'c4', b'f3', b'f4', b'o1', b'o2',
@@ -166,12 +166,13 @@ class NeuroRVQBackbone(BenchmarkBackbone):
 
     def __init__(self, spec: CheckpointSpec):
         super().__init__(spec)
-        checkpoint_path = Path(spec.checkpoint_path or "")
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(
-                f"NeuroRVQ checkpoint not found at {checkpoint_path}. "
-                "Download from https://huggingface.co/ntinosbarmpas/NeuroRVQ"
-            )
+        # what `neuroatlas models download` does: absent weights are fetched
+        # when this run downloads, else refused with the command that does
+        from ._checkpoint_download import ensure_checkpoint
+        checkpoint_path = ensure_checkpoint(
+            spec.checkpoint_path or "", spec.source_type, spec.source_reference,
+            identifier=spec.identifier,
+        )
 
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.model = _build_model(self.device)
@@ -234,8 +235,8 @@ class NeuroRVQBackbone(BenchmarkBackbone):
         meta = batch.get("meta") or [{}]
         dataset = meta[0].get("dataset", "") if meta else ""
 
-        if dataset in _ESAT_DATASETS:
-            # ── ESAT preprocessing pipeline ──────────────────────────
+        if dataset in _PAPER_PREPROC_DATASETS:
+            # ── _PAPER_PREPROC_DATASETS preprocessing ────────────────
             assert_batch_homogeneity(meta, where="neurorvq:input")
 
             # Unit → µV (NeuroRVQ's ±500 µV clip operates in µV space)
@@ -309,7 +310,7 @@ class NeuroRVQBackbone(BenchmarkBackbone):
             # Resample to 200 Hz
             meta_sfreq = read_sampling_rate(meta[0]) if meta else None
             src_sfreq_f = float(meta_sfreq) if meta_sfreq else float(_PRETRAIN_SFREQ)
-            _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+            _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
             x, resample_method = resample_poly_with_fallback(x, src_sfreq_f, _PRETRAIN_SFREQ, backend=_backend)
             x = snap_to_epoch_length(x, float(_PRETRAIN_SFREQ), meta)
 
@@ -341,7 +342,7 @@ class NeuroRVQBackbone(BenchmarkBackbone):
             features = features.mean(dim=1)
             return features.detach().cpu().numpy()
 
-        # ── Non-ESAT path (unchanged) ────────────────────────────────
+        # ── Every other dataset ──────────────────────────────────────
         # 1. Resolve channel mapping once
         self._resolve_channels(batch)
 
@@ -430,8 +431,8 @@ class NeuroRVQBackbone(BenchmarkBackbone):
         meta = batch.get("meta") or [{}]
         dataset = meta[0].get("dataset", "") if meta else ""
 
-        if dataset in _ESAT_DATASETS:
-            # ── ESAT preprocessing (mirrors extract_embeddings) ──────
+        if dataset in _PAPER_PREPROC_DATASETS:
+            # ── _PAPER_PREPROC_DATASETS preprocessing (as extract_embeddings) ──
             assert_batch_homogeneity(meta, where="neurorvq_perpatch:input")
 
             unit = meta[0].get("unit") if meta else None
@@ -530,7 +531,7 @@ class NeuroRVQBackbone(BenchmarkBackbone):
             features = torch.cat([x1, x2, x3, x4], dim=-1)  # (B, seq, 800)
             return features.detach().cpu().numpy()
 
-        # ── Non-ESAT path (unchanged) ────────────────────────────────
+        # ── Every other dataset ──────────────────────────────────────
         self._resolve_channels(batch)
 
         if self._ch_mask is not None and self._ch_mask.sum() < C:

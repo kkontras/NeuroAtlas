@@ -48,7 +48,7 @@ UCDDB_STAGE_MAP: Dict[int, int] = {
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/ucddb"
 DEFAULT_AGE_CSV = f"{DEFAULT_RAW_ROOT}/SubjectDetails.csv"
 DEFAULT_AGE_XLS = f"{DEFAULT_RAW_ROOT}/SubjectDetails.xls"
 

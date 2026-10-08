@@ -52,8 +52,8 @@ WSC_ALLSCORE_MAP: Dict[str, int] = {
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/raw/wsc/polysomnography"
-DEFAULT_CSV_PATH = "${EEG_DATA_ROOT}/data/raw/wsc/datasets/wsc-dataset-0.8.0.csv"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/wsc"
+DEFAULT_CSV_PATH = "${EEG_DATA_ROOT}/wsc/datasets/wsc-dataset-0.8.0.csv"
 
 DEFAULT_CHANNELS: List[str] = [
     "C3_M2", "C4_M1", "Cz_M2", "F3_M2", "F4_M1", "O1_M2", "O2_M1", "Pz_M2",
@@ -99,8 +99,13 @@ def scan_wsc_subjects(
 
     Parses filenames like ``wsc-visit1-10119-nsrr.edf`` to extract
     subject_id and visit. Joins with the CSV for age metadata.
+
+    ``data_root`` is the dataset's folder: the EDFs and their annotation
+    files sit in it, or in the ``polysomnography`` folder NSRR serves them in.
     """
-    root = Path(data_root)
+    from neuroatlas.extensions.datasets._layout import descend
+
+    root = descend(data_root, ["polysomnography"], "*.edf")
     edf_files = sorted(f for f in os.listdir(root) if f.endswith(".edf"))
 
     # Load demographic metadata
@@ -110,11 +115,12 @@ def scan_wsc_subjects(
     # every record with age = None, cached that way, and brain age then had
     # nothing to regress on (F-069).
     if not os.path.exists(csv_path):
-        raise FileNotFoundError(
-            f"WSC demographics CSV not found: {csv_path} (dataset key csv_path). "
-            f"It ships with the NSRR download as datasets/wsc-dataset-0.8.0.csv and "
-            f"is the only source of age and sex; pass --set csv_path=<path>."
-        )
+        # It ships with the NSRR download as datasets/wsc-dataset-0.8.0.csv
+        # and is the only source of age and sex.
+        from neuroatlas.extensions.datasets._missing import no_data
+
+        raise FileNotFoundError(no_data(
+            "wsc", csv_path, "csv_path", what="no demographics table at", value="FILE"))
     df = pd.read_csv(csv_path, usecols=["wsc_id", "wsc_vst", "age", "sex"], low_memory=False)
     for _, row in df.iterrows():
         key = (str(int(row["wsc_id"])), int(row["wsc_vst"]))

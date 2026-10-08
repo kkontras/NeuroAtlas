@@ -39,17 +39,25 @@ def code(src):
 
 # =============================================================== title
 md(r"""
-# NeuroAtlas: a minimal reproduction
+# NeuroAtlas: the pipeline, step by step
 
-NeuroAtlas asks one question: are EEG foundation models actually good at EEG? This
-notebook runs the evaluation that answers it, on a slice small enough for one machine.
-Every stage is a short cell you can inspect before moving on.
+This notebook walks through what `neuroatlas run` does, one stage per cell. It runs on a
+slice of Sleep-EDF Expanded and CHB-MIT and takes a few minutes on one GPU.
 
-The pipeline is the same six steps for every task:
+By default it uses fold 0 and six subjects per split. Its numbers show how each stage
+works. The paper's numbers come from the benchmark commands:
+
+```bash
+neuroatlas run sleep_stage -m cbramod_pretrained
+neuroatlas run brain_age -m cbramod_pretrained
+neuroatlas run epilepsy --dataset chbmit -m cbramod_pretrained
+```
+
+Every task goes through the same six steps.
 
     EDF -> labelled epochs -> channel mapping -> frozen embeddings -> linear probe -> metrics
 
-Only the last step differs between tasks, and it differs a lot:
+Only the last step differs between tasks.
 
 | Task | Dataset | Reported |
 |---|---|---|
@@ -57,33 +65,27 @@ Only the last step differs between tasks, and it differs a lot:
 | Brain age | Sleep-EDF Expanded | mean absolute error and the brain age gap |
 | Seizure detection | CHB-MIT | event sensitivity and false alarms per hour |
 
-**What you need:** two public datasets, about 30 GB, no credentials. You do not need model
-weights — everything used here downloads on first run. Section 4 shows which models are
-reachable and which need the undistributed `artifacts/`.
-
-**How long:** about two and a half minutes on one GPU at default settings. `SUBJECT_LIMIT`
-(section 5) and `LIMIT_BATCHES` (section 7d) trade runtime for how seriously you can take
-the numbers; both default to small.
-
-This is a guided tour of the protocol on one fold with one seed, not a rerun of the paper's
-tables. Section 8 lists every shortcut.
+You need two open datasets, about 30 GB in total, and CBraMod's weights. Section 0 shows
+how to get them. `SUBJECT_LIMIT` in section 5 and `LIMIT_BATCHES` in section 7d set the
+size of the slice. Section 8 lists what `neuroatlas run` does differently at full scale.
 """)
 
 # =============================================================== 0. env
 md(r"""
 ## 0. Setting up
 
-One Python 3.11 kernel and this:
+Use one Python 3.11 kernel in a clone of the repository. Install the package with the
+time-series models, MOMENT and matplotlib.
 
 ```bash
-pip install numpy scipy pandas scikit-learn matplotlib torch \
-            edfio h5py pyyaml xlrd transformers safetensors momentfm chronos-forecasting \
-            easydict
+pip install -e ".[fm,ts]" -c requirements-fm.txt
+pip install --no-deps "momentfm==0.1.4"
+pip install matplotlib -c requirements-fm.txt
 ```
 
-`pyyaml` reads the channel maps in section 3; `xlrd` opens Sleep-EDF's legacy `.xls` age
-table. No `mne`, `braindecode` or `physioex` — both sleep tasks read EDF directly through
-`edfio`. No jax or uni2ts either: MOMENT and Chronos are ordinary torch plus transformers.
+The constraints file pins every package to the version the paper used. `--no-deps` stops
+momentfm from downgrading transformers and numpy. The cell below checks that every package
+the notebook imports is installed.
 """)
 
 code(r'''
@@ -99,12 +101,12 @@ REQUIRED = ["numpy", "scipy", "pandas", "sklearn", "matplotlib", "torch",
 PIP_NAMES = {"sklearn": "scikit-learn", "yaml": "pyyaml", "chronos": "chronos-forecasting"}
 
 print(f"python {platform.python_version()}")
-# Name only: an executed copy of this notebook is committed, and the full
-# interpreter path would put someone's home directory in git.
+# The environment's name only, so a shared copy of the notebook carries no home
+# directory.
 print(f"kernel {Path(sys.executable).parent.parent.name}\n")
 
-# tqdm prints an IProgress warning that quotes its install path, for the same
-# reason, and it is noise in a notebook that is not using widgets.
+# tqdm prints an IProgress warning that quotes its install path; this notebook
+# uses no widgets.
 warnings.filterwarnings("ignore", message=".*IProgress.*")
 
 missing = []
@@ -117,16 +119,19 @@ for name in REQUIRED:
         missing.append(name)
 
 if missing:
-    raise SystemExit("Install the missing packages first:\n  pip install "
-                     + " ".join(PIP_NAMES.get(name, name) for name in missing))
+    raise SystemExit("Missing: " + ", ".join(PIP_NAMES.get(name, name) for name in missing)
+                     + ". Install them with the three lines in the cell above.")
 print("\nEnvironment is complete.")
 ''')
 
 md(r"""
 ### Where your data is
 
-`REPO_ROOT` is your checkout. Set the two data roots through the environment if you keep
-corpora outside the repository.
+Start the notebook from `reproduction/`, or set `NEUROATLAS_ROOT` to your clone.
+
+The notebook reads each dataset from the folder `neuroatlas data download` puts it in.
+Run `neuroatlas data status -v` to see these folders. To read a copy somewhere else, set
+`SLEEPEDF_ROOT` or `CHBMIT_ROOT` before you start the kernel.
 """)
 
 code(r'''
@@ -138,29 +143,43 @@ if not (REPO_ROOT / "src" / "neuroatlas" / "configs" / "folds").is_dir():
     raise SystemExit(f"{REPO_ROOT} is not a NeuroAtlas checkout. Set NEUROATLAS_ROOT.")
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-SLEEPEDF_ROOT = Path(os.environ.get(
-    "SLEEPEDF_ROOT", REPO_ROOT / "data" / "sleep-edf-database-expanded-1.0.0"))
-CHBMIT_ROOT = Path(os.environ.get("CHBMIT_ROOT", REPO_ROOT / "chbmit_cache" / "raw"))
+import neuroatlas.api   # applies ~/.neuroatlas/config.yaml: the data root, each dataset's folder
+from neuroatlas.data import raw_location
+
+
+def dataset_folder(variable, dataset):
+    """$variable when set, else the folder `neuroatlas data download` puts the dataset in."""
+    if os.environ.get(variable):
+        return Path(os.environ[variable]).expanduser()
+    _, path, _ = raw_location(dataset)
+    if path is None:
+        raise SystemExit(f"No data root is set, so {dataset}'s folder is not known: run "
+                         f"`neuroatlas config init --data-root DIR`, or set {variable}.")
+    return path
+
+
+SLEEPEDF_ROOT = dataset_folder("SLEEPEDF_ROOT", "sleep_edf_expanded")
+CHBMIT_ROOT = dataset_folder("CHBMIT_ROOT", "chbmit")
 
 WORK = REPO_ROOT / "artifacts" / "minimal_repro"
 WORK.mkdir(parents=True, exist_ok=True)
 
-FOLD = 0        # single fold, taken from src/neuroatlas/configs/folds/
+FOLD = 0        # fold 0 of the frozen fold files (section 1)
 SEED = 0
 
 # Sleep is scored in 30 s epochs, which is the clinical convention and what the
 # Sleep-EDF hypnograms annotate. Seizure detection uses 10 s windows with a 10 s
-# stride, the w10s_s10s setting the epilepsy runners use; see the note in section 1.
+# stride, the epilepsy benchmark's setting; see the note in section 1.
 EPOCH_SECONDS = 30.0
 CHBMIT_WINDOW_SECONDS = 10.0
-# The supervised seizure baseline was pretrained on the 19 channel unipolar 10-20
-# montage, so it rejects bipolar pair names. Use unipolar so both it and the
-# foundation models see the same input.
+# The unipolar montage, so the supervised seizure baseline (pretrained on the
+# 19-channel unipolar 10-20 montage) and the foundation models see the same input.
+# The epilepsy benchmark reads CHB-MIT in its bipolar montage (section 8).
 CHBMIT_MONTAGE = "unipolar"
 
 def show(path):
-    """Relative to the repository when possible, so an executed copy of this
-    notebook does not carry someone's absolute home directory into git."""
+    """Relative to the repository when possible, so a shared copy of this
+    notebook carries no home directory."""
     try:
         return f"<repo>/{path.relative_to(REPO_ROOT)}"
     except ValueError:
@@ -168,51 +187,35 @@ def show(path):
 
 for label, path in [("repository", REPO_ROOT), ("Sleep-EDF", SLEEPEDF_ROOT),
                     ("CHB-MIT", CHBMIT_ROOT), ("outputs", WORK)]:
-    state = "found" if path.exists() else "not downloaded yet"
+    state = "found" if path.exists() else "missing"
     print(f"  {label:11s} {show(path):46s} [{state}]")
 ''')
 
 md(r"""
 ### Getting the data
 
-Sleep-EDF Expanded, from PhysioNet, about 8 GB — used in sections 5 to 7:
+Download both datasets with the tool.
 
 ```bash
-wget -r -N -c -np -nH --cut-dirs=1 -P "$(dirname "$SLEEPEDF_ROOT")" \
-     https://physionet.org/files/sleep-edfx/1.0.0/
+neuroatlas data download sleep_edf_expanded --mirror aws   # 8.1 GB, sections 2 to 7c
+neuroatlas data download chbmit                             # 21.7 GB, section 7d
 ```
 
-CHB-MIT, from Zenodo under ODC-BY, about 22 GB — used in section 7d:
-
-```bash
-mkdir -p "$CHBMIT_ROOT" && cd "$CHBMIT_ROOT"
-curl -L -o BIDS_CHB-MIT.zip \
-     "https://zenodo.org/records/10259996/files/BIDS_CHB-MIT.zip?download=1"
-unzip -q BIDS_CHB-MIT.zip        # yields $CHBMIT_ROOT/BIDS_CHB-MIT/sub-01 ...
-```
-
-That is Zenodo record 10259996, the SzCORE BIDS conversion rather than the raw
-PhysioNet release; every loader here expects the BIDS form. `fetch --dataset chbmit`
-prints the same thing from the manifest.
-
-CHB-MIT stands in for TUSZ, the paper's epilepsy cohort, which needs a signed Temple
-University agreement and so cannot appear in a notebook anyone can run. The task and the
-event metrics are identical; the absolute numbers are not comparable.
+CHB-MIT is one of the paper's ten epilepsy datasets, and it is open. The download is the
+SzCORE BIDS conversion on Zenodo (record 10259996), which is what the benchmark reads. If
+CHB-MIT is missing, the notebook skips section 7d.
 """)
 
 # =============================================================== 1. folds
 md(r"""
 ## 1. Who trains, who is tested
 
-Every number below depends on one decision: which people the model learns from, and which
-it is judged on. So it comes first, before any EEG file is opened.
+Every number below depends on which subjects the model learns from and which it is tested
+on. So the split comes first, before any EEG file is opened.
 
-The splits are **not** computed here. They were decided once, written to
-`src/neuroatlas/configs/folds/`, and committed. This notebook reads them as they are — which is the only
-way your results can be compared with the paper's. Recomputing them would let a library
-version or a seed quietly change who is in which group.
-
-Each file holds five folds; this notebook uses fold 0 throughout.
+The notebook does not compute the splits. It reads the frozen fold files that ship with
+the package, the same files `neuroatlas run` reads. Each file holds five folds, and this
+notebook uses fold 0 throughout.
 """)
 
 code(r'''
@@ -228,7 +231,7 @@ CHBMIT_MANIFEST = "chbmit"
 sleep_split = load_fold_split(SLEEP_MANIFEST, FOLD)
 chbmit_split = load_fold_split(CHBMIT_MANIFEST, FOLD)
 
-print(f"Derivation rule for partition style manifests:\n  {SPLIT_RULE}\n")
+print(f"How fold k is read from a file of five partitions:\n  {SPLIT_RULE}\n")
 for split in (sleep_split, chbmit_split):
     print(split.summary())
     print(f"    read from {split.source_path.relative_to(REPO_ROOT)}")
@@ -237,14 +240,12 @@ for split in (sleep_split, chbmit_split):
 md(r"""
 ### Check one: is a subject on both sides of the split?
 
-Manifests list *recordings*, not subjects, and Sleep-EDF Cassette records two nights per
-person. A split that is perfectly disjoint over recordings can still put night 1 in
-training and night 2 in test, which inflates every number that follows.
+Fold files list recordings, not subjects. Sleep-EDF Cassette has two nights per subject.
+So a split can keep recordings apart and still put night 1 of a subject in training and
+night 2 in test.
 
-This is not hypothetical: an earlier Sleep-EDF manifest here split per recording and put
-62 percent of its fold-0 test subjects into training too. It was removed once this check
-existed. Below, the manifest we use is verified clean, then deliberately broken to show
-what the check catches. Run it against any manifest you add.
+The cell below checks the folds the benchmark uses. No subject is on both sides. It then
+moves one recording across to show what the check catches.
 """)
 
 code(r'''
@@ -266,7 +267,7 @@ from dataclasses import replace
 nights = Counter(recording_to_subject(r) for r in sleep_split.test)
 two_nights = next((s for s, n in nights.items() if n > 1), None)
 if two_nights is None:
-    print("\n(no subject has two nights in this fold's test split; nothing to demonstrate)")
+    print("\nNo subject has two nights in this fold's test split, so there is nothing to show.")
 else:
     moved = [r for r in sleep_split.test if recording_to_subject(r) == two_nights][-1]
     leaky = replace(sleep_split,
@@ -280,16 +281,15 @@ else:
 ''')
 
 md(r"""
-### Check two: does your copy match what the split expects?
+### What the CHB-MIT split holds
 
-The CHB-MIT manifest records how many windows each split should hold. Comparing after
-preprocessing is the cheapest protection against a partial download or a drifted setting —
-you find out now rather than after the numbers exist.
+The CHB-MIT fold file records how many windows each split holds in a complete copy. A
+partial download or another window length gives other counts.
 """)
 
 code(r'''
 if not chbmit_split.stats:
-    raise SystemExit("The CHB-MIT manifest has lost its stats block.")
+    raise SystemExit("The CHB-MIT fold file has no window counts.")
 
 print(f"CHB-MIT fold 0, expected counts at {CHBMIT_WINDOW_SECONDS:g} s windows "
       f"with {CHBMIT_WINDOW_SECONDS:g} s stride:\n")
@@ -309,24 +309,22 @@ print("\nNote how rare the positive class is. This is why section 7 reports even
 md(r"""
 ## 2. From EDF to labelled epochs
 
-Sleep-EDF ships a PSG file and a hypnogram file per recording. The hypnogram is an
-annotation track of onsets, durations and stage names, where one annotation can span many
-epochs. Preprocessing turns that pair into fixed-length epochs with one label each.
+Sleep-EDF ships two files per recording, the PSG and the hypnogram. The hypnogram lists
+stage annotations with an onset and a duration, and one annotation can cover many epochs.
+Preprocessing turns the pair into 30 second epochs with one label each.
 
-Four decisions, all visible in the code rather than buried in a config:
+The code below makes four decisions.
 
-1. **Stages.** 3 and 4 merge into N3 (AASM). Movement and unscored are dropped, not
-   given a class.
-2. **Epoch length.** 30 seconds.
-3. **Wake cropping.** Cassette recordings include hours of wake either side of the night;
-   keeping it all lets Wake dominate. We keep 30 minutes past the first and last sleep
-   epoch, as the harness does.
-4. **Units.** Already microvolts, so no scaling — but models are told the unit explicitly,
-   because several normalise by it.
+1. Stages 3 and 4 merge into N3 (AASM). Movement and unscored epochs are dropped.
+2. Epochs are 30 seconds long.
+3. Cassette recordings include hours of wake before and after the night, and kept whole,
+   Wake would dominate. The notebook keeps 30 minutes of wake before the first sleep
+   epoch and after the last one. `neuroatlas run` crops Sleep-EDF the same way.
+4. The signals are already in microvolts, so nothing is scaled. The models still get the
+   unit, because several of them normalise by it.
 
-Both subsets are read, Cassette and Telemetry, because the fold manifest covers all 197
-recordings. Reading only one would evaluate on part of the split while reporting the
-split's name.
+The notebook reads both subsets, Cassette and Telemetry. The fold file covers all 197
+recordings, and reading one subset would test on part of the split.
 """)
 
 code(r'''
@@ -348,7 +346,7 @@ STAGE_NAMES = ["W", "N1", "N2", "N3", "REM"]
 def find_recordings(root, subsets=("sleep-cassette", "sleep-telemetry"), limit=None):
     """Pair each PSG file with its hypnogram. Returns a list of dicts.
 
-    Both subsets by default: the fold manifest covers all 197 recordings, 153
+    Both subsets by default: the fold file covers all 197 recordings, 153
     Cassette and 44 Telemetry, and reading only one of them would quietly
     evaluate on a subset of the split it claims to use.
     """
@@ -434,7 +432,7 @@ def load_epochs(recording, channels=("EEG Fpz-Cz", "EEG Pz-Oz"),
 
 md(r"""
 Run it on one recording first. If Wake is 80 percent of the epochs, the cropping did not
-take effect and everything downstream will mislead.
+work.
 """)
 
 code(r'''
@@ -446,16 +444,16 @@ print(f"Found {len(recordings)} recordings "
       f"from {len({r['subject_id'] for r in recordings})} subjects "
       f"({by_subset['SC']} Cassette, {by_subset['ST']} Telemetry).")
 
-# The manifest lists every recording it expects, so say plainly whether this
+# The fold file lists every recording it expects, so say plainly whether this
 # matches. A silent shortfall here is the difference between running the split
-# the manifest describes and running some subset of it.
+# the file describes and running some subset of it.
 expected = set(sleep_split.train) | set(sleep_split.val) | set(sleep_split.test)
 present = {r["recording_id"][:7] for r in recordings}
 if expected - present:
-    print(f"  WARNING: {len(expected - present)} recordings in the manifest are "
+    print(f"  WARNING: {len(expected - present)} recordings in the fold file are "
           f"not on disk, e.g. {sorted(expected - present)[:4]}")
 else:
-    print(f"  all {len(expected)} recordings the fold manifest names are present\n")
+    print(f"  all {len(expected)} recordings the fold file names are present\n")
 
 example = recordings[0]
 # The two EEG derivations Sleep-EDF provides. Section 3 covers how these names get
@@ -477,12 +475,11 @@ for value, count in zip(*np.unique(labels, return_counts=True)):
 ''')
 
 md(r"""
-Now look at what the model is actually handed: one 30 second epoch per stage.
+Now look at what the model gets, one 30 second epoch per stage.
 
-You can see why the task is possible — Wake is fast and low amplitude, N3 is slow high
-amplitude delta, N2 sits between with spindles and K complexes. You can also see why N1 is
-the class every model struggles with: it is a transition that looks like a slightly slower
-Wake, and expert scorers disagree about it more than any other stage.
+Wake is fast and low in amplitude. N3 is slow, high-amplitude delta. N2 sits between them,
+with spindles and K complexes. N1 is the hard class. It is a transition that looks like
+slightly slower Wake, and expert scorers disagree on it more than on any other stage.
 """)
 
 code(r'''
@@ -518,13 +515,15 @@ plt.show()
 md(r"""
 ## 3. Matching electrode names to each model
 
-Every model was pretrained on its own electrode names and none agree. Sleep-EDF gives
-`EEG Fpz-Cz` and `EEG Pz-Oz`; LaBraM wants `FPZ` and `PZ`, REVE wants single positions,
-CBraMod its own labels. Getting this wrong crashes nothing — it feeds a model a channel it
-has never seen, and the embeddings quietly get worse.
+Each model was pretrained with its own electrode names, and they do not agree. Sleep-EDF
+records `EEG Fpz-Cz` and `EEG Pz-Oz`. LaBraM expects `FPZ` and `PZ`, REVE expects `Fpz`
+and `Pz`, and CBraMod takes the bipolar labels as they are. A wrong mapping does not
+crash. The model gets a channel it has never seen, and the embeddings get worse without
+a warning.
 
-So the mapping is data, not code: `src/neuroatlas/configs/channel_maps/<dataset>.yaml`, one file per
-dataset, with a `per_model` block per model family.
+So the mapping lives in data, not code. Each dataset has one file,
+`src/neuroatlas/configs/channel_maps/<dataset>.yaml`, with a `per_model` block for each
+model family.
 """)
 
 code(r'''
@@ -578,62 +577,43 @@ if skipped:
 md(r"""
 ## 4. Choosing models
 
-The paper's argument needs three kinds of model:
+The paper compares three kinds of model.
 
-* **EEG foundation models**, pretrained on large EEG corpora.
-* **Generic time-series models**, never trained on EEG. If these keep pace, the claim that
-  EEG pretraining is solved does not hold.
-* **An untrained control** — same architecture, random weights. This separates "the
-  architecture suits the task" from "the pretraining helped".
+* EEG foundation models, pretrained on large EEG corpora.
+* Generic time-series models, never trained on EEG. If they keep up, EEG pretraining is
+  not what makes the difference.
+* An untrained control, with the same architecture and random weights. It tells a good
+  architecture apart from useful pretraining.
 
-Most checkpoints live in `artifacts/`, which is not distributed. The cell below sorts the
-registry into what you can and cannot run here, so the limit is explicit rather than a
-stack trace later.
+The cell below asks the tool which checkpoints are ready on this machine, as
+`neuroatlas models status` does. Fetch any other with
+`neuroatlas models download <checkpoint>`.
 """)
 
 code(r'''
+from neuroatlas import api
 from neuroatlas.benchmarking_helpers import checkpoint_registry
 
 registry = checkpoint_registry()
 by_id = registry if isinstance(registry, dict) else {c.identifier: c for c in registry}
 
+# The states `neuroatlas models status` reports, one row per checkpoint.
+status = api.models("all").set_index("checkpoint")
+READY = {"found", "in Hugging Face cache", "no weights needed"}
 
-def availability(spec):
-    """Classify how a checkpoint's weights are obtained."""
-    path = getattr(spec, "checkpoint_path", None)
-    if not path:
-        return "no weights", "random initialisation"
-    text = str(path)
-    if text.startswith("artifacts") or text.startswith("/"):
-        return "needs artifacts", text
-    if (REPO_ROOT / text).exists():
-        return "in repository", text
-    return "downloads", text
-
-
-runnable, blocked = [], []
-for identifier, spec in sorted(by_id.items()):
-    kind, detail = availability(spec)
-    (blocked if kind == "needs artifacts" else runnable).append((identifier, kind, detail))
-
-print(f"Runnable without artifacts/ ({len(runnable)} checkpoints):\n")
-for identifier, kind, detail in runnable:
-    print(f"  {identifier:28s} {kind:15s} {detail}")
-print(f"\nOut of reach here ({len(blocked)} checkpoints need artifacts/):")
-print("  " + ", ".join(i for i, _, _ in blocked[:10]) + ", ...")
+print(f"{len(status)} checkpoints, by the state of their weights on this machine:\n")
+print(status["state"].value_counts().to_string())
+print(f"\nready: {', '.join(i for i in status.index if status.at[i, 'state'] in READY)}")
+print("\n`neuroatlas models download <checkpoint>` fetches the weights of any other.")
 ''')
 
 md(r"""
-From that list: CBraMod as the EEG foundation model, MOMENT and Chronos as the generic
-ones, CBraMod with random weights as the control.
+The notebook defines four checkpoints in `MODELS`. CBraMod is the EEG foundation model,
+MOMENT and Chronos are the generic ones, and CBraMod with random weights is the control.
+The walkthrough embeds with CBraMod, set by `MODEL_FOR_WALKTHROUGH` in section 5.
 
-Two gaps follow from having no `artifacts/`: no supervised sleep baseline (CoRe-Sleep,
-SleePyCo and SleepTransformer all need local weights), and no REVE, NeuroLM, LaBraM, BIOT
-or EEGPT. CBraMod is the one EEG foundation model in the paper whose weights come from
-Hugging Face.
-
-The cell also prints what each model expects as input, because they disagree and it
-changes preprocessing.
+The cell below also lists two supervised baselines, CoRe-Sleep and Seizure-Transformer. It
+prints each checkpoint's role, embedding size and state.
 """)
 
 code(r'''
@@ -646,60 +626,33 @@ MODELS = {
     "chronos_t5_small":    ("chronos", "ChronosBackbone", "generic time series model"),
 }
 
-# Task specific supervised baselines. These need weights under artifacts/, so they
-# are optional: if the files are absent the notebook drops them and says so rather
-# than failing. Both also need a companion file, listed here alongside.
+# Task specific supervised baselines, listed with the state of their weights
+# (`neuroatlas models download <checkpoint>` fetches them).
 SUPERVISED = {
     "core_sleep_shhs_fold0": (
-        "core_sleep", "CoreSleepBackbone", "supervised sleep baseline",
-        ["artifacts/models/shhs/core_sleep_pretrained_fold0.pth.tar",
-         "artifacts/models/shhs/stft_norm_eeg.npz"]),
+        "core_sleep", "CoreSleepBackbone", "supervised sleep baseline"),
     "seizure_transformer_pretrained": (
-        "seizure_transformer", "SeizureTransformerBackbone", "supervised seizure baseline",
-        ["artifacts/models/supervised/seizure_transformer/model.pth"]),
+        "seizure_transformer", "SeizureTransformerBackbone", "supervised seizure baseline"),
 }
 
 # CBraMod's pretraining window. A 30 s sleep epoch is embedded as three of these.
 CBRAMOD_WINDOW_SECONDS = 10.0
 
-
-LFS_MAGIC = b"version https://git-lfs"
-
-
-def weights_present(identifier):
-    """True when every file a supervised baseline needs is on disk and usable.
-
-    Size alone is not a reliable test: the CoRe-Sleep normalisation stats are a
-    legitimate 2.5 kB npz. What matters is whether the file is a Git LFS pointer
-    stub standing in for content that was never fetched, which is detectable from
-    its first bytes.
-    """
-    for relative in SUPERVISED[identifier][3]:
-        path = REPO_ROOT / relative
-        if not path.exists():
-            return False, f"missing {relative}"
-        with open(path, "rb") as handle:
-            if handle.read(len(LFS_MAGIC)) == LFS_MAGIC:
-                return False, f"{relative} is an unfetched Git LFS pointer"
-    return True, "available"
-
-
 AVAILABLE_SUPERVISED = {}
 for identifier in SUPERVISED:
-    ok, why = weights_present(identifier)
-    if ok:
-        AVAILABLE_SUPERVISED[identifier] = SUPERVISED[identifier][:3]
-    print(f"  supervised  {identifier:32s} {why}")
+    state = status.at[identifier, "state"]
+    if state in READY:
+        AVAILABLE_SUPERVISED[identifier] = SUPERVISED[identifier]
+    print(f"  supervised  {identifier:32s} {state}")
 
 # Everything the notebook can instantiate, keyed the same way.
-ALL_MODELS = {**MODELS, **{k: v[:3] for k, v in SUPERVISED.items()}}
+ALL_MODELS = {**MODELS, **SUPERVISED}
 
 print()
 for identifier, (_, _, role) in {**MODELS, **AVAILABLE_SUPERVISED}.items():
     spec = by_id[identifier]
-    kind, detail = availability(spec)
-    print(f"  {identifier:32s} {role:26s} dim={getattr(spec, 'embedding_dim', '?'):<5} "
-          f"{kind}")
+    print(f"  {identifier:32s} {role:26s} dim={spec.embedding_dim:<5} "
+          f"{status.at[identifier, 'state']}")
 
 
 def load_backbone(identifier):
@@ -717,17 +670,17 @@ print(f"\nDevice: {'cuda' if torch.cuda.is_available() else 'cpu'}")
 md(r"""
 ## 5. Extracting embeddings
 
-The protocol is frozen-backbone linear probing: run each epoch through the model once,
-keep the vector, never update the weights. That isolates representation quality from
-training tricks, and the expensive part happens once per model.
+The protocol is frozen-backbone linear probing. Each epoch goes through the model once,
+the notebook keeps the output vector, and the weights never change. This measures the
+representation, not the training recipe, and the expensive step runs once per model.
 
-Each batch carries the signal plus the metadata the model needs to read it — models use
-`sampling_rate` to resample, `unit` to normalise, and `channels` to look up per-electrode
-embeddings, which is where section 3's mapping is consumed.
+Each batch carries the signal and the metadata the model needs. Models use
+`sampling_rate` to resample, `unit` to normalise and `channels` to look up per-electrode
+embeddings. This is where the mapping from section 3 comes in.
 
-One wrinkle: CBraMod works on 10 second windows, not 30 second epochs. Here each epoch is
-split into three windows, embedded, and concatenated. The harness instead applies the
-per-checkpoint `runtime_overrides`, so CBraMod numbers here will not match the paper's.
+CBraMod was pretrained on 10 second windows. The notebook cuts each 30 second epoch into
+three such windows and concatenates the three vectors. `neuroatlas run` gives CBraMod the
+whole 30 second epoch and gets one embedding per epoch, as in App. C.2 of the paper.
 """)
 
 code(r'''
@@ -782,11 +735,11 @@ print(f"  finite {np.isfinite(sample).all()}")
 ''')
 
 md(r"""
-Now the full pass over fold 0.
+Now run the full pass over fold 0.
 
-**This is the slow cell.** Fold 0's three splits together cover the whole cohort, so every
-subject must be embedded. `SUBJECT_LIMIT` keeps the first N of each split so you can walk
-the notebook end to end first; any value but `None` makes the numbers illustrative.
+This is the slow cell. Fold 0's three splits together cover the whole cohort, so every
+subject gets embedded. `SUBJECT_LIMIT` keeps the first N subjects of each split, so you
+can run the whole notebook quickly first. Set it to `None` to embed all of fold 0.
 """)
 
 code(r'''
@@ -803,9 +756,9 @@ AVAILABLE_SUBJECTS = {r["subject_id"] for r in recordings}
 
 
 def subjects_in(split_name, split=sleep_split, limit=SUBJECT_LIMIT):
-    """Subjects of one split, in manifest order, restricted to what is on disk.
+    """Subjects of one split, in the fold file's order, restricted to what is on disk.
 
-    The manifest covers 197 recordings across the Cassette and Telemetry subsets.
+    The fold file covers 197 recordings across the Cassette and Telemetry subsets.
     If you downloaded only one subset, or are working from a partial copy, the
     missing subjects are dropped here rather than silently producing an empty
     split further down.
@@ -864,11 +817,11 @@ print(f"\nEmbedding matrix {X.shape}, labels {y.shape}, "
 ''')
 
 md(r"""
-Do these vectors even contain what we are about to ask a linear model to find? Project
-them onto their first two principal components and colour by true stage.
+Do these vectors hold what the linear probe is about to look for? Project them onto
+their first two principal components and colour each point by its true stage.
 
-Clear structure is strong evidence the probe has something to work with. Overlap is weak
-evidence against it — this keeps two directions out of 600.
+Clear structure is good evidence that the probe has something to work with. Overlap is
+weak evidence against it, since the plot shows two directions out of 600.
 """)
 
 code(r'''
@@ -899,14 +852,14 @@ plt.show()
 md(r"""
 ## 6. Fitting the probe
 
-Multinomial logistic regression on the frozen embeddings. Three details matter more than
-the choice of classifier:
+The probe is a multinomial logistic regression on the frozen embeddings. Three details
+matter more than the choice of classifier.
 
-1. **Split by subject, never by epoch.** Random epoch splits put neighbouring 30 second
-   windows from the same night on both sides. They are nearly identical, so accuracy
-   inflates enormously and measures nothing.
-2. **Standardisation is fitted on train only.** Otherwise test statistics leak in.
-3. **Regularisation is chosen on validation.** Test is touched exactly once, at the end.
+1. Split by subject, never by epoch. Neighbouring 30 second epochs of one night are nearly
+   identical. A random epoch split puts them on both sides, and accuracy goes up without
+   meaning anything.
+2. Fit the standardisation on the training set only. Otherwise test statistics leak in.
+3. Choose the regularisation on the validation set. The test set is used once, at the end.
 """)
 
 code(r'''
@@ -946,7 +899,8 @@ print(f"\n  chosen C={best_C:g} (validation kappa {val_kappa:.4f})")
 md(r"""
 ### The test set, once
 
-`predicted` is the only place test labels meet a prediction. All of section 7 comes from it.
+`predicted` is the only place where test labels meet a prediction. All of section 7 comes
+from it.
 """)
 
 code(r'''
@@ -975,12 +929,12 @@ for row, i in zip(confusion_matrix(truth, predicted, labels=present), present):
 ''')
 
 md(r"""
-Easier to read as a picture — each row normalised, so it shows where one true stage's
-epochs ended up. A perfect model is a bright diagonal.
+Here is the same matrix as a picture. Each row is normalised, so it shows where the
+epochs of one true stage ended up. A perfect model gives a bright diagonal.
 
-Follow the N1 row. The errors scatter into Wake, N2 and REM rather than into one
-neighbour, which is the signature of a stage the representation does not separate at all —
-different from a model that merely confuses two adjacent stages.
+Follow the N1 row. Its errors spread into Wake, N2 and REM instead of one neighbour. That
+means the representation does not separate N1 at all, which is worse than confusing two
+adjacent stages.
 """)
 
 code(r'''
@@ -1008,16 +962,15 @@ plt.show()
 md(r"""
 ## 7. The numbers that matter
 
-Per-epoch accuracy is where most sleep papers stop, and it is not the paper's main result.
-A model can be accurate per epoch and still produce a hypnogram no clinician would accept,
-because what matters clinically is properties of the *whole night* — how long the patient
-slept, how fragmented it was, when REM arrived. Two models with equal accuracy can
-disagree sharply on all three.
+Most sleep papers stop at per-epoch accuracy. The paper goes further. A model can be
+accurate per epoch and still produce a hypnogram no clinician would accept. What matters
+clinically is the whole night, such as how long the patient slept, how broken up the sleep
+was and when REM arrived. Two models with the same accuracy can disagree on all three.
 
 ### 7a. Reconstruct the hypnogram
 
-Predictions come back in extraction order, so regrouping by recording gives a hypnogram
-directly.
+Predictions come back in extraction order. Group them by recording and you have the
+hypnogram.
 """)
 
 code(r'''
@@ -1037,10 +990,9 @@ for recording_id, night in hypnograms.items():
 ''')
 
 md(r"""
-Read a hypnogram as a staircase against time, Wake at the top, N3 at the bottom, REM
-highlighted. Truth above prediction makes the failure modes obvious in a way a confusion
-matrix does not: look for REM misread as N2, and for extra transitions fragmenting the
-night.
+Read a hypnogram as a staircase over time, with Wake at the top, N3 at the bottom and REM
+highlighted. With the truth above the prediction, the failure modes are easy to see. Look
+for REM read as N2, and for extra transitions that break up the night.
 """)
 
 code(r'''
@@ -1084,18 +1036,20 @@ plt.show()
 md(r"""
 ### 7b. Clinical features
 
-What a sleep report actually contains, written out rather than imported so you can see
-what is measured:
+These are the features a sleep report contains. The notebook writes them out so you can
+see what each one measures.
 
-* **TST** — time in any stage other than Wake.
-* **Sleep efficiency** — TST over the scored recording.
-* **WASO** — Wake after the first sleep epoch.
-* **REM latency** — sleep onset to first REM.
-* **Awakenings** — transitions from sleep into Wake.
+| Feature | Definition |
+|---|---|
+| TST | time in any stage other than Wake |
+| Sleep efficiency | TST over the scored recording |
+| WASO | Wake after the first sleep epoch |
+| REM latency | time from sleep onset to the first REM epoch |
+| Awakenings | transitions from sleep into Wake |
 
-What matters is the *error* against the expert hypnogram, not the value. That error is the
-clinical readout, and it reorders model rankings relative to plain accuracy. The harness
-computes 34 such features; see `entrypoints/hypnogram.py`.
+What matters is the error against the expert's hypnogram, not the value itself. That
+error is the clinical readout, and it can rank models differently from plain accuracy.
+`neuroatlas run sleep_hypnogram` computes 34 such features.
 """)
 
 code(r'''
@@ -1152,29 +1106,28 @@ print("\nBias is signed, so it tells you the direction of the systematic error: 
       "a positive\nWASO bias means the model reports the patient as more awake than the "
       "expert did.")
 print("\nWatch for features where the absolute value of the bias equals the mean absolute")
-print("error. That means the error points the same way in every single night, which is a")
-print("systematic artefact rather than noise. REM latency and awakening count both do")
-print("this, and for the same reason: they are defined by a first occurrence or by")
-print("counting transitions, so a single isolated misclassified epoch moves them a long")
-print("way. One spurious REM epoch in the first minutes sets REM latency to nearly zero")
-print("however good the rest of the night is. Clinical scoring rules avoid this by")
-print("requiring a minimum bout length; the naive definitions above deliberately do not,")
-print("because the fragility is the point. A model can look respectable per epoch and")
-print("still be unusable for the quantity a sleep report actually contains.")
+print("error. Then the error points the same way in every night, a systematic artefact")
+print("rather than noise. REM latency and the awakening count are prone to this. A first")
+print("occurrence or a count of transitions defines them, so one misclassified epoch moves")
+print("them a long way. One spurious REM epoch in the first minutes sets REM latency to")
+print("nearly zero, however good the rest of the night is. Clinical scoring rules avoid")
+print("this with a minimum bout length. The definitions above leave it out on purpose,")
+print("because the fragility is the point. A model can look good per epoch and still be")
+print("unusable for what a sleep report contains.")
 ''')
 
 # =============================================================== 7c. brain age
 md(r"""
 ### 7c. Brain age
 
-The same embeddings support a second task with no further extraction — which is the point
-of caching them. Predict chronological age from the night's EEG, then report the **brain
-age gap**: predicted minus true. The gap is the clinical readout, because a consistently
-positive one is what "this brain looks older than it is" means quantitatively.
+The same embeddings serve a second task without another extraction. That is why they are
+cached. Predict chronological age from the night's EEG, then report the brain age gap,
+the predicted age minus the true age. A gap that stays positive means the brain looks
+older than it is.
 
-Two differences from staging: ages are per recording, so epoch embeddings are pooled per
-night; and the target is continuous, so the probe is ridge regression and the metric is
-mean absolute error in years.
+Two things differ from staging. Age is known per recording, so the notebook averages the
+epoch embeddings of each night. The target is continuous, so the probe is a ridge
+regression and the metric is the mean absolute error in years.
 """)
 
 code(r'''
@@ -1207,7 +1160,8 @@ def load_ages(root):
 
 ages = load_ages(SLEEPEDF_ROOT)
 
-# One pooled vector per recording. Mean over epochs is what the harness uses by default.
+# One pooled vector per recording, the mean over its epochs. `neuroatlas run brain_age`
+# pools one mean vector per subject.
 pooled, pooled_age, pooled_subject = [], [], []
 for recording_id in dict.fromkeys(recording_of_epoch):
     subject = per_recording[recording_id]["subject_id"]
@@ -1245,14 +1199,14 @@ for subject, actual, estimate in zip(pooled_subject[is_test], true_age, predicte
 ''')
 
 md(r"""
-Judge brain age from a scatter of predicted against true. The dashed diagonal is perfect;
-each vertical line is that night's gap.
+Plot predicted against true age. The dashed diagonal is a perfect prediction, and each
+vertical line is one night's gap.
 
-The failure mode is a flat cloud — predictions hugging the training mean whatever the true
-age. That is what a regressor does when the features carry no age information, and it
-still gives an unremarkable-looking MAE. The dotted line marks the training mean: if the
-points track it more closely than the diagonal, the model learned the cohort average and
-nothing else, and the negative r2 is saying so.
+Watch for a flat cloud, with predictions close to the training mean whatever the true age.
+A regressor does this when the features carry no age information, and the MAE can still
+look normal. The dotted line marks the training mean. If the points follow it more closely
+than the diagonal, the model learned the cohort average and nothing else. A negative r2
+says the same.
 """)
 
 code(r'''
@@ -1282,29 +1236,29 @@ plt.show()
 ''')
 
 md(r"""
-With a handful of subjects these statistics are noise, and ridge on few nights predicts
-near the training mean. Treat the mechanics as the deliverable; set `SUBJECT_LIMIT` to
-`None` for values worth interpreting.
+With a handful of subjects these statistics are noise, and a ridge fitted on a few nights
+predicts close to the training mean. Here the point is the mechanics. Set `SUBJECT_LIMIT`
+to `None` for values you can interpret.
 """)
 
 # =============================================================== 7d. epilepsy
 md(r"""
 ### 7d. Seizure detection over whole recordings
 
-Epilepsy is where window-level metrics mislead most. Seizures occupy well under one percent
-of a recording, so a model that never predicts one scores above 99 percent accuracy.
-Clinicians ask two different questions:
+Window-level metrics mislead most in epilepsy. Seizures take up well under one percent of
+a recording, so a model that never predicts a seizure scores above 99 percent accuracy.
+Clinicians ask two other questions.
 
-* **Did you catch it?** Any-overlap sensitivity — a seizure counts as detected if any part
-  overlaps any positive prediction.
-* **How often do you cry wolf?** False alarms per hour over the full recording. This is
-  what decides whether a detector is usable.
+* Did you catch it? Any-overlap sensitivity counts a seizure as detected if any positive
+  prediction overlaps it.
+* How often do you raise a false alarm? False alarms per hour over the full recording
+  decide whether a detector is usable.
 
-Both are event-level, so predictions must be laid back along the timeline rather than
-shuffled — which is why this section works on whole recordings.
+Both are event-level metrics. The predictions have to stay in order along the timeline, so
+this section works on whole recordings.
 
-CHB-MIT arrives as BIDS, and parsing it teaches nothing about the protocol, so the
-repository's reader handles that one step. Everything after is explicit.
+CHB-MIT comes as BIDS. Parsing BIDS teaches nothing about the protocol, so the package's
+reader does that one step. Everything after it is in the cells.
 """)
 
 code(r'''
@@ -1312,15 +1266,14 @@ from neuroatlas.extensions.datasets.adapters.chbmit import CHBMITBenchmarkDataMo
 
 # Look for the BIDS tree itself, not just the download directory: a download that
 # is still running, or was interrupted before unzipping, leaves the directory in
-# place with no usable data in it.
-BIDS_ROOT = CHBMIT_ROOT / "BIDS_CHB-MIT"
+# place with no usable data in it. `neuroatlas data download chbmit` unpacks the
+# tree into BIDS_CHB-MIT/ under the dataset's folder.
+BIDS_ROOT = CHBMIT_ROOT if CHBMIT_ROOT.name == "BIDS_CHB-MIT" else CHBMIT_ROOT / "BIDS_CHB-MIT"
 RUN_EPILEPSY = any(BIDS_ROOT.glob("sub-*")) if BIDS_ROOT.is_dir() else False
 
 if not RUN_EPILEPSY:
-    print(f"No CHB-MIT BIDS tree with sub-* directories under {BIDS_ROOT}.")
-    print("Get it with:  python -m neuroatlas.entrypoints.fetch --dataset chbmit")
-    print("or unzip Zenodo record 10259996 (BIDS_CHB-MIT.zip) into $CHBMIT_ROOT.")
-    print("That is about 22 GB, and it has to finish unzipping before this section runs.")
+    print(f"No CHB-MIT BIDS tree with sub-* directories under {show(BIDS_ROOT)}.")
+    print("Get it with:  neuroatlas data download chbmit   (21.7 GB)")
     print("Skipping section 7d.")
 else:
     chbmit = CHBMITBenchmarkDataModule(
@@ -1347,11 +1300,10 @@ else:
 ''')
 
 md(r"""
-Two notes on the settings above. `balance="none"` keeps the real class ratio — the harness
-default is a weighted sampler, which would distort false alarms per hour, since that only
-means something against real elapsed time. `strict_folds=True` fails loudly if the
-manifest names a subject your download lacks, because a silently partial cohort produces
-numbers that look fine and compare to nothing.
+Two of the settings above matter. `balance="none"` keeps the real class ratio of the
+windows, so false alarms per hour are counted against real time. `strict_folds=True` stops
+the run if the fold file names a subject your download lacks. A partial cohort gives
+numbers you cannot compare with anything.
 """)
 
 code(r'''
@@ -1446,9 +1398,9 @@ else:
 ''')
 
 md(r"""
-The decision threshold is the last free parameter and it trades the two metrics directly:
-lower it to catch more seizures and pay in false alarms. A single operating point hides
-that, so the sweep below shows the curve.
+The decision threshold is the last free parameter, and it trades one metric against the
+other. Lower it and you catch more seizures but raise more false alarms. A single
+operating point hides this, so the sweep below shows the whole curve.
 """)
 
 code(r'''
@@ -1472,19 +1424,21 @@ if RUN_EPILEPSY:
     print(f"\n  At threshold 0.5, over {headline['hours']:.1f} h of recording:")
     print(f"    any overlap sensitivity  {headline['any_overlap_sensitivity']:.3f}")
     print(f"    false alarms per hour    {headline['false_alarms_per_hour']:.2f}")
-    print("\n  These are the two epilepsy numbers the paper leads with. Note that a "
-          "window level\n  accuracy would look excellent here regardless, which is the "
-          "whole argument for\n  reporting event level metrics instead.")
+    print("\n  These two numbers are the axes of the paper's headline epilepsy metric. The "
+          "Event-Sens@FA AUC\n  integrates sensitivity over 0.1 to 100 false alarms per hour "
+          "(App. C.1). Window level\n  accuracy would look excellent here whatever the model "
+          "does. That is why the paper\n  reports event level metrics.")
 ''')
 
 md(r"""
-The top panel is the detector's score along the recording, with annotated seizures shaded —
-this is what event-level means in practice. You are asking whether each shaded region was
-touched at all, and how many detections landed outside every one.
+The top panel shows the detector's score along the recording, with the annotated seizures
+shaded. This is what event-level means in practice. For each shaded region, you ask
+whether any detection touched it. Then you count the detections that landed outside all
+of them.
 
-The bottom panel is the tradeoff itself, each point a threshold. Where to sit on it is a
-clinical judgement, not a modelling one, which is exactly why a single operating point
-hides what a reader needs.
+The bottom panel shows the tradeoff, one point per threshold. Where to operate on it is a
+clinical choice, not a modelling one. That is why a single operating point hides what a
+reader needs.
 """)
 
 code(r'''
@@ -1535,42 +1489,32 @@ else:
 
 # =============================================================== 8. caveats
 md(r"""
-## 8. How this differs from the published results
+## 8. What `neuroatlas run` does at full scale
 
-One fold, one seed, and by default a subset of subjects. Every difference, in one place:
+This notebook keeps every stage small enough to read. The benchmark commands run the same
+stages at the paper's scale and with the paper's settings.
 
-**Scale.** `SUBJECT_LIMIT` and `LIMIT_BATCHES` are small so this runs in minutes. Set both
-to `None` for the full fold 0. The paper averages folds 0-4 and seeds 0-2; loop `FOLD` over
-`range(5)` to match.
+| Stage | This notebook | `neuroatlas run` |
+|---|---|---|
+| Folds and subjects | fold 0, `SUBJECT_LIMIT` subjects per split, `LIMIT_BATCHES` batches of CHB-MIT windows | all five folds, every subject |
+| CBraMod on a 30 s epoch | three 10 s windows, concatenated | the whole epoch, one embedding (App. C.2) |
+| Sleep staging probe | C from 0.001 to 1, chosen on validation kappa | C from 0.001 to 100, chosen per fold on validation kappa |
+| Hypnogram features | 5 | 34, in `neuroatlas run sleep_hypnogram` |
+| Brain age | the sleep-staging fold 0, one vector per recording, ridge alpha 10 | Sleep Cassette subjects in age-stratified folds, one mean embedding per subject, alpha chosen by nested cross-validation from 0.1 to 100 |
+| Seizure detection | unipolar montage, C = 1, five thresholds | bipolar montage, C chosen per fold from six values on validation AUPRC, Event-Sens@FA AUC over 0.1 to 100 false alarms per hour (App. C.1) |
 
-**Models.** Without `artifacts/`, the EEG side is CBraMod alone. REVE, NeuroLM, LaBraM,
-BIOT, EEGPT and the supervised baselines need undistributed weights. If you have them, drop
-them under `artifacts/models/` and add their identifiers to `MODELS` in section 4.
-
-**CBraMod windowing.** Three 10 second windows concatenated, where the harness applies the
-registry's `runtime_overrides` — so CBraMod differs from the paper even at full scale.
-
-**CHB-MIT stands in for TUSZ**, so epilepsy values are not comparable to the paper's.
-
-**Class balance.** Section 7d uses `balance="none"` so false alarms per hour is measured
-against real elapsed time.
-
-**Hypnogram features.** Five here, 34 in the harness.
-
-**Environment.** The committed executed copy was run in an environment that
-differs from `requirements-fm.txt` on 8 of its 26 pins, numpy and pandas by a
-major version. Section 0 prints the versions actually used, so you can see what
-produced the numbers you are reading. Install the pins if you want to match the
-paper's stack rather than merely run the notebook.
+To run all of fold 0 here, set `SUBJECT_LIMIT` and `LIMIT_BATCHES` to `None`. You can also
+export `NEUROATLAS_SUBJECT_LIMIT=none` and `NEUROATLAS_LIMIT_BATCHES=none` before you start
+the kernel.
 
 ### Going further
 
-* `python reproduction/build_notebook.py` regenerates this notebook — edit the generator,
-  not the `.ipynb`.
-* `run/default_runs.sh` lists every experiment the paper reports; `src/neuroatlas/entrypoints/` holds the
-  five verbs that produced the paper's tables.
-* Run `check_subject_grouping` against any fold manifest you add. It catches the split bug
-  from section 1.
+* Edit `build_notebook.py`, not the `.ipynb`. Then run `python reproduction/build_notebook.py`
+  to regenerate the notebook.
+* `neuroatlas show <benchmark>` prints the `embed` and `probe` commands `neuroatlas run`
+  executes.
+* `run/default_runs.sh` lists every experiment the paper reports.
+* Run `check_subject_grouping` from section 1 on any fold file you add.
 """)
 
 # =============================================================== write

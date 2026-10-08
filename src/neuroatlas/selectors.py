@@ -10,7 +10,8 @@
     all,-sleepyco           ``-name`` removes what the terms before it selected
 
 Only *ready* checkpoints are selected by an alias, a group or a family;
-naming a planned checkpoint by id is an error that says it is planned.
+a registry entry that is not ready is not part of the release, and naming
+it is an error.
 An untrained (random-init) baseline is selected only by name, by
 ``all_random`` / ``baseline`` or by ``all``: ``neuroatlas run -m reve`` is
 REVE, not REVE and its random-weight control. (The original verbs keep the
@@ -92,7 +93,8 @@ def _removal(name: str) -> str | None:
         return None
     key = name[1:].strip()
     if not key:
-        raise SelectionError("`-` needs a name after it, e.g. `all,-reve`")
+        raise SelectionError("`-` needs a name after it\nfix: -m all,-reve (every ready "
+                             "checkpoint but REVE's)")
     return key
 
 
@@ -152,7 +154,7 @@ def expand_models(expr: str | Sequence[str]) -> List[str]:
             picked = [name]
         out.extend(p for p in picked if p not in out)
     if names and not out:
-        raise SelectionError(f"{','.join(names)!r} selects no model: its `-` terms remove "
+        raise SelectionError(f"{','.join(names)!r} selects no checkpoint: its `-` terms remove "
                              f"everything before them")
     return out
 
@@ -173,7 +175,8 @@ def resolve_models(expr: str | Sequence[str], *,
     """
     names = _names(expr)
     if not names:
-        raise SelectionError("no models selected")
+        raise SelectionError("no checkpoint selected\nfix: neuroatlas list aliases (the "
+                             "names -m takes)")
     specs = _registry()
     by_id = {s.identifier: s for s in specs}
     families: Dict[str, List[Any]] = {}
@@ -208,20 +211,24 @@ def resolve_models(expr: str | Sequence[str], *,
             picked = [s.identifier for s in ready if not is_baseline(s)] or \
                 [s.identifier for s in ready]
             if not picked and key not in exclude:
-                raise SelectionError(f"{name}: no ready checkpoint (all are "
-                                     f"{', '.join(sorted({s.status for s in families[key]}))})")
+                raise SelectionError(f"{name} is not a model family of this release\n"
+                                     f"fix: neuroatlas list models")
         elif key in by_id:
             named = True
             spec = by_id[key]
             if spec.status != "ready" and spec.model_family not in exclude:
-                raise SelectionError(f"{name} is {spec.status}, not ready: {spec.notes or 'no note'}")
+                raise SelectionError(f"{name} is not a checkpoint of this release\n"
+                                     f"fix: neuroatlas list models")
             picked = [spec.identifier]
         else:
-            vocabulary = [*aliases, *groups, *families, *by_id]
+            ready = [s for s in specs if s.status == "ready"]
+            vocabulary = [*aliases, *groups, *dict.fromkeys(s.model_family for s in ready),
+                          *(s.identifier for s in ready)]
             close = difflib.get_close_matches(key, vocabulary, n=1, cutoff=0.6)
             hint = f" (did you mean {', '.join(close)}?)" if close else ""
-            raise SelectionError(f"unknown model {name!r}{hint}\n"
-                                 f"fix: neuroatlas list models, or neuroatlas list aliases",
+            raise SelectionError(f"no checkpoint, family, group or alias {name!r}{hint}\n"
+                                 f"fix: neuroatlas list models\n"
+                                 f"fix: neuroatlas list aliases",
                                  suggest={name: close[0]} if close else None)
         if exclude:
             family = key if key in families else by_id[key].model_family if key in by_id else None
@@ -234,5 +241,8 @@ def resolve_models(expr: str | Sequence[str], *,
         out.extend(p for p in picked if p not in out)
     if not out and took_away:
         where = f" in {scope}" if scope else ""
-        raise SelectionError(f"{','.join(names)!r} selects no model{where}")
+        bench = scope.split()[1] if scope.startswith("the ") and len(scope.split()) > 2 else None
+        raise SelectionError(f"{','.join(names)!r} selects no checkpoint{where}\n"
+                             + (f"fix: neuroatlas list models --benchmark {bench}" if bench
+                                else "fix: neuroatlas list aliases"))
     return out

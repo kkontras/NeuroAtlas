@@ -14,7 +14,8 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  St Vincent's / UCDDB sleep apnea PSG adapter.
+  St. Vincent's University Hospital / University College Dublin Sleep Apnea
+  Database: PSG scored for sleep stages and respiratory events.
 
 cohort:
   centre: "St Vincent's University Hospital, Ireland"
@@ -54,10 +55,10 @@ runtime_defaults:
   # channel_specs, which the runner always replaced with channel_maps/ucddb.yaml
   # channels_used (C3A2, C4A1). No code ever read the name; the channels come
   # from the channel map. (As a runtime default it crashed the datamodule.)
-  age_csv: "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0/SubjectDetails.csv"
-  age_xls: "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0/SubjectDetails.xls"
+  age_csv: "${EEG_DATA_ROOT}/ucddb/SubjectDetails.csv"
+  age_xls: "${EEG_DATA_ROOT}/ucddb/SubjectDetails.xls"
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/stvincent_ucddb/files/ucddb/1.0.0"
+  data_root: "${EEG_DATA_ROOT}/ucddb"
   label_mode: sleep_stage
   num_folds: 5
   signal_kind: raw

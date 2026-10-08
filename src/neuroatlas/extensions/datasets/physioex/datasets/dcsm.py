@@ -58,7 +58,7 @@ class DCSMDataset(BasePhysioDataset):
 
     def __init__(
         self,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/dcsm/extracted/data/sleep/DCSM",
+        root: str = "${EEG_DATA_ROOT}/dcsm",
         **kwargs,
     ):
         super().__init__(root=root, **kwargs)

@@ -23,7 +23,6 @@ from mne.channels import make_standard_montage
 from mne_bids import BIDSPath, get_entity_vals, read_raw_bids
 from moabb.datasets import download as dl
 from moabb.datasets.base import BaseDataset
-from tqdm import tqdm
 
 
 _manifest_link = "https://osf.io/download/p5av2/"
@@ -171,7 +170,8 @@ class _Dreyer2023Base(BaseDataset):
 
         manifest_subject = manifest_subject.copy()
 
-        for _, row in tqdm(manifest_subject.iterrows()):
+        # no bar: the subject is counted on the item's live line
+        for _, row in manifest_subject.iterrows():
             download_url = _api_base_url + row["url"].replace(
                 "https://osf.io/download/", ""
             ).replace("/", "")

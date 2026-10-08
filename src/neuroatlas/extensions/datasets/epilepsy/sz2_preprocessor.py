@@ -1,15 +1,9 @@
 """SeizeIt2 -> continuous-HDF5 preprocessing pipeline.
 
-Reads raw EDF files and companion ``_a1.tsv`` annotation files from a private
-Anonymous Institution dataset (Anonymous Hospital Adult cohort) and builds a
-continuous HDF5 cache with samplewise binary seizure labels.
-
-Because the data path is private and may not yet be set, ``build_h5_cache``
-wraps all file I/O in a try-catch that falls back to a small synthetic HDF5 so
-the rest of the pipeline (adapters, tests) can run without real data.
-
-See ``POINTER_SZ2_PATH.md`` for where to fill in the data path and
-``POINTER_SZ2_TRYCATCH.md`` for the locations of all try-catch fallback blocks.
+Reads raw EDF files and companion ``_a1.tsv`` annotation files of SeizeIT2
+and builds a continuous HDF5 cache with samplewise binary seizure labels.
+``build_h5_cache`` raises when the folder holds no recordings or a file cannot
+be read.
 
 Annotation file format (``*_a1.tsv``):
     - 5 header rows to skip
@@ -43,10 +37,9 @@ from ._common import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# POINTER: path variable — fill in before running the preprocessor
 # ---------------------------------------------------------------------------
 
-SZ2_DATA_ROOT: str = "${EEG_DATA_ROOT}/SeizeIT2/Anonymous_Hospital_Adult/"  # POINTER_SZ2_PATH.md row 1: root dir of SeizeIt2 EDF files
+SZ2_DATA_ROOT: str = "${EEG_DATA_ROOT}/sz2"
 
 # ---------------------------------------------------------------------------
 # Channel mapping
@@ -182,6 +175,14 @@ def _read_sz2_edf_to_unipolar19(
 # ---------------------------------------------------------------------------
 
 
+def data_folder(root: str | Path) -> Path:
+    """The folder holding the SeizeIt2 subject folders: ``root`` itself, or the
+    ``Anonymous_Hospital_Adult`` folder the dataset is delivered in, under it."""
+    from neuroatlas.extensions.datasets._layout import descend
+
+    return descend(root, ["Anonymous_Hospital_Adult", "*/Anonymous_Hospital_Adult"], "*/*.edf")
+
+
 def discover_recordings(root: str | Path) -> List[Tuple[Path, Path, str]]:
     """Discover all SeizeIt2 EDF + annotation pairs under ``root``.
 
@@ -192,7 +193,7 @@ def discover_recordings(root: str | Path) -> List[Tuple[Path, Path, str]]:
     Returns:
         List of ``(edf_path, tsv_path, subject_id)`` tuples, sorted by path.
     """
-    root = Path(root)
+    root = data_folder(root)
     results: List[Tuple[Path, Path, str]] = []
 
     for edf_path in sorted(root.rglob("*.edf")):
@@ -287,157 +288,141 @@ def _build_synthetic_h5_cache(output_path: str | Path) -> None:
 def build_h5_cache(root: str | Path, output_path: str | Path) -> Path:
     """Build a continuous HDF5 cache from SeizeIt2 EDF + TSV files.
 
-    POINTER_SZ2_TRYCATCH.md row 1: this function wraps all file I/O in a
-    try-catch.  When ``root`` is empty or the files cannot be read, it falls
-    back to ``_build_synthetic_h5_cache`` so downstream code can be tested
-    without real data.
+    When ``root`` holds no recordings, or a file cannot be read, it raises.
 
     Args:
         root: Root directory containing SeizeIt2 `.edf` + `_a1.tsv` files.
-              Set ``SZ2_DATA_ROOT`` or pass directly.
         output_path: Destination HDF5 file path.
 
     Returns:
         Path to the written HDF5 file.
     """
     output_path = Path(output_path)
+    root = data_folder(root)      # the recording ids are relative to it
 
-    try:
-        # --- real data path -------------------------------------------
-        recordings = discover_recordings(root)
-        if not recordings:
-            raise FileNotFoundError(
-                f"No EDF+TSV pairs found under {root!r}. "
-                "Set SZ2_DATA_ROOT in sz2_preprocessor.py."
-            )
-
-        all_signals: List[np.ndarray] = []
-        all_labels: List[np.ndarray] = []
-        rec_ids: List[str] = []
-        subj_ids: List[str] = []
-        durations: List[float] = []
-        n_missing: List[int] = []
-        ch_masks: List[np.ndarray] = []
-        offsets: List[int] = [0]
-
-        for edf_path, tsv_path, subject_id in recordings:
-            try:
-                signals, fs, found = _read_sz2_edf_to_unipolar19(edf_path)
-            except Exception as e:
-                logger.warning("Skipping %s: %s", edf_path, e)
-                continue
-
-            n_samples = signals.shape[1]
-            seizures = _parse_sz2_tsv(tsv_path)
-
-            labels = np.zeros(n_samples, dtype=np.uint8)
-            for start_s, end_s in seizures:
-                s_idx = max(0, int(round(start_s * TARGET_FS)))
-                e_idx = min(n_samples, int(round(end_s * TARGET_FS)))
-                labels[s_idx:e_idx] = 1
-
-            mask = np.zeros(19, dtype=bool)
-            for ch in found:
-                mask[CANONICAL_IDX[ch]] = True
-
-            # Use path relative to root as recording ID
-            try:
-                rec_id = str(edf_path.relative_to(Path(root)))
-            except ValueError:
-                rec_id = str(edf_path)
-
-            all_signals.append(signals.T)   # (N, 19)
-            all_labels.append(labels)
-            rec_ids.append(rec_id)
-            subj_ids.append(subject_id)
-            durations.append(n_samples / TARGET_FS)
-            n_missing.append(19 - len(found))
-            ch_masks.append(mask)
-            offsets.append(offsets[-1] + n_samples)
-
-            n_seiz = int(labels.sum())
-            logger.info(
-                "  %s: %d/19 channels, %d samples (%.1fs), %d seizure samples",
-                rec_id, len(found), n_samples, n_samples / TARGET_FS, n_seiz,
-            )
-
-        if not rec_ids:
-            raise RuntimeError(
-                "All recordings were skipped during preprocessing."
-            )
-
-        # --- write HDF5 -----------------------------------------------
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        total_samples = offsets[-1]
-        logger.info(
-            "Writing HDF5: %d recordings, %d total samples (%.1f hours)",
-            len(rec_ids), total_samples, total_samples / TARGET_FS / 3600,
+    # --- real data path -------------------------------------------
+    recordings = discover_recordings(root)
+    if not recordings:
+        raise FileNotFoundError(
+            f"sz2: no EDF and annotation (_a1.tsv) pairs in {root} (give the folder "
+            "with --data-root)"
         )
 
-        vlen_str = h5py.special_dtype(vlen=str)
-        with h5py.File(str(output_path), "w") as h5:
-            h5.attrs["fs"] = TARGET_FS
-            h5.attrs["channels"] = list(CANONICAL_19)
-            h5.attrs["montage"] = "unipolar"
+    all_signals: List[np.ndarray] = []
+    all_labels: List[np.ndarray] = []
+    rec_ids: List[str] = []
+    subj_ids: List[str] = []
+    durations: List[float] = []
+    n_missing: List[int] = []
+    ch_masks: List[np.ndarray] = []
+    offsets: List[int] = [0]
 
-            chunk = min(total_samples, TARGET_FS * 60)
-            h5.create_dataset(
-                "signals", shape=(total_samples, 19), dtype=np.float32,
-                chunks=(chunk, 19),
-            )
-            h5.create_dataset(
-                "samplewise_label", shape=(total_samples,), dtype=np.uint8,
-                chunks=(chunk,),
-            )
-            for i, (sig, lbl) in enumerate(zip(all_signals, all_labels)):
-                s, e = offsets[i], offsets[i + 1]
-                h5["signals"][s:e] = sig
-                h5["samplewise_label"][s:e] = lbl
+    for edf_path, tsv_path, subject_id in recordings:
+        try:
+            signals, fs, found = _read_sz2_edf_to_unipolar19(edf_path)
+        except Exception as e:
+            logger.warning("Skipping %s: %s", edf_path, e)
+            continue
 
-            h5.create_dataset(
-                "recording_offsets", data=np.array(offsets, dtype=np.int64)
-            )
-            h5.create_dataset(
-                "recording_ids",
-                data=np.array(rec_ids, dtype=object),
-                dtype=vlen_str,
-            )
-            h5.create_dataset(
-                "subject_ids",
-                data=np.array(subj_ids, dtype=object),
-                dtype=vlen_str,
-            )
-            h5.create_dataset(
-                "durations_s", data=np.array(durations, dtype=np.float32)
-            )
-            h5.create_dataset(
-                "n_missing_channels", data=np.array(n_missing, dtype=np.int16)
-            )
-            h5.create_dataset(
-                "channel_mask", data=np.array(ch_masks, dtype=bool)
-            )
-            h5.create_dataset(
-                "ages", data=np.full(len(rec_ids), -1, dtype=np.int16)
-            )
-            h5.create_dataset(
-                "genders",
-                data=np.array(["U"] * len(rec_ids), dtype=object),
-                dtype=vlen_str,
-            )
+        n_samples = signals.shape[1]
+        seizures = _parse_sz2_tsv(tsv_path)
 
-        logger.info("HDF5 cache written to %s", output_path)
+        labels = np.zeros(n_samples, dtype=np.uint8)
+        for start_s, end_s in seizures:
+            s_idx = max(0, int(round(start_s * TARGET_FS)))
+            e_idx = min(n_samples, int(round(end_s * TARGET_FS)))
+            labels[s_idx:e_idx] = 1
 
-    except Exception as exc:
-        # # POINTER_SZ2_TRYCATCH.md row 1
-        # logger.warning(
-        #     "Could not read SeizeIt2 data from %r (%s); "
-        #     "building synthetic cache for testing. "
-        #     "Fill in SZ2_DATA_ROOT in sz2_preprocessor.py when data is available.",
-        #     str(root), exc,
-        # )
-        raise Exception("Data path not set or unreadable") from exc
-        # _build_synthetic_h5_cache(output_path)
+        mask = np.zeros(19, dtype=bool)
+        for ch in found:
+            mask[CANONICAL_IDX[ch]] = True
 
+        # Use path relative to root as recording ID
+        try:
+            rec_id = str(edf_path.relative_to(Path(root)))
+        except ValueError:
+            rec_id = str(edf_path)
+
+        all_signals.append(signals.T)   # (N, 19)
+        all_labels.append(labels)
+        rec_ids.append(rec_id)
+        subj_ids.append(subject_id)
+        durations.append(n_samples / TARGET_FS)
+        n_missing.append(19 - len(found))
+        ch_masks.append(mask)
+        offsets.append(offsets[-1] + n_samples)
+
+        n_seiz = int(labels.sum())
+        logger.info(
+            "  %s: %d/19 channels, %d samples (%.1fs), %d seizure samples",
+            rec_id, len(found), n_samples, n_samples / TARGET_FS, n_seiz,
+        )
+
+    if not rec_ids:
+        raise RuntimeError(
+            "All recordings were skipped during preprocessing."
+        )
+
+    # --- write HDF5 -----------------------------------------------
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    total_samples = offsets[-1]
+    logger.info(
+        "Writing HDF5: %d recordings, %d total samples (%.1f hours)",
+        len(rec_ids), total_samples, total_samples / TARGET_FS / 3600,
+    )
+
+    vlen_str = h5py.special_dtype(vlen=str)
+    with h5py.File(str(output_path), "w") as h5:
+        h5.attrs["fs"] = TARGET_FS
+        h5.attrs["channels"] = list(CANONICAL_19)
+        h5.attrs["montage"] = "unipolar"
+
+        chunk = min(total_samples, TARGET_FS * 60)
+        h5.create_dataset(
+            "signals", shape=(total_samples, 19), dtype=np.float32,
+            chunks=(chunk, 19),
+        )
+        h5.create_dataset(
+            "samplewise_label", shape=(total_samples,), dtype=np.uint8,
+            chunks=(chunk,),
+        )
+        for i, (sig, lbl) in enumerate(zip(all_signals, all_labels)):
+            s, e = offsets[i], offsets[i + 1]
+            h5["signals"][s:e] = sig
+            h5["samplewise_label"][s:e] = lbl
+
+        h5.create_dataset(
+            "recording_offsets", data=np.array(offsets, dtype=np.int64)
+        )
+        h5.create_dataset(
+            "recording_ids",
+            data=np.array(rec_ids, dtype=object),
+            dtype=vlen_str,
+        )
+        h5.create_dataset(
+            "subject_ids",
+            data=np.array(subj_ids, dtype=object),
+            dtype=vlen_str,
+        )
+        h5.create_dataset(
+            "durations_s", data=np.array(durations, dtype=np.float32)
+        )
+        h5.create_dataset(
+            "n_missing_channels", data=np.array(n_missing, dtype=np.int16)
+        )
+        h5.create_dataset(
+            "channel_mask", data=np.array(ch_masks, dtype=bool)
+        )
+        h5.create_dataset(
+            "ages", data=np.full(len(rec_ids), -1, dtype=np.int16)
+        )
+        h5.create_dataset(
+            "genders",
+            data=np.array(["U"] * len(rec_ids), dtype=object),
+            dtype=vlen_str,
+        )
+
+    logger.info("HDF5 cache written to %s", output_path)
     return output_path
 
 

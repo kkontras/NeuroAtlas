@@ -39,7 +39,7 @@ from neuroatlas.benchmarking_helpers import BenchmarkBatch, CheckpointSpec
 from .base import BenchmarkModelWrapper
 from ._checkpoint_download import ensure_checkpoint
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     is_bci_batch,
@@ -52,9 +52,6 @@ from ._preproc import (
 from .sleepfm_encoder import SetTransformer
 
 logger = logging.getLogger(__name__)
-
-_PRETRAIN_EPOCH_SECONDS = 30
-
 
 _DEFAULT_CONFIG = {
     "in_channels": 1,            # Tokenizer conv1d input channels (always 1)
@@ -147,31 +144,13 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         self.sfreq = int(cfg["sampling_freq"])
         self.epoch_seconds = float(spec.expected_epoch_seconds)
         self.target_len = int(round(self.sfreq * self.epoch_seconds))
-        # Strict contract: SetTransformer's patch tokenizer reshapes T into
-        # (T / patch_size) patches — T must be ≥ 1 patch AND an exact multiple.
-        patch_seconds = self.patch_size / self.sfreq
-        if self.target_len < self.patch_size:
-            logger.warning(
-                "SleepFM: epoch_seconds=%g s yields %d samples, below the "
-                "minimum patch size of %d samples (%g s). Embeddings may be "
-                "unreliable for short epochs.",
-                self.epoch_seconds, self.target_len,
-                self.patch_size, patch_seconds,
-            )
-        if self.target_len % self.patch_size != 0:
-            logger.warning(
-                "SleepFM: epoch_seconds=%g s yields %d samples, which is "
-                "not a multiple of patch_size=%d (%g s). Signal will be "
-                "truncated to the nearest patch boundary.",
-                self.epoch_seconds, self.target_len,
-                self.patch_size, patch_seconds,
-            )
-        if self.epoch_seconds < _PRETRAIN_EPOCH_SECONDS:
-            logger.warning(
-                "SleepFM epoch_seconds=%s is below the pretraining regime (%s s); "
-                "embeddings are out-of-distribution.",
-                self.epoch_seconds, _PRETRAIN_EPOCH_SECONDS,
-            )
+        # SetTransformer's patch tokenizer reshapes T into (T / patch_size)
+        # patches of 5 s. What each window becomes is decided per batch in
+        # _prepare_input and said once, at INFO, by _log_banner: a sleep
+        # dataset's 30 s epoch is fed whole (6 patches), the 10 s window of the
+        # other benchmarks is 2 patches, and a BCI trial is zero-padded up to
+        # one patch (or cut to its last whole one). None of this asks anything
+        # of the user, so nothing is said at construction.
         self.embed_dim = int(cfg["embed_dim"])
 
         self.model = SetTransformer(
@@ -204,16 +183,34 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         self._last_dropped_channels: list[dict] = []
         self._last_norm_source: str = "uninitialized"
 
-    def _log_banner(self) -> None:
+    def _log_banner(self, window_seconds: float, fed_samples: int, bci: bool,
+                    per_trial: bool) -> None:
+        """Once per backbone, at INFO (-v, --log): what the first batch's
+        windows became."""
         if self._banner_logged:
             return
         self._banner_logged = True
+        patch_s = self.patch_size / self.sfreq
+        n_patches = fed_samples // self.patch_size
+        if bci:
+            given = int(round(window_seconds * self.sfreq))
+            if given < self.patch_size:
+                shape = (f"a {window_seconds:g} s trial is zero-padded to one {patch_s:g} s "
+                         f"patch")
+            elif given % self.patch_size:
+                shape = (f"a {window_seconds:g} s trial is cut to its first "
+                         f"{n_patches} whole {patch_s:g} s patch"
+                         f"{'es' if n_patches != 1 else ''}")
+            else:
+                shape = f"a {window_seconds:g} s trial is {n_patches} patches of {patch_s:g} s"
+        else:
+            shape = (f"each {window_seconds:g} s window is fed whole, {n_patches} patch"
+                     f"{'es' if n_patches != 1 else ''} of {patch_s:g} s")
+        norm = ("each trial z-scored per channel on its own" if per_trial
+                else "z-scored per channel with its recording's mean and standard deviation")
         logger.info(
-            "SleepFM backbone: fs=%d Hz, epoch=%.3g s (%d samples = %d×%d-sample patches), "
-            "BAS slots=%d, norm=recording-z-score (paper-faithful; raises if stats missing), "
-            "reference_applied=False, scale=unit-invariant.",
-            self.sfreq, self.epoch_seconds, self.target_len,
-            self.target_len // self.patch_size, self.patch_size, self.bas_channels,
+            "SleepFM at %d Hz: %s; %s; up to %d channels.",
+            self.sfreq, shape, norm, self.bas_channels,
         )
 
     def _prepare_input(self, batch: BenchmarkBatch) -> tuple[torch.Tensor, torch.Tensor]:
@@ -247,9 +244,9 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         self._last_unit_declared = unit
         x = unit_to_uv(x, unit)
 
-        # ESAT-8 adaptive epoch_seconds
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -269,12 +266,12 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         else:
             src_sfreq_f = T / epoch_sec
 
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(
             x, src_sfreq_f, float(self.sfreq), backend=_backend
         )
         self._last_resample_method = resample_method
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             x = snap_to_epoch_length(x, float(self.sfreq), meta)
         bci = is_bci_batch(meta)
         if bci:
@@ -392,7 +389,7 @@ class SleepFMBackbone(BenchmarkModelWrapper):
         mask = torch.ones(B, self.bas_channels, dtype=torch.bool, device=x.device)
         mask[:, :valid] = False
 
-        self._log_banner()
+        self._log_banner(epoch_sec, T_out, bci, per_trial=n_per_trial == B_in)
         return padded, mask
 
     def extract_embeddings(self, batch: BenchmarkBatch) -> np.ndarray:

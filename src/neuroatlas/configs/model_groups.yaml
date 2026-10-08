@@ -4,8 +4,8 @@
 #
 # This is the paper's taxonomy, not a property of any checkpoint, which is why
 # it lives here rather than in the registry: the same wrapper could be grouped
-# differently by a different paper. `run/launch.sh` reads it so a sweep can say
-# "every EEG-FM" without anyone retyping eleven family names.
+# differently by a different paper. `-m` reads it, so a run can say
+# "every EEG-FM" (`-m all_fm`) without retyping the family names.
 #
 # Membership was checked family by family against the paper's own spellings.
 # A family the paper never names goes under `other`, NOT into a group it
@@ -73,6 +73,6 @@ aliases:
     description: untrained baselines, the same architectures with random weights
   baseline:
     source_type: random_init
-    description: the same as all_random -- the group `list models` shows for them
+    description: the same as all_random (the group `list models` shows for them)
   all:
     description: every ready checkpoint

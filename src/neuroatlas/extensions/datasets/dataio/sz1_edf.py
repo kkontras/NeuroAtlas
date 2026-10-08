@@ -60,9 +60,16 @@ def _build_recording_meta(
 
     metas: List[_RecordingMeta] = []
     skipped: List[Tuple[str, str]] = []
+    # one header read per recording: the item's live line counts them
+    from neuroatlas import progress, quiet
+
+    item = progress.current()
+    item.phase("indexing windows", total=len(rec_set & set(range(len(recordings)))),
+               unit="recordings")
     for global_idx, (edf_path_s, tsv_path_s, subject_id) in enumerate(recordings):
         if global_idx not in rec_set:
             continue
+        item.update(advance=1)
         edf_path = Path(edf_path_s)
         tsv_path = Path(tsv_path_s)
 
@@ -85,7 +92,7 @@ def _build_recording_meta(
                 n_samples = n_samples_raw
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("Skipping %s — %s", edf_path, reason)
+            logger.info("skipping %s: %s", edf_path, reason)
             skipped.append((str(edf_path), reason))
             continue
 
@@ -110,8 +117,15 @@ def _build_recording_meta(
             )
         )
 
+    # one count per dataset at the end of the run (each split and fold reads
+    # the headers again); which ones, and why, in the log
+    quiet.count("skipped headers:sz1",
+                "sz1: {hit} of {of} recordings left out: their EDF header cannot be "
+                "read (-v names them, with the reason)",
+                hit=[p for p, _ in skipped],
+                of=[str(r[0]) for i, r in enumerate(recordings) if i in rec_set])
     if skipped:
-        logger.warning(
+        logger.info(
             "Skipped %d / %d recordings due to unreadable EDF headers:\n%s",
             len(skipped),
             len(skipped) + len(metas),

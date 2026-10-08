@@ -107,7 +107,7 @@ runtime_defaults:
   # raw_dir, not the HDF5 cache: Bonn is 500 plain-text clips of 4097 samples,
   # so `fetch --dataset bonn` is enough to run it. cache_root/cache_filename
   # stay for the prebuilt fast path, which `prepare` writes.
-  raw_dir: "${EEG_DATA_ROOT}/bonn/raw"
+  raw_dir: "${EEG_DATA_ROOT}/bonn"
   balance: weighted_sampler
   batch_size: 64
   cache_filename: bonn_173hz_segments.h5
@@ -158,18 +158,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Folds are not subject-independent: the corpus ships no subject
-       identifiers, so the split is over clips. Numbers are not comparable
-       with the subject-disjoint cohorts — see splits.derivation."
-    - "Needs an author decision -- the paper split Bonn finer than this. App.
-       D.1.3 and its epilepsy probe both used stratified 5-fold CV over the
-       1,000 10-s segments (two per 23.6-s clip), so a clip's two segments
-       could fall in train and test (770 of the 1,000 test segments had the
-       other half of their clip in train or val); these folds keep a clip's
-       segments together. The paper's exact segment assignment IS recoverable
-       (the probe's seeded StratifiedKFold over the clip-major segment order):
-       --set split_mode=paper_segments reproduces it, frozen in
-       folds_paper_segments.json and checked by re-probing the paper's own
-       CBraMod embedding to its saved predictions (<= 2.6e-10). Evidence:
-       fixwork/R1_siena_bonn/REPORT.md."

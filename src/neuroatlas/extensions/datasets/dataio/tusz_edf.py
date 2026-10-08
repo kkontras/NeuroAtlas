@@ -70,14 +70,25 @@ def _discover_edf_manifest(raw_root: str, split: str) -> List[Dict[str, Any]]:
     """
     import pyedflib
 
-    split_dir = Path(raw_root) / split
+    from neuroatlas.extensions.datasets._layout import descend
+
+    # the dataset's folder, or the edf/ (or <version>/edf/) folder TUH serves
+    split_dir = descend(raw_root, ["edf", "*/edf"], split) / split
     if not split_dir.is_dir():
         raise FileNotFoundError(
             f"TUSZ split dir not found: {split_dir} — expected under raw_root={raw_root}"
         )
     edfs = sorted(split_dir.rglob("*.edf"))
     manifest: List[Dict[str, Any]] = []
+    # one header read per recording: the item's live line counts them; an
+    # unreadable one is counted once per run (which, and why, in the log)
+    from neuroatlas import progress, quiet
+
+    item = progress.current()
+    item.phase("indexing windows", total=len(edfs), unit="recordings")
+    unreadable: List[str] = []
     for edf_path in edfs:
+        item.update(advance=1)
         stem = edf_path.stem
         parent = edf_path.parent  # .../<montage_dir>/
         montage_type = parent.name
@@ -108,7 +119,8 @@ def _discover_edf_manifest(raw_root: str, split: str) -> List[Dict[str, Any]]:
             finally:
                 reader._close()
         except Exception as exc:
-            logger.warning("Skipping EDF with unreadable header %s: %s", edf_path, exc)
+            logger.info("skipping EDF with unreadable header %s: %s", edf_path, exc)
+            unreadable.append(str(edf_path))
             continue
 
         n_samples = int(round(duration_s * TARGET_FS))
@@ -131,6 +143,10 @@ def _discover_edf_manifest(raw_root: str, split: str) -> List[Dict[str, Any]]:
             "age": demo["age"],
             "gender": demo["gender"],
         })
+    quiet.count(f"skipped headers:tusz:{split}",
+                "tusz (" + split + "): {hit} of {of} recordings left out: their EDF header "
+                "cannot be read (-v names them, with the reason)",
+                hit=unreadable, of=[str(e) for e in edfs])
     logger.info(
         "TUSZ EDF-direct: discovered %d recordings under %s/%s",
         len(manifest), raw_root, split,

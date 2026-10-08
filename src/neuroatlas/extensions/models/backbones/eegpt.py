@@ -46,7 +46,7 @@ import numpy as np
 import torch
 
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_amplitude_band,
     assert_finite,
     car_reference,
@@ -54,6 +54,7 @@ from ._preproc import (
     is_bci_batch,
     read_sampling_rate,
     resample_poly_with_fallback,
+    run_label,
     snap_to_epoch_length,
     strip_zero_channels,
     unit_to_uv,
@@ -284,32 +285,43 @@ class EEGPTBackbone(BenchmarkBackbone):
         # BCI parity: Angeliki never rescaled — skip for BCI datasets.
         dataset = meta[0].get("dataset") if meta else None
         bci = is_bci_batch(meta)
-        if dataset not in _ESAT_DATASETS and not bci:
-            import logging as _lg
+        if dataset not in _PAPER_PREPROC_DATASETS and not bci:
+            from neuroatlas import quiet
+
+            who = run_label(meta, self.spec.identifier)
             try:
                 assert_amplitude_band(
                     x, _INPUT_AMP_LO_UV, _INPUT_AMP_HI_UV, "eegpt:input",
-                    declared_units=declared_units_from_batch(batch),
+                    declared_units=declared_units_from_batch(batch), who=who,
                 )
             except ValueError as _e:
+                # A batch a unit factor off its declared µV is scaled back by
+                # 1000; -v and --log say so once per command and run (it asks
+                # nothing of the user), every later batch at DEBUG.
                 p99 = float(x.abs().quantile(0.99).item()) if x.numel() else 0.0
                 if p99 > 0 and p99 < _INPUT_AMP_LO_UV / 10:
                     scale = 1e3 if p99 * 1e3 < _INPUT_AMP_HI_UV else 1.0
-                    _lg.getLogger(__name__).warning(
-                        "eegpt:input amplitude very low (p99=%.4g uV); rescaling by %g",
-                        p99, scale)
+                    quiet.warn_once(
+                        logger, f"eegpt rescale low:{who}",
+                        "%s: a batch is far below the microvolt range (its 99th percentile "
+                        "of |amplitude| is %.4g µV, under %g µV), so it is multiplied by %g "
+                        "before embedding",
+                        who or "eegpt", p99, _INPUT_AMP_LO_UV / 10, scale, level=logging.INFO)
                     x = x * scale
                 elif p99 > _INPUT_AMP_HI_UV * 10:
                     scale = 1e-3
-                    _lg.getLogger(__name__).warning(
-                        "eegpt:input amplitude very high (p99=%.4g uV); rescaling by %g",
-                        p99, scale)
+                    quiet.warn_once(
+                        logger, f"eegpt rescale high:{who}",
+                        "%s: a batch is far above the microvolt range (its 99th percentile "
+                        "of |amplitude| is %.4g µV, over %g µV), so it is divided by 1000 "
+                        "before embedding",
+                        who or "eegpt", p99, _INPUT_AMP_HI_UV * 10, level=logging.INFO)
                     x = x * scale
                 else:
                     raise
 
-        # ESAT-8 adaptive epoch_seconds
-        if dataset in _ESAT_DATASETS:
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.window_seconds
@@ -337,9 +349,9 @@ class EEGPTBackbone(BenchmarkBackbone):
             src_sfreq_f = float(meta_sfreq)
         else:
             src_sfreq_f = T / epoch_sec
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(x, src_sfreq_f, _TARGET_SFREQ, backend=_backend)
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             x = snap_to_epoch_length(x, _TARGET_SFREQ, meta)
 
         resampled_len = x.shape[-1]
@@ -435,7 +447,7 @@ class EEGPTBackbone(BenchmarkBackbone):
         # to zero, mirrors C=2) and meaningless on bipolar derivations.
         c_eff = x.shape[-2]
         has_bipolar_label = any("-" in c for c in raw_kept)
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             apply_car, skip_reason = False, "esat_parity"
         elif bci:
             apply_car, skip_reason = False, "bci_parity"

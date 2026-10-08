@@ -25,8 +25,27 @@ datasets:
   - {slug: ucddb, embed: ""}
   - {slug: wsc, embed: ""}
 single: sleep_edf_expanded
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
 metrics:
-  headline: balanced_accuracy
+  # Cohen's kappa, as paper v2 reports staging (Sec. 4.2, Fig. 3a); the
+  # probe's C is chosen on validation kappa (configs/tasks/sleep_staging.json).
+  headline: cohen_kappa
   higher_is_better: true
-  dummy: 0.2
-  secondary: [cohen_kappa, macro_f1]
+  secondary: [balanced_accuracy, macro_f1]
+  unit: 30 s epoch
+  describe: >
+    Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3, REM), each
+    fold's test subjects pooled, unscored epochs left out
+  fold: >
+    5 subject-level folds (SHHS: one fixed split); the probe's C is chosen
+    from 0.001-100 on validation Cohen's kappa, unweighted loss
+  spread: population SD over the folds

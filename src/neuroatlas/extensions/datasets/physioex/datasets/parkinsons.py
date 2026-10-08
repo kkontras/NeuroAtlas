@@ -84,7 +84,7 @@ class ParkinsonsDataset(BasePhysioDataset):
         self,
         recording: str = "night",
         group: Optional[str] = None,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/Parkinson_data",
+        root: str = "${EEG_DATA_ROOT}/parkinson",
         **kwargs,
     ):
         if recording not in ("night", "nap", "all"):
@@ -122,7 +122,8 @@ class ParkinsonsDataset(BasePhysioDataset):
         """
         csv_path = Path(root) / "Target_sleep_demographic.csv"
         if not csv_path.exists():
-            logger.warning("Parkinsons metadata CSV not found: %s", csv_path)
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+            warn_no_demographics(logger, "parkinson", csv_path, download=False)
             return {}, {}
         import pandas as pd
         df = pd.read_csv(csv_path)

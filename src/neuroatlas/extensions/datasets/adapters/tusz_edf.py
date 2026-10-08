@@ -44,8 +44,9 @@ class TUSZEDFDirectDataModule(BenchmarkDataModule):
     """TUSZ DataModule that reads EDFs on the fly, no HDF5 cache required.
 
     Args:
-        raw_root: Path to the TUSZ ``.../edf`` directory containing
-            ``train/``, ``dev/``, ``eval/`` sub-trees.
+        raw_root: The TUSZ folder: the ``edf`` directory holding ``train/``,
+            ``dev/``, ``eval/``, or a folder above it (``edf/`` or
+            ``<version>/edf/`` under it is found).
         split_mode: Must be ``"official"``.
         window_s: Window duration in seconds.
         stride_s: Window stride in seconds (defaults to ``window_s``).
@@ -59,7 +60,7 @@ class TUSZEDFDirectDataModule(BenchmarkDataModule):
 
     def __init__(
         self,
-        raw_root: str = "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_seizure/v2.0.3/edf",
+        raw_root: str = "${EEG_DATA_ROOT}/tusz",
         split_mode: str = "official",
         window_s: float = 10.0,
         stride_s: Optional[float] = None,
@@ -78,14 +79,14 @@ class TUSZEDFDirectDataModule(BenchmarkDataModule):
     ) -> None:
         if split_mode not in ("official", "kfold"):
             raise ValueError(
-                f"TUSZEDFDirectDataModule split_mode must be 'kfold' (the paper's "
-                f"patient-level folds) or 'official' (train/dev/eval), got {split_mode!r}."
+                f"tusz takes split_mode kfold (the paper's patient-level folds) or "
+                f"official (train/dev/eval), not {split_mode!r}"
             )
-        if normalize != "none":
-            raise ValueError(
-                f"TUSZEDFDirectDataModule does not implement normalize={normalize!r}; "
-                f"use TUSZDataModule (HDF5) if per-window z-score is required."
-            )
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("tusz", type(self), normalize=normalize)
 
         n_channels = 20 if montage == "bipolar" else 19
         meta: Dict[str, Any] = {

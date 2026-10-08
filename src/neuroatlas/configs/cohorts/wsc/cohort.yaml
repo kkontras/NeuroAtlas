@@ -14,7 +14,8 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Wisconsin Sleep Cohort (WSC) benchmark adapter.
+  Wisconsin Sleep Cohort: PSG scored for sleep stages, with participant
+  ages.
 
 cohort:
   centre: "Wisconsin Sleep Cohort (NSRR), USA"
@@ -24,6 +25,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: wsc
+  folders: [polysomnography, datasets]
 
 signal:
   notch_freq: 60.0
@@ -54,8 +56,8 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  csv_path: "${EEG_DATA_ROOT}/data/raw/wsc/datasets/wsc-dataset-0.8.0.csv"
-  data_root: "${EEG_DATA_ROOT}/data/raw/wsc/polysomnography"
+  csv_path: "${EEG_DATA_ROOT}/wsc/datasets/wsc-dataset-0.8.0.csv"
+  data_root: "${EEG_DATA_ROOT}/wsc"
   label_mode: sleep_stage
   num_folds: 5
   signal_kind: raw

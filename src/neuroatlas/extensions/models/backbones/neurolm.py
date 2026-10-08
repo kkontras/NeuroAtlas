@@ -57,14 +57,17 @@ from typing import Any, Dict, List, Set, Tuple
 import numpy as np
 import torch
 
+from neuroatlas import quiet
+
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     is_bci_batch,
     read_sampling_rate,
     replace_nonfinite_with_zero,
     resample_poly_with_fallback,
+    run_names,
     snap_to_epoch_length,
     strip_zero_channels,
     unit_to_uv,
@@ -480,13 +483,13 @@ class NeuroLMBackbone(BenchmarkBackbone):
             # 'sampling_rate' to disambiguate this.
             src_sfreq_f = float(_TARGET_SFREQ)
 
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(
             x, src_sfreq_f, float(_TARGET_SFREQ), backend=_backend
         )
-        # ESAT-8: snap resampled length to epoch_seconds * target_sfreq
+        # _PAPER_PREPROC_DATASETS: snap resampled length to epoch_seconds * target_sfreq
         _dataset = first_meta.get("dataset", "") if first_meta else ""
-        if _dataset in _ESAT_DATASETS:
+        if _dataset in _PAPER_PREPROC_DATASETS:
             x = snap_to_epoch_length(x, float(_TARGET_SFREQ), meta)
         post_T = x.shape[-1]
         if post_T < _PATCH_SIZE:
@@ -519,19 +522,17 @@ class NeuroLMBackbone(BenchmarkBackbone):
         # Token-cap check (block_size across channels × time patches).
         n_chans = x.shape[1]
         n_tokens = n_chans * n_time_patches
-        if n_tokens > self.block_size:
-            if bci:
-                logger.warning(
-                    "NeuroLM: BCI token budget exceeded (%d > %d); truncating channels.",
-                    n_tokens, self.block_size,
-                )
-            else:
-                raise ValueError(
-                    f"NeuroLM: token budget exceeded — n_chans={n_chans} × "
-                    f"n_time_patches={n_time_patches} = {n_tokens} > "
-                    f"block_size={self.block_size}. Shorten the window or "
-                    f"reduce the channel count upstream."
-                )
+        # A BCI trial over the budget keeps its first channels (the packing
+        # below stops at block_size); that is said once the channels the
+        # vocabulary does not know are left out, which can bring a trial back
+        # under the budget.
+        if n_tokens > self.block_size and not bci:
+            raise ValueError(
+                f"NeuroLM: token budget exceeded — n_chans={n_chans} × "
+                f"n_time_patches={n_time_patches} = {n_tokens} > "
+                f"block_size={self.block_size}. Shorten the window or "
+                f"reduce the channel count upstream."
+            )
 
         # 5. Amplitude scale (gated by apply_amplitude_scale override).
         overrides = self._resolve_overrides()
@@ -584,6 +585,17 @@ class NeuroLMBackbone(BenchmarkBackbone):
                 for j, (_, idx, kind) in enumerate(ch_indices_with_pos)
                 if kind != "native"
             ]
+            if n_tokens > self.block_size:
+                # the protocol, nothing to act on: -v and --log, once per
+                # command and run (every later batch at DEBUG)
+                fits = self.block_size // n_time_patches
+                dataset, checkpoint = run_names(meta, self.spec.identifier)
+                quiet.warn_once(
+                    logger, f"neurolm bci token budget:{dataset}:{checkpoint}:{n_tokens}",
+                    "%s: %s takes at most %d tokens (one per channel and second), so it "
+                    "reads the first %d of the %d channels of each %d s trial",
+                    dataset or "BCI", checkpoint or "NeuroLM", self.block_size, fits,
+                    n_chans, n_time_patches, level=logging.INFO)
         else:
             resolved = [_channel_idx_or_raise(c) for c in kept_labels]
             ch_indices = [idx for idx, _ in resolved]
@@ -673,7 +685,9 @@ class NeuroLMBackbone(BenchmarkBackbone):
         )
         valid = input_mask.unsqueeze(-1).to(features.dtype)
         pooled = (features * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
-        return replace_nonfinite_with_zero(pooled, where="neurolm:output")
+        return replace_nonfinite_with_zero(pooled, where="neurolm:output",
+                                           meta=batch.get("meta"),
+                                           checkpoint=self.spec.identifier)
 
     def extract_embeddings(self, batch) -> np.ndarray:
         with torch.inference_mode():

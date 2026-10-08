@@ -33,22 +33,25 @@ responsibility. See AGENT_GUIDE.md §7.1.
 from __future__ import annotations
 
 import logging
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
 import torch
 
+from neuroatlas import quiet
+
 from .base import BenchmarkBackbone
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     StageTimer,
     assert_batch_homogeneity,
     assert_finite,
+    is_bci_batch,
     percentile_normalize,
     read_sampling_rate,
     resample_poly_with_fallback,
+    run_names,
     snap_to_epoch_length,
     unit_to_uv,
 )
@@ -326,19 +329,11 @@ class BIOTBackbone(BenchmarkBackbone):
         unit = meta[0].get("unit") if meta else None
         x = unit_to_uv(x, unit)
 
-        # Deviation from the paper, deliberate but unresolved. The original
-        # BIOT loaders do not subtract the mean; they only divide by
-        # quantile(|X|, 0.95, axis=-1) below. This line is a safety net: on a
-        # DC-biased input that quantile is dominated by the offset and
-        # x/scale collapses to ~1.0 everywhere, washing the AC dynamics out
-        # entirely. The paper assumes inputs are re-referenced or high-passed
-        # upstream, so the net should not be needed, and the fix is to drop
-        # this line and have the offending adapter deliver zero-mean EEG
-        # rather than keep correcting it here.
-        #
-        # Silently correcting it would hide which adapter is at fault, so
-        # when the offset is large enough to matter the wrapper says so,
-        # once, and names the dataset to look at.
+        # Each window's per-channel mean is removed before the q95 scaling
+        # below. BIOT's own loaders only divide by quantile(|X|, 0.95,
+        # axis=-1); on a DC-biased input that quantile is dominated by the
+        # offset and x/scale collapses to ~1.0 everywhere. When the offset is
+        # large, -v and --log say so once (INFO: it asks nothing of the user).
         with StageTimer("biot", "center_chans"):
             dc = x.mean(dim=-1, keepdim=True)
             if not self._dc_offset_warned:
@@ -352,17 +347,12 @@ class BIOTBackbone(BenchmarkBackbone):
                         (dc.abs()[usable] / q95[usable]).max()
                     )
                     if ratio > _DC_OFFSET_WARN_RATIO:
-                        warnings.warn(
-                            f"BIOT: input carries a DC offset of "
-                            f"{ratio:.0%} of its 95th-percentile amplitude "
-                            f"(dataset={meta[0].get('dataset', '?')!r}). The "
-                            "wrapper is removing it, which the paper's own "
-                            "loaders do not do. Left in, that offset would "
-                            "dominate the q95 normaliser and flatten the "
-                            "signal; the fix belongs in the adapter, which "
-                            "should re-reference or high-pass, not here.",
-                            RuntimeWarning,
-                            stacklevel=3,
+                        dataset, checkpoint = run_names(meta, self.spec.identifier)
+                        logger.info(
+                            "%s: %s windows carry a DC offset of up to %.0f%% of their "
+                            "95th-percentile amplitude; each window's per-channel mean is "
+                            "removed before its 95th-percentile scaling",
+                            checkpoint or "BIOT", dataset or "the", 100 * ratio,
                         )
                         self._dc_offset_warned = True
             x = x - dc
@@ -423,7 +413,7 @@ class BIOTBackbone(BenchmarkBackbone):
                 )
 
         dataset = meta[0].get("dataset", "") if meta else ""
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         with StageTimer("biot", "resample"):
             x, resample_method = resample_poly_with_fallback(
                 x.contiguous(), src_sfreq_f, self.target_sfreq, backend=_backend
@@ -441,10 +431,21 @@ class BIOTBackbone(BenchmarkBackbone):
             if overrides["apply_recording_normalization"]:
                 q95_raw = meta[0].get("recording_q95")
                 if q95_raw is None:
-                    logger.warning(
-                        "[backbone=biot] recording_q95 missing from meta — "
-                        "falling back to per-batch percentile normalization."
-                    )
+                    # Each window divided by its own per-channel 95th
+                    # percentile of |x| (percentile_normalize: BIOT's own
+                    # formula) instead of the recording's. Expected on BCI:
+                    # the MOABB trials carry no recording statistics.
+                    if is_bci_batch(meta):
+                        logger.debug("BIOT: BCI trials carry no recording 95th percentile; "
+                                     "each trial is scaled by its own per-channel 95th "
+                                     "percentile")
+                    else:
+                        dataset, checkpoint = run_names(meta, self.spec.identifier)
+                        quiet.warn_once(
+                            logger, f"biot recording_q95 missing:{dataset}:{checkpoint}",
+                            "%s gives %s no per-recording 95th percentile, so each window "
+                            "is scaled by its own per-channel 95th percentile",
+                            dataset or "this dataset", checkpoint or "BIOT")
                     if real_mask.any() and not real_mask.all():
                         real_idx = real_mask.nonzero(as_tuple=True)[0]
                         x_real = percentile_normalize(x[:, real_idx, :], q=0.95)
@@ -474,12 +475,11 @@ class BIOTBackbone(BenchmarkBackbone):
                     else:
                         x = percentile_normalize(x, q=0.95)
             else:
-                logger.warning(
-                    "[backbone=biot] apply_recording_normalization=False — "
-                    "BIOT's per-channel 95-percentile normalization skipped; "
-                    "embedding domain will differ from the paper's "
-                    "pretrained scale."
-                )
+                quiet.warn_once(
+                    logger, "biot normalization off",
+                    "BIOT: apply_recording_normalization=False, so its per-channel "
+                    "95th-percentile normalization is skipped; the embeddings differ from "
+                    "the scale it was pretrained on (an ablation)")
 
         assert_finite(x, "biot:output")
 

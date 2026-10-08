@@ -157,7 +157,8 @@ class DODBenchmarkDataModule(BenchmarkDataModule):
     ) -> None:
         if signal_kind != "raw":
             raise ValueError(
-                f"DOD currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"dod reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(

@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .base import BenchmarkDataModule
 from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
-_BIDS_ROOT_DEFAULT = "${REPO_ROOT}/siena_cache/raw/BIDS_Siena"
+_BIDS_ROOT_DEFAULT = "${EEG_DATA_ROOT}/siena"
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +195,13 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         split_mode: str = "patient",
         **kwargs,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("siena", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         if split_mode not in SPLIT_MODES:
             raise ValueError(f"split_mode must be one of {SPLIT_MODES}, got {split_mode!r}")
         metadata = {
@@ -223,8 +230,7 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
 
         if backend != "bids":
             raise ValueError(
-                f"Unknown backend {backend!r}. The legacy 'hdf5' backend has "
-                f"been removed; only 'bids' is supported."
+                f"siena reads only its BIDS copy (backend=bids), not backend={backend!r}"
             )
         from neuroatlas.extensions.datasets.epilepsy.bids_index import (
             BIDSRecordingIndex,
@@ -237,12 +243,12 @@ class SienaBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
 
         root = find_bids_root(Path(bids_root)) if bids_root else None
         if root is None:
-            raise FileNotFoundError(
-                f"No BIDS root found at {bids_root}. Download with: "
-                "`neuroatlas data download siena`; if it is elsewhere, `neuroatlas config set siena.bids_root <path>`"
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data("siena", bids_root, "bids_root",
+                                            what="no BIDS dataset in"))
         self._bids_root = str(root)
-        self._bids_index = BIDSRecordingIndex.from_bids_root(root)
+        self._bids_index = BIDSRecordingIndex.from_bids_root(root, dataset="siena")
         self._DatasetCls = SienaBIDSDataset
         self._collate_fn = _collate_siena
 

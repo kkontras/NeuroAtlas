@@ -58,8 +58,14 @@ def effective_n_splits(requested: int, n_samples: int) -> int:
     because a single fold has no held-out set.
     """
     if n_samples < 2:
+        from neuroatlas.benchmarking_helpers.runtime.pair import current
+
+        run = current()
+        if run is None:
+            raise ValueError(f"found {n_samples} subjects; a fold split needs at least 2")
         raise ValueError(
-            f"cross-validation needs at least 2 subjects, got {n_samples}"
+            f"{run.dataset}: found {n_samples} subject{'' if n_samples == 1 else 's'} in its "
+            f"data; a fold split needs at least 2\nfix: neuroatlas data status {run.dataset}"
         )
     return max(2, min(int(requested), int(n_samples)))
 

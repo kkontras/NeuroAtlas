@@ -140,7 +140,7 @@ class EpilepsiAEContinuousDataset(Dataset):
 
     Args:
         data_root: Root of the raw EPILEPSIAE corpus
-            (e.g. ``${EEG_DATA_ROOT}/Epillepsie``).
+            (e.g. ``${EEG_DATA_ROOT}/epilepsiae``).
         patients: Pre-discovered patient list.  If *None* the filesystem
             is scanned (slow on first call but cached by the adapter).
         window_s: Window duration in seconds (default 30).

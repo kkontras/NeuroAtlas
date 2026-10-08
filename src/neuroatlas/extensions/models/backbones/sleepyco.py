@@ -9,7 +9,7 @@ import torch
 
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 
-from ._preproc import _ESAT_DATASETS, resample_poly_with_fallback
+from ._preproc import _PAPER_PREPROC_DATASETS, resample_poly_with_fallback
 from .base import BenchmarkBackbone
 from .core_sleep import _best_channel_index
 from .sleepyco_arch import MainModel
@@ -156,7 +156,7 @@ class SleePyCoBackbone(BenchmarkBackbone):
             src_fs = eeg.shape[-1] / (self.sequence_length * self.epoch_seconds)
         src_fs = float(src_fs)
         dataset = m0.get("dataset", "")
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         if abs(src_fs - self.target_sfreq) > 1e-6:
             eeg, _ = resample_poly_with_fallback(eeg, src_fs, self.target_sfreq, backend=_backend)
             # Snap to exact target length within 0.3 % tolerance.

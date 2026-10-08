@@ -52,7 +52,7 @@ class MASSDataset(BasePhysioDataset):
     Args:
         cohort: int (1-5). Selects which cohort's recordings to load.
         root: path to the MASS data directory
-              (default: ``${EEG_DATA_ROOT}/raw-sleep/mass/MASS/Original``).
+              (default: ``${EEG_DATA_ROOT}/mass``).
     """
 
     DATASET_NAME = "mass"
@@ -109,7 +109,7 @@ class MASSDataset(BasePhysioDataset):
     def __init__(
         self,
         cohort: int = 1,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/mass/MASS/Original",
+        root: str = "${EEG_DATA_ROOT}/mass",
         **kwargs,
     ):
         if cohort not in (1, 2, 3, 4, 5):

@@ -72,18 +72,16 @@ src/synib/mydatasets/MultimodalQA/dataset
 src/synib/mydatasets/MultimodalQA/final_dataset_images
 src/synib/mydatasets/MUStARD/prepared/
 
-# === Sofia-local additions (not for upstream) ===
-# Operational dirs that hold paths/data/results specific to this deployment
+# Local operational folders (machine-specific paths, data and results)
 /parity/
 /.local/
-/docs/sofia/
 /docs/results/
 /artifacts
 /data_root_neuroatlas/
 /run/slurm/_env.sh.orig
 /logs/
 
-# Sofia-local re-extraction scripts (hard-coded HPC paths, not for upstream)
+# Local re-extraction job scripts (machine-specific paths)
 /run/slurm/re_extract_one.sbatch
 /run/slurm/re_extract_shard.sbatch
 /run/slurm/re_merge_shards.sbatch
@@ -131,12 +129,6 @@ src/synib/mydatasets/MUStARD/prepared/
 # `probe` need none of it. Kept on disk, not shipped.
 /run/condor/
 /run/slurm/
-
-# Machine-specific data inventories. Read by no code -- they record where
-# corpora and embeddings sit on one cluster, which is useful to us and
-# meaningless to anyone else, and they name internal paths. Kept on disk.
-/configs/dataset_paths_sofia.yaml
-/configs/embeddings_paths_sofia.yaml
 
 # Tests. Kept on disk for the team, out of the public tree by decision:
 # they verify this repo rather than being part of what it ships. Note the

@@ -23,9 +23,9 @@ cohort:
 acquisition:
   kind: internal
   prepared_only: >
-    the benchmark reads the authors' preprocessed pickle
-    (ArithmeticTask_preprocessed_*.pkl), which is not publicly released.
-    fix: ask the authors for it, then
+    bci_cognitive reads ArithmeticTask_preprocessed_*.pkl (1 s windows at
+    128 Hz), the authors' own recordings; the authors provide it on request.
+    fix: ask the authors for ArithmeticTask_preprocessed_*.pkl, then
     neuroatlas config set arithmetic_task.preprocessed_path FILE
 
 signal:

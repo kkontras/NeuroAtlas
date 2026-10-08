@@ -2,14 +2,16 @@
 #
 # Every experiment NeuroAtlas reports, one command per line.
 #
-# The reference for "what was actually run". Each line is complete and
-# copy-pasteable, and the settings that DIFFER between experiments are written
-# out rather than left to a default a reader would have to go looking for.
+# The record of what the paper ran. Each line is complete and copy-pasteable,
+# and the settings that differ between experiments are written out rather
+# than left to a default. `neuroatlas show <benchmark>` prints the same lines,
+# spelled `neuroatlas <verb>`; `neuroatlas run` and `neuroatlas submit` run
+# them.
 #
 # Constant across every dataset, so left at the default:
 #   preprocessing   0.5 Hz highpass + powerline notch, then resample to each
-#                   model's training rate (Sec. 3). cohort.powerline_hz in the
-#                   manifest gives the notch frequency.
+#                   model's training rate (Sec. 3), at each dataset's
+#                   powerline frequency.
 #   backbone        frozen. No fine-tuning anywhere in the benchmark.
 #   solver          LBFGS.
 #   precision       fp32.
@@ -18,36 +20,38 @@
 # What varies, and is therefore explicit below (Appendix C):
 #   window/stride   10 s non-overlapping for epilepsy (C.1); 30 s epochs for
 #                   sleep and brain age (C.2, C.3); per-paradigm trial windows
-#                   for BCI (C.4), taken from each dataset's manifest.
+#                   for BCI (C.4), set per dataset.
 #   probe           logistic regression, except brain age, which is ridge.
-#   C / alpha       epilepsy grid-searches C on a validation fold; sleep and
-#                   BCI use C=1.0; brain age nested-CVs alpha internally.
-#   class weight    balanced for epilepsy, sleep events/diagnosis and BCI;
-#                   unweighted for sleep staging (C.2).
-#   aggregation     none for epoch-level tasks; mean-pooled per recording for
-#                   diagnosis and brain age.
-#   selection       AUPRC for binary seizure detection, MAE for brain age.
+#   C / alpha       epilepsy chooses C on validation AUPRC (C.1); sleep
+#                   staging chooses it on validation Cohen's kappa (C.2);
+#                   sleep events, diagnosis and BCI use C = 1; brain age
+#                   chooses alpha by nested cross-validation.
+#   class weight    balanced for epilepsy, sleep events and BCI; unweighted
+#                   for sleep staging and diagnosis.
+#   aggregation     none for epoch-level tasks; one mean embedding per
+#                   subject for diagnosis and brain age (per recording for
+#                   ISRUC and WSC brain age).
+#   selection       AUPRC for seizure detection, Cohen's kappa for sleep
+#                   staging, MAE for brain age.
 #
-# --models all is every checkpoint in the registry. Use --models eeg_fm |
-# ts_fm | supervised for one of the paper's three groups
-# (src/neuroatlas/configs/model_groups.yaml).
-#
-# Except on epilepsy: the sleep-staging sequence models SleepTransformer,
-# SleePyCo and CoRe-Sleep (families sleep_transformer, sleepyco, core_sleep,
-# their _seq1 checkpoints included) are not part of the epilepsy benchmark
-# (src/neuroatlas/configs/benchmarks/epilepsy.yaml, excluded_models; the
-# authors' decision of 2026-10-05), so its lines remove them by name. Their
-# wrappers refuse its 10 s windows. The paper's epilepsy results (Fig. 2b and
-# 8, Tables 3 and 4, App. D.1.3) do show CoRe-Sleep and SleepTransformer;
-# this file does not rerun those cells.
-#
-# Protocols follow the paper's Appendix C; see src/neuroatlas/configs/tasks/ for the defaults.
+# Models: each line starts from `--models all`, every checkpoint, and removes
+# by name the families its benchmark does not evaluate (`-name`):
+#   epilepsy        the sleep-staging sequence models (sleep_transformer,
+#                   sleepyco, core_sleep), which take sequences of 30 s
+#                   epochs, and the motor-imagery EEGNet checkpoints
+#                   (eegnetv4);
+#   sleep, brain age
+#                   eegnetv4 and the seizure models (deepsoz_hem,
+#                   seizure_transformer);
+#   BCI             the sleep-staging sequence models and the seizure models.
+# `neuroatlas list benchmarks -v` lists the same exclusions, with the reason.
+# --models eeg_fm | ts_fm | supervised selects one of the paper's groups.
 #
 set -euo pipefail
 
 
 # ==========================================================================
-# 1. FETCH -- obtain every corpus
+# 1. FETCH -- where to get every dataset
 # Roughly half need credentials or a manual download; `fetch` prints
 # what to request and where to put it, and transfers nothing without
 # --download.
@@ -99,15 +103,12 @@ python -m neuroatlas.entrypoints.fetch --dataset shin2017a
 python -m neuroatlas.entrypoints.fetch --dataset weibo2014
 
 # ==========================================================================
-# 2. PREPARE -- none of the 45 needs a build step
-# Every cohort reads its raw corpus directly; the MOABB cohorts are
-# epoched by their reader as `embed` loads them. Two kinds of optional
-# build exist and are not listed here: the epilepsy HDF5 caches that
-# speed up large sweeps (`prepare --dataset tusz`), and dataio/bci.py's
-# pickles for five MI cohorts (`prepare --dataset bnci2014_001`), which
-# `embed` does not read. (The paper's BCI embeddings were extracted from
-# per-model pickles of an earlier pipeline; see the MI cohort manifests'
-# known_issues.)
+# 2. PREPARE -- no dataset needs a build step
+# Every dataset is read as obtained (SHHS and the four bci_cognitive
+# datasets from the authors' preprocessed files); the MOABB datasets are
+# epoched by their reader as `embed` loads them. Five epilepsy datasets
+# (bonn, epilepsiae, sz1, tuab, tusz) have an optional faster-reading copy
+# (`neuroatlas data prepare <dataset>`), not listed here.
 # ==========================================================================
 
 # ==========================================================================
@@ -116,111 +117,109 @@ python -m neuroatlas.entrypoints.fetch --dataset weibo2014
 
 # Epilepsy: 10 s windows, no overlap (C.1). --expected-epoch-seconds tells
 # each backbone the window it is handed, so one pretrained on 30 s epochs
-# (BIOT) does not reject a 10 s one; every epilepsy launcher set it.
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset bonn --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset chbmit --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset epilepsiae --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset helsinki_neonatal --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset nmt --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz1 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz2 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tuab --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
-python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tusz --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+# (BIOT) accepts a 10 s one.
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset bonn --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset chbmit --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset epilepsiae --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset helsinki_neonatal --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset nmt --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset siena --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset sz1 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset sz2 --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset tuab --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset tusz --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
 
-# Sleep and brain age: 30 s epochs (C.2, C.3). Cohorts whose readers are
-# built on fixed 30 s scoring epochs take no window arguments -- passing
-# them was a TypeError -- so only the configurable ones are told.
-python -m neuroatlas.entrypoints.embed --models all --dataset cfs --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset dcsm
-python -m neuroatlas.entrypoints.embed --models all --dataset dod
-python -m neuroatlas.entrypoints.embed --models all --dataset hmc --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset hpap_lab_full --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset isruc
-python -m neuroatlas.entrypoints.embed --models all --dataset mass
-python -m neuroatlas.entrypoints.embed --models all --dataset mesa --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset mros --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026
-python -m neuroatlas.entrypoints.embed --models all --dataset shhs
-python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded
-python -m neuroatlas.entrypoints.embed --models all --dataset stages --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset ucddb
-python -m neuroatlas.entrypoints.embed --models all --dataset wsc
-python -m neuroatlas.entrypoints.embed --models all --dataset cfs --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset isruc
-python -m neuroatlas.entrypoints.embed --models all --dataset mros --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.embed --models all --dataset physionet2026
-python -m neuroatlas.entrypoints.embed --models all --dataset sleep_edf_expanded
-python -m neuroatlas.entrypoints.embed --models all --dataset wsc
+# Sleep and brain age: 30 s epochs (C.2, C.3). Readers built on fixed 30 s
+# scoring epochs take no window arguments; only the others are told.
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset cfs --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset dcsm
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset dod
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset hmc --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset hpap_lab_full --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mass
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mesa --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mros --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset shhs
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset sleep_edf_expanded
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset stages --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset ucddb
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset wsc
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset cfs --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mros --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset sleep_edf_expanded
+python -m neuroatlas.entrypoints.embed --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset wsc
 
-# BCI (C.4). Trial windows come from the manifest, and two axes
-# are crossed over every cohort.
+# BCI (C.4). Each dataset has its own trial window, and two settings are
+# crossed over the datasets.
 #
-#   confound_control  an MI trial opens with a visual cue, so its
-#                     first second holds the evoked response and the
-#                     eye movement towards it. On holds the band to
-#                     4-40 Hz and starts the window 1 s in. The gap
-#                     between off and on is how much of a score came
-#                     from the cue rather than the imagery. Motor
-#                     imagery only -- for P300, ERP and SSVEP the
-#                     cue-locked response IS the signal, and `embed`
-#                     refuses the flag there.
-#   pooling           what comes back for each window, the window
-#                     itself unchanged: `mean` is one vector
-#                     averaged over that window's patch tokens,
-#                     `per_patch` keeps that window's tokens apart.
+#   confound_control  A motor-imagery trial opens with a visual cue, so
+#                     its first second holds the evoked response and the
+#                     eye movement towards it. With confound_control=true
+#                     the window starts 1 s in, so the score cannot come
+#                     from the cue. Motor imagery only: for ERP and SSVEP
+#                     the cue-locked response is the signal, and `embed`
+#                     refuses the setting there.
+#   pooling           `mean` averages a trial's patch tokens into one
+#                     vector. `per_patch` concatenates them.
 #
-# Each combination is its own cache cell, so none overwrites another.
+# Each combination has its own cache, so none overwrites another. The
+# paper calls confound_control off "no filtering" and on "confound
+# filtering", pooling mean "mean-pool" and per_patch "token flattening".
+# `neuroatlas show bci_motor_imagery` names the figure each reproduces.
 
 #   --- confound_control off, pooling mean ------------------------
-python -m neuroatlas.entrypoints.embed --models all --dataset bi2013a --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bi2014a --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_001 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_004 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_008 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2015_001 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset dreyer2023 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset epflp300 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset erpcore2021_n170 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset kim2025betarange --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset liu2024 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset nakanishi2015 --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset shin2017a --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2013a --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2014a --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_008 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset epflp300 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset erpcore2021_n170 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset kim2025betarange --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset nakanishi2015 --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --pooling mean
 
 #   --- confound_control off, pooling per_patch ------------------------
-python -m neuroatlas.entrypoints.embed --models all --dataset bi2013a --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bi2014a --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_001 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_004 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_008 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2015_001 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset dreyer2023 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset epflp300 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset erpcore2021_n170 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset kim2025betarange --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset liu2024 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset nakanishi2015 --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset shin2017a --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2013a --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2014a --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_008 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset epflp300 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset erpcore2021_n170 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset kim2025betarange --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset nakanishi2015 --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --pooling per_patch
 
 #   --- confound_control ON, pooling mean ------------------------
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_001 --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_004 --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2015_001 --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset dreyer2023 --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset liu2024 --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset shin2017a --set confound_control=true --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --set confound_control=true --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --set confound_control=true --pooling mean
 
 #   --- confound_control ON, pooling per_patch ------------------------
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_001 --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2014_004 --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset bnci2015_001 --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset dreyer2023 --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset liu2024 --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset shin2017a --set confound_control=true --pooling per_patch
-python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --set confound_control=true --pooling per_patch
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --set confound_control=true --pooling per_patch
 
 # ==========================================================================
 # 4. PROBE -- reads the embeddings above; refuses if they are absent
@@ -232,33 +231,33 @@ python -m neuroatlas.entrypoints.embed --models all --dataset weibo2014 --set co
 # ==========================================================================
 
 # --- Epilepsy: seizure detection, AUPRC-selected C (C.1) ------------------
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset bonn --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset chbmit --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset epilepsiae --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset helsinki_neonatal --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset nmt --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz1 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset sz2 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tuab --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
-python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep --dataset tusz --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset bonn --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset chbmit --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset epilepsiae --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset helsinki_neonatal --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset nmt --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset siena --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset sz1 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset sz2 --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset tuab --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-eegnetv4 --dataset tusz --task seizure_detection --set window_s=10 --set stride_s=10 --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
 
 # --- Sleep axis 1: epoch-wise staging, unweighted loss (C.2) --------------
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset dcsm --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset dod --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset hmc --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset hpap_lab_full --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset mass --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset mesa --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset shhs --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset stages --task sleep_staging --set window_s=30 --set stride_s=30
-python -m neuroatlas.entrypoints.probe --models all --dataset ucddb --task sleep_staging
-python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset cfs --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset dcsm --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset dod --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset hmc --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset hpap_lab_full --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mass --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mesa --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mros --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset shhs --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset sleep_edf_expanded --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset stages --task sleep_staging --set window_s=30 --set stride_s=30
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset ucddb --task sleep_staging
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset wsc --task sleep_staging
 
 # --- Sleep axis 2: hypnogram features (C.2, Table 2) ------------------
 #     Derived from the staging predictions above -- TST, REM latency,
@@ -269,88 +268,87 @@ python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task sleep_s
 #     why it is last in the file.
 
 # --- Sleep axis 3: event detection, balanced loss (C.2) --------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset mass --task mass_arousal --probe-type linear --class-weight balanced --tune-c 1.0
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task arousal --probe-type linear --class-weight balanced --tune-c 1.0
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task limb --probe-type linear --class-weight balanced --tune-c 1.0
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task respiratory --probe-type linear --class-weight balanced --tune-c 1.0
-python -m neuroatlas.entrypoints.probe --models all --dataset ucddb --task respiratory --probe-type linear --class-weight balanced --tune-c 1.0
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mass --task mass_arousal --probe-type linear --class-weight balanced --tune-c 1.0
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task arousal --probe-type linear --class-weight balanced --tune-c 1.0
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task limb --probe-type linear --class-weight balanced --tune-c 1.0
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task respiratory --probe-type linear --class-weight balanced --tune-c 1.0
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset ucddb --task respiratory --probe-type linear --class-weight balanced --tune-c 1.0
 
-# --- Sleep axis 4: recording-level diagnosis, mean-pooled (C.2) ------------
-python -m neuroatlas.entrypoints.probe --models all --dataset dod --task osa --probe-type linear --class-weight balanced --tune-c 1.0 --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task pathology --probe-type linear --class-weight balanced --tune-c 1.0 --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task cognitive --probe-type linear --class-weight balanced --tune-c 1.0 --aggregation mean
+# --- Sleep axis 4: subject-level diagnosis, mean-pooled, unweighted (C.2) ---
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset dod --task osa --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc --task pathology --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task cognitive --aggregation mean
 
 # --- Brain age: ridge on mean-pooled epochs, nested-CV alpha (C.3) --------
-#     A task over the sleep cohorts that carry age labels, not a
-#     separate domain. The brain_age task fits the ridge and selects
-#     alpha itself, so no --probe-type or --tune-c here.
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset isruc --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
-python -m neuroatlas.entrypoints.probe --models all --dataset wsc --task brain_age --set label_mode=age --aggregation mean
+#     Runs on the sleep datasets that carry participant ages. The
+#     brain_age task fits the ridge and selects alpha itself, so no
+#     --probe-type or --tune-c here.
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset wsc --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset cfs --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset isruc --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset mros --task brain_age --set window_s=30 --set stride_s=30 --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset physionet2026 --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset sleep_edf_expanded --task brain_age --set label_mode=age --aggregation mean
+python -m neuroatlas.entrypoints.probe --models all,-eegnetv4,-deepsoz_hem,-seizure_transformer --dataset wsc --task brain_age --set label_mode=age --aggregation mean
 
 # --- BCI: LOSO, balanced logistic regression (C.4) ------------------------
-#     n_folds=loso is one fold per subject, whatever the cohort
-#     size (dataio/bci.py:resolve_n_folds). Cohorts run from 8 to
-#     100 subjects, so one setting covers all of them.
+#     n_folds=loso is one fold per subject, whatever the number of
+#     subjects (8 to 100 across the datasets).
 
 #   --- confound_control off, pooling mean ------------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bi2013a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bi2014a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_004 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_008 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2015_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset dreyer2023 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset epflp300 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset erpcore2021_n170 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset kim2025betarange --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset liu2024 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset nakanishi2015 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset shin2017a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset weibo2014 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2013a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2014a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_008 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset epflp300 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset erpcore2021_n170 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset kim2025betarange --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset nakanishi2015 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 
 #   --- confound_control off, pooling per_patch ------------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bi2013a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bi2014a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_001 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_004 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_008 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2015_001 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset dreyer2023 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset epflp300 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset erpcore2021_n170 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset kim2025betarange --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset liu2024 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset nakanishi2015 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset shin2017a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset weibo2014 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2013a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bi2014a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_008 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset epflp300 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset erpcore2021_n170 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset kim2025betarange --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset nakanishi2015 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 
 #   --- confound_control ON, pooling mean ------------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_001 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_004 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2015_001 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset dreyer2023 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset liu2024 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset shin2017a --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset weibo2014 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 
 #   --- confound_control ON, pooling per_patch ------------------------
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_001 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2014_004 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset bnci2015_001 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset dreyer2023 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset liu2024 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset shin2017a --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset weibo2014 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_001 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2014_004 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset bnci2015_001 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreyer2023 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset liu2024 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset shin2017a --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset weibo2014 --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 
 # ==========================================================================
 # 5. HYPNOGRAM -- sleep-architecture features from the staging probes
@@ -367,35 +365,24 @@ python -m neuroatlas.entrypoints.hypnogram --datasets ucddb
 python -m neuroatlas.entrypoints.hypnogram --datasets wsc
 
 # ==========================================================================
-# All of the paper's datasets are now registered.
-#
-# The registry holds 43 paper cohorts for 42 paper datasets: DREAMER is split
-# into dreamer_valence and dreamer_arousal, which is how its pickles, its
-# embeddings and its probes are stored, and how the paper reports it.
-#
-# EEGMat, ArithmeticTask and DREAMER read preprocessed pickles rather than a
-# downloadable corpus -- `fetch` has nothing to do for them. Point
-# --set preprocessed_path=<file> at the pickle, or place it where
-# dataio/bci.py's PREPROCESSED_SEARCH_PATHS looks.
+# BCI cognitive state (C.4): DREAMER (valence and arousal, two entries of
+# one dataset), EEGMat and ArithmeticTask. They read the authors'
+# preprocessed files, so `fetch` has nothing to download for them;
+# `neuroatlas data status bci_cognitive` names each file and the
+# `preprocessed_path` setting that points at it.
 
-python -m neuroatlas.entrypoints.embed --models all --dataset dreamer_valence --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset dreamer_arousal --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset eegmat --pooling mean
-python -m neuroatlas.entrypoints.embed --models all --dataset arithmetic_task --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreamer_valence --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreamer_arousal --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset eegmat --pooling mean
+python -m neuroatlas.entrypoints.embed --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset arithmetic_task --pooling mean
 
-python -m neuroatlas.entrypoints.probe --models all --dataset dreamer_valence --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset dreamer_arousal --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset eegmat --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
-python -m neuroatlas.entrypoints.probe --models all --dataset arithmetic_task --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreamer_valence --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset dreamer_arousal --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset eegmat --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+python -m neuroatlas.entrypoints.probe --models all,-sleep_transformer,-sleepyco,-core_sleep,-deepsoz_hem,-seizure_transformer --dataset arithmetic_task --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 
-# Brain age (App. B.3) is reported on 10 cohorts: CFS, HomePAP, ISRUC, MESA,
-# MrOS, PhysioNet 2026, SHHS, SleepEDF SC, STAGES, WSC. Six run above -- the
-# six whose dossier declares an `age` label mode.
-#
-# The other four (HomePAP, MESA, SHHS, STAGES) are all registered and all run
-# sleep staging, but each declares `sleep_stage` only: their loaders carry no
-# demographics, so there is no age to regress on. For SHHS that means joining
-# the NSRR shhs1-dataset-*.csv on patient id; the other three need the
-# equivalent from their own NSRR metadata. It is a loader change plus an
-# `age` entry in labels.modes, not a flag.
+# Brain age runs on six datasets: CFS, ISRUC, MrOS, PhysioNet 2026,
+# Sleep-EDF Expanded (its Sleep Cassette subjects) and WSC. The paper also
+# reports SHHS, MESA, HomePAP and STAGES (Table 9); their participant ages
+# come from NSRR's demographic tables, which this release does not read.
 # ==========================================================================

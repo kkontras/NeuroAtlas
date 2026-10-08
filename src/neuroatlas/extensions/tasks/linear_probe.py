@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
@@ -106,38 +107,43 @@ def _not_found_message(cache_dir: Path, dataset_name: str, checkpoint_spec, spli
             keys = set(have) | set(wanted)
             diff = sorted(k for k in keys if _json(have.get(k)) != _json(wanted.get(k)))
             found.append((len(diff), meta.parent, have, diff))
+    per_split = split_name in ("train", "val", "test") and "fold" in wanted
+    scope = f" (fold {wanted.get('fold')}, {split_name} split)" if per_split else ""
     lines = [
-        f"No embeddings for dataset={dataset_name!r} checkpoint={model!r} split={split_name!r}.",
+        f"no embeddings made with this probe's settings in {pair_dir}{scope}",
         f"  looked in: {cache_dir}",
     ]
     if found:
         found.sort(key=lambda t: (t[0], str(t[1])))
         _, where, have, diff = found[0]
-        lines.append(f"  nearest existing cache for this dataset and model: {where}")
-        lines.append("  it was made with different inputs:")
+        lines.append(f"  the nearest embeddings for this dataset and checkpoint: {where}")
+        lines.append("  they were made with other settings:")
         for k in diff:
-            lines.append(f"    {k}: that cache {_json(have.get(k)) if k in have else '(absent)'}, "
-                         f"this probe {_json(wanted.get(k)) if k in wanted else '(absent)'}")
+            lines.append(f"    {k}: {_json(have.get(k)) if k in have else '(not set)'} there, "
+                         f"{_json(wanted.get(k)) if k in wanted else '(not set)'} in this probe")
         if len(found) > 1:
-            lines.append(f"  ({len(found) - 1} other cache(s) for this pair under {pair_dir})")
+            lines.append(f"  ({len(found) - 1} other set(s) of embeddings for this pair "
+                         f"under {pair_dir})")
         lines.append("A probe reads only embeddings made with the same dataset settings "
                      "(--set ..., --expected-epoch-seconds) it is given itself.")
     else:
-        lines.append(f"  no embeddings exist yet for this dataset and model under {pair_dir.parent.parent}")
-    if split_name in ("train", "val", "test") and "fold" in wanted:
+        lines.append(f"  no embeddings for this dataset and checkpoint under "
+                     f"{pair_dir.parent.parent}")
+    if per_split:
         # A per-split cache holds one fold's split: `embed` must be given
         # that fold (`run` passes the probe's folds to its embed step).
-        lines.append(f"  this dataset caches its embeddings per fold and split: embed fold "
-                     f"{wanted.get('fold')} with `neuroatlas embed ... --folds {wanted.get('fold')}`.")
+        lines.append(f"  this dataset keeps its embeddings per fold and split: embed fold "
+                     f"{wanted.get('fold')} with `neuroatlas embed --dataset {dataset_name} "
+                     f"--models {model} --folds {wanted.get('fold')}`.")
     lines.append("Probing reads embeddings; it does not create them.")
     benches = _benchmarks_with(dataset_name)
+    # the remedy on a fix: line, which a message cut to its first sentence keeps
     if len(benches) == 1:
-        lines.append(f"To extract and probe with one set of settings: "
-                     f"neuroatlas run {benches[0]} --dataset {dataset_name} -m {model}")
+        lines.append(f"fix: neuroatlas run {benches[0]} --dataset {dataset_name} -m {model} "
+                     f"(extracts, then probes, with one set of settings)")
     else:
-        lines.append(f"To extract: neuroatlas embed --dataset {dataset_name} --models {model}, "
-                     f"with the same --set/--expected-epoch-seconds flags as this probe, "
-                     f"and the same --cache-root.")
+        lines.append(f"fix: neuroatlas embed --dataset {dataset_name} --models {model} (with "
+                     f"this probe's --set and --expected-epoch-seconds flags and cache root)")
     return "\n".join(lines)
 
 
@@ -564,22 +570,20 @@ def _extract_or_load_embeddings(
                     progress.current().phase("reading the embeddings").count("cached")
                     payload = load_embedding_payload(ext_dir, mmap_mode="r")
                     dt = time.time() - t0
-                    print(
-                        f"[embedding] External HIT {split_name:<6s}  "
-                        f"{len(payload.labels):>7,d} samples  from {ext_dir}  "
-                        f"loaded in {dt:.1f}s",
-                        flush=True,
-                    )
+                    logging.getLogger(__name__).debug(
+                        "[embedding] external hit %-6s %7d samples from %s, read in %.1fs",
+                        split_name, len(payload.labels), ext_dir, dt)
                     return payload, {
                         "cache_dir": str(ext_dir),
                         "cache_hit": True,
                         "external_cache": True,
                     }
+                # embeddings this dataset reads from elsewhere, never extracted here
                 raise FileNotFoundError(
-                    f"precomputed_embedding_cache_dir returned {ext_dir} but it does not "
-                    f"contain features.npy + labels.npy. Refusing to fall back to backbone "
-                    f"extraction for dataset={dataset_name!r} "
-                    f"checkpoint={checkpoint_spec.identifier!r}."
+                    f"no finished embeddings in {ext_dir}; the extraction that writes them "
+                    f"did not complete\n"
+                    f"fix: neuroatlas embed --dataset {dataset_name} "
+                    f"--models {checkpoint_spec.identifier}"
                 )
 
     cache_dir = cache_dir_override if cache_dir_override is not None else _embedding_cache_dir(cache_root, dataset_name, checkpoint_spec, split_name, datamodule, purpose=cache_purpose)
@@ -803,7 +807,7 @@ def _extract_or_load_embeddings(
             for sid in prev_subjects:
                 _do_evict(loader_dataset, sid)
 
-        item.phase("writing the cache")
+        item.phase(f"writing the embeddings ({rows_seen:,} windows)")
         cache_metadata = _cache_spec(dataset_name, checkpoint_spec, split_name, datamodule, purpose=cache_purpose)
         paths = writer.finalize(metadata=cache_metadata)
     paths["cache_hit"] = False
@@ -861,13 +865,14 @@ def evaluate_linear_probe(
         if cache_exists(global_cache_dir):
             # Full cache already ready.
             if extract_only:
-                # the runner says "cached (already extracted)"; the path is for -v and --log
+                # the runner says "already extracted"; the path is for -v and --log
                 import logging
 
                 logging.getLogger(__name__).info("%s/%s: global cache already exists at %s",
                                                  dataset_name, checkpoint_spec.identifier,
                                                  global_cache_dir)
                 return _extract_only_result(dataset_name, checkpoint_spec, datamodule, backbone, "already_cached", {"global_cache_dir": str(global_cache_dir)})
+            progress.current().phase("reading the embeddings")
             full_payload = load_embedding_payload(global_cache_dir, mmap_mode="r")
             full_paths: dict = {"cache_dir": str(global_cache_dir), "cache_hit": True}
 
@@ -907,6 +912,7 @@ def evaluate_linear_probe(
         if extract_only:
             return _extract_only_result(dataset_name, checkpoint_spec, datamodule, backbone, "extracted", {"global_cache_dir": str(global_cache_dir)})
 
+        progress.current().phase("cutting this fold's split")
         split_payloads = datamodule.split_global_embedding_payload(full_payload)
         train_payload = split_payloads["train"]
         val_payload = split_payloads["val"]
@@ -914,10 +920,11 @@ def evaluate_linear_probe(
         cache_paths.update({f"global_{key}": value for key, value in full_paths.items()})
     else:
         if embed_chunk is not None:
-            import logging
+            from neuroatlas import quiet
 
-            logging.getLogger(__name__).warning(
-                "%s has no global embedding cache: --embed-chunk is ignored", dataset_name)
+            quiet.warn_once(logging.getLogger(__name__), f"embed-chunk:{dataset_name}",
+                            "%s has no global embedding cache: --embed-chunk is ignored",
+                            dataset_name)
         train_payload, train_paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "train", checkpoint_spec, backbone, datamodule.train_dataloader(), datamodule
         )
@@ -997,6 +1004,7 @@ def evaluate_linear_probe(
                                 higher_is_better=_higher_is_better(selection_metric),
                                 hidden_dims=probe_config.get("hidden_dims")),
             score={"label_mode": label_mode}))
+    progress.current().phase("scoring")
     metrics, saved, path = preds.finalize(record, probe_dir, score)
     if path is not None:
         cache_paths["predictions"] = str(path)
@@ -1035,7 +1043,9 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="linear_probe",
-        description="Extract embeddings and fit a train/val/test linear or nonlinear probe.",
+        description="A probe on frozen embeddings (logistic regression by default) on the "
+                    "dataset's own labels: the BCI benchmarks, and sleep staging through its "
+                    "preset.",
         evaluator=evaluate_linear_probe,
         score=score,
     )

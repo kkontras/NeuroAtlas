@@ -18,17 +18,17 @@ The manifest also names the datamodule::
     spec:
       datamodule: neuroatlas.extensions.datasets.adapters.ucddb.UCDDBBenchmarkDataModule
 
-and `_manifest_specs.py` builds the registry spec from it, resolving the path
-on first construction. 30 cohorts are bound this way and have no Python
-module of their own.
+and `_manifest_specs.py` builds the dataset from it, resolving the path on
+first construction. 34 datasets are bound this way and have no Python module
+of their own.
 
 A cohort keeps its own `<slug>.py` only when the binding is not a constant:
 `tusz` chooses its adapter from `backend`, `sleep_edf` wraps the callable, and
 the five `moabb_*` modules generate one spec per MOABB dataset.
 
-    registered cohorts     46   (one dossier each, all with a spec)
-    MOABB-generated specs 138   (loadable, not in the paper)
-    total discovered      184
+    datasets with a manifest   50   (43 of them in the paper)
+    MOABB-generated           138   (readable, not in the paper)
+    total                     188
 
 ## Support packages
 
@@ -43,35 +43,15 @@ the five `moabb_*` modules generate one spec per MOABB dataset.
 
 ## One naming trap
 
-**Backend suffixes are not a convention.** Six cohorts have two readers, under
-three different spellings: `chbmit`/`chbmit_bids`, `epilepsiae`/
-`epilepsiae_cached`, `siena_bids` (the plain `dataio/siena.py` was deleted),
-`sz1`/`sz1_edf`, `sz2`/`sz2_edf`, `tusz`/`tusz_edf`.
+**Backend suffixes are not a convention.** Five datasets have two readers,
+under three spellings: `chbmit`/`chbmit_bids`, `epilepsiae`/
+`epilepsiae_cached`, `sz1`/`sz1_edf`, `sz2`/`sz2_edf`, `tusz`/`tusz_edf`.
+Siena's one reader is `siena_bids`.
 
-TUSZ's cache-backed reader used to be called `tuh`, which was misleading --
-TUH is the corpus family and TUAB is also TUH, with its own `tuab.py`. It is
-now `tusz`, matching its slug. `tuh` still appears as a *source* name (the
-fetch kind, and `source: tuh` in the TUAB and TUSZ manifests), which is
-correct: that is the corpus, not the reader.
+`tuh` names the corpus family (the source of TUAB and TUSZ in their
+manifests), not a reader: TUSZ's reader is `tusz.py`, TUAB's `tuab.py`.
 
-## What is here but cannot run
-
-Checked by import-reachability and by asking the registry directly; these are
-kept deliberately, not overlooked.
-
-- **21 adapters with no dossier and no spec** (266 lines): `stages_*` (13
-  per-site), `shhs_v1`, `shhs_v2`, `alzheimers_ad/hc`, `parkinsons_*` (4).
-  Each has a fold manifest under `src/neuroatlas/configs/folds/` but no
-  `src/neuroatlas/configs/cohorts/<slug>/`, so `load_dataset_spec` raises *"Unsupported
-  benchmark dataset"*. They are per-site and per-arm variants from earlier
-  experiments.
-- **`adapters/precomputed_embeddings.py`** (767 lines): no spec binds it, and
-  probing from cached embeddings goes through `require_cached_embeddings` and
-  the runtime cache instead. It is kept because `tasks/brain_age.py` still
-  computes brain-age gap from `split_payloads.get("holdout")`, and this is the
-  only datamodule implementing `holdout_eval_groups`.
-
-## Adding a cohort
+## Adding a dataset
 
 1. Write `src/neuroatlas/configs/cohorts/<slug>/cohort.yaml` -- that is where the facts go,
    including `spec.datamodule`.

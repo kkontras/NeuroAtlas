@@ -50,7 +50,7 @@ SETTINGS: Dict[str, Setting] = {s.key: s for s in (
             "saved embeddings and prepared datasets (prepared/); can grow large",
             "$NEUROATLAS_HOME/artifacts/embedding_cache"),
     Setting("output_root", "NEUROATLAS_OUTPUT_ROOT", lambda: _paths.artifacts_dir("benchmarks"),
-            "probe results (results.json, results.csv)", "$NEUROATLAS_HOME/artifacts/benchmarks"),
+            "probe results (results.json)", "$NEUROATLAS_HOME/artifacts/benchmarks"),
     Setting("models_root", "NEUROATLAS_MODELS_ROOT", lambda: _paths.artifacts_dir("models"),
             "model weights", "$NEUROATLAS_HOME/artifacts/models"),
 )}
@@ -124,7 +124,9 @@ def load_file(path: Optional[Path] = None, strict: bool = True,
         where = getattr(exc, "problem_mark", None)
         line = f" (line {where.line + 1})" if where is not None else ""
         raise ConfigError(f"error: {path} is not valid YAML{line}: "
-                          f"{getattr(exc, 'problem', None) or exc}") from None
+                          f"{getattr(exc, 'problem', None) or exc}\n"
+                          f"fix: correct that line, or rewrite the file with neuroatlas "
+                          f"config init --force --data-root DIR") from None
     if not isinstance(data, dict):
         raise ConfigError(f"error: {path} must be a mapping of settings, not a "
                           f"{type(data).__name__}\nfix: neuroatlas config init --force "
@@ -207,7 +209,8 @@ def dataset_key_problem(slug: str, keys: List[str]) -> Optional[str]:
         if key in valid:
             continue
         if not valid:
-            return f"{slug} reads no path from the settings (a MOABB dataset: it lives under $MNE_DATA)"
+            return (f"{slug} reads no path from the settings: it is a MOABB dataset, read "
+                    f"from $MNE_DATA with every other MOABB dataset")
         close = difflib.get_close_matches(key, valid, n=1)
         hint = f" (did you mean {close[0]}?)" if close else ""
         return f"{slug} has no path key {key!r}{hint}; its keys: {', '.join(valid)}"

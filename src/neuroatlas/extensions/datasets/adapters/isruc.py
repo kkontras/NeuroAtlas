@@ -11,7 +11,7 @@ probing without rerunning the backbone.
 from __future__ import annotations
 
 import functools
-
+import logging
 from collections import Counter
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
@@ -30,6 +30,8 @@ from neuroatlas.extensions.datasets.dataio.isruc import (
 )
 
 from .base import BenchmarkDataModule
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +251,8 @@ class ISRUCBenchmarkDataModule(BenchmarkDataModule):
 
         if signal_kind != "raw":
             raise ValueError(
-                f"ISRUC currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"isruc reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(
@@ -337,8 +340,8 @@ class ISRUCBenchmarkDataModule(BenchmarkDataModule):
             for rec in test_f:
                 self._fold_assignments.setdefault(rec.subject_id, {})[fold_key] = "test"
 
-        # Startup sanity print — recording counts, not subject counts, so the
-        # log reflects what each split will actually load.
+        # Recording counts, not subject counts, so the log (-v, --log)
+        # reflects what each split will actually load.
         for f in range(num_folds):
             fold_key = f"fold_{f}"
             tr = sum(1 for r in self._all_records
@@ -347,7 +350,7 @@ class ISRUCBenchmarkDataModule(BenchmarkDataModule):
                      if self._fold_assignments.get(r.subject_id, {}).get(fold_key) == "valid")
             te = sum(1 for r in self._all_records
                      if self._fold_assignments.get(r.subject_id, {}).get(fold_key) == "test")
-            print(f"[ISRUC folds] fold {f}: train={tr} val={va} test={te}")
+            logger.debug("ISRUC fold %d: train=%d val=%d test=%d recordings", f, tr, va, te)
 
         self._ds_kwargs = dict(
             channel_specs=channel_specs,

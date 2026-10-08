@@ -299,7 +299,8 @@ class BasePhysioDataset(Dataset):
         if valid_mask.all():
             return labels
         n_invalid = int((~valid_mask).sum())
-        logger.warning(
+        # per recording, and from inside loader workers: detail for -v and --log
+        logger.debug(
             f"_sanitize_labels: {n_invalid}/{labels.size} labels out of "
             f"AASM 5-class range; coercing to -1"
         )

@@ -260,8 +260,14 @@ def read_edf_unipolar(
 
 
 def discover_recordings(raw_root: str, split: str) -> List[str]:
-    """Find all EDF paths for a given TUSZ split (``train``/``dev``/``eval``)."""
-    split_dir = Path(raw_root) / split
+    """Find all EDF paths for a given TUSZ split (``train``/``dev``/``eval``).
+
+    ``raw_root`` is the dataset's folder, or the ``edf/`` (or
+    ``<version>/edf/``) folder TUH serves under it.
+    """
+    from neuroatlas.extensions.datasets._layout import descend
+
+    split_dir = descend(raw_root, ["edf", "*/edf"], split) / split
     edfs = sorted(str(p) for p in split_dir.rglob("*.edf"))
     logger.info("Discovered %d EDFs in %s/%s", len(edfs), raw_root, split)
     return edfs

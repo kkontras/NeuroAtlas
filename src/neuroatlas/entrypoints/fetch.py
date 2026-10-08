@@ -1,4 +1,4 @@
-"""Obtain a dataset's raw corpus -- the old name of ``neuroatlas data download``.
+"""Obtain a dataset's raw data -- the same code as ``neuroatlas data download``.
 
 Kept so the commands in ``run/default_runs.sh`` and older notes still work,
 but it no longer has a download path of its own: the plan, the destination
@@ -40,11 +40,11 @@ KIND_HELP = {
     "moabb": ("auto", "MOABB downloads it into $MNE_DATA"),
     "mendeley": ("manual", "public Mendeley Data record; no download API here"),
     "figshare": ("manual", "public figshare record; no download API here"),
-    "nsrr": ("manual", "NSRR — needs an approved data-access request; "
+    "nsrr": ("manual", "NSRR: needs an approved data-access request; "
                        "`neuroatlas data download` runs the `nsrr` gem with your token"),
-    "tuh": ("manual", "TUH EEG Corpus — needs a signed data use agreement; "
+    "tuh": ("manual", "TUH EEG Corpus: needs a signed data use agreement; "
                       "credentials arrive by email"),
-    "manual": ("manual", "a person has to fetch it — see the landing page"),
+    "manual": ("manual", "a person has to fetch it; see the landing page"),
     "internal": ("internal", "not publicly licensed; obtain from the authors"),
 }
 
@@ -115,26 +115,30 @@ def plan(slug: str, dest: Optional[Path] = None) -> Dict[str, Any]:
 def render(p: Dict[str, Any]) -> str:
     size = f"{p['size_gb']} GB" if p["size_gb"] else "size not recorded"
     lines = [
-        f"{p['slug']} — {p['name']}",
-        f"  source   : {p['kind']} ({p['why']})",
-        f"  size     : {size}",
-        f"  destination: {p['dest'] or '-'}",
+        f"{p['slug']}: {p['name']}",
+        f"  source       {p['kind']} ({p['why']})",
+        f"  size         {size}",
+        f"  destination  {p['dest'] or '-'}",
     ]
     if p["url"]:
-        lines.append(f"  url      : {p['url']}")
+        lines.append(f"  url          {p['url']}")
     if p["upstream"]:
-        lines.append(f"  landing  : {p['upstream']}")
+        lines.append(f"  landing      {p['upstream']}")
     if p["note"]:
-        lines.append(f"  note     : {' '.join(str(p['note']).split())}")
+        lines.append(f"  about        {' '.join(str(p['note']).split())}")
     if p["checksum"] in (None, "TBD") and p["kind"] not in ("zenodo", "moabb"):
-        lines.append("  checksum : not recorded")
+        lines.append("  checksum     not recorded")
     if p["mode"] == "auto" and p["url"]:
         if p.get("refusal"):
-            lines.append(f"  -> would refuse: {p['refusal']}")
-        lines.append(f"  -> add --download to fetch it (the same as "
+            from neuroatlas.cli import _msg
+
+            _, what, fixes = _msg.split(str(p["refusal"]))
+            lines.append(f"  needs first: {' '.join(' '.join(what).split())}")
+            lines += [f"    fix: {f}" for f in fixes]
+        lines.append(f"  to fetch it: add --download (the same as "
                      f"`neuroatlas data download {p['slug']}`)")
     else:
-        lines.append(f"  -> cannot be downloaded here: {p['why']}")
+        lines.append(f"  not downloadable here: {p['why']}")
     return "\n".join(lines)
 
 
@@ -146,7 +150,8 @@ def download(p: Dict[str, Any]) -> int:
         from neuroatlas.cli import _msg
 
         print(render(p))
-        _msg.error(f"{p['slug']} cannot be fetched automatically")
+        _msg.error(f"{p['slug']} cannot be downloaded here (the lines above say how to get it)",
+                   f"neuroatlas data download {p['slug']} --dry-run (says how to get it)")
         return 2
     from neuroatlas.cli.data import _download
 
@@ -161,16 +166,17 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
 
     parser = ErrorParser(
         prog="neuroatlas fetch",
-        description="Obtain a dataset's raw corpus, or say exactly how to. The old name "
-                    "of `neuroatlas data download`; it runs the same code.",
+        description="Download a dataset's raw data, or say exactly how to get it. "
+                    "`neuroatlas data download` runs the same code.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
     )
-    parser.add_argument("--dataset", help="DatasetSpec slug.")
-    parser.add_argument("--dest", default=None,
-                        help="The data root to plan against (default: the configured "
-                             "data_root). The corpus lands in the sub-folder its "
-                             "reader expects under it.")
+    parser.add_argument("--dataset", help="A dataset name, as `neuroatlas list datasets` "
+                                           "shows it.")
+    parser.add_argument("--dest", default=None, metavar="DIR",
+                        help="The data root to plan against (default: the data_root "
+                             "setting). The data lands in the dataset's own folder under "
+                             "it.")
     parser.add_argument("--download", action="store_true",
                         help="Actually transfer. Without it, the plan is printed and "
                              "nothing leaves or enters this machine.")
@@ -191,16 +197,26 @@ def main(argv: Optional[List[str]] = None) -> None:
         rows = [plan(s.slug, dest) for s in sorted(dataset_specs(), key=lambda x: x.slug)
                 if (s.manifest or {}).get("paper_dataset")]
         auto = [r for r in rows if r["mode"] == "auto" and r["url"]]
-        print(f"{len(auto)} of {len(rows)} paper datasets can be fetched directly "
-              f"(`neuroatlas data download <dataset>`).")
+        from neuroatlas import data
+
+        print(f"{len(auto)} of {len(rows)} paper datasets are downloadable "
+              f"(`neuroatlas data download DATASET`).")
         print()
-        print(f"{'dataset':36s} {'source':10s} how")
-        print("-" * 60)
+        table = []
         for r in rows:
-            how = "automatic" if (r["mode"] == "auto" and r["url"]) else r["mode"]
+            acq = (_manifest(r["slug"]).get("acquisition") or {})
+            handler = "refused" if acq.get("unusable_download") else \
+                data.HANDLERS.get(r["kind"], "manual")
+            how = ("downloadable" if (r["mode"] == "auto" and r["url"]) else
+                   data.download_word(r["kind"], handler))
             if r["mode"] == "auto" and r.get("refusal"):
-                how += " (refused now: see --dataset)"
-            print(f"{r['slug']:36s} {r['kind']:10s} {how}")
+                how += (f" (`neuroatlas data download {r['slug']} --dry-run` says what it "
+                        f"needs first)")
+            table.append((r["slug"], data.host_word(r["kind"], acq), how))
+        wide = [max(len(t[i]) for t in table + [("dataset", "host", "")]) for i in (0, 1)]
+        print(f"{'dataset':<{wide[0]}}  {'host':<{wide[1]}}  download")
+        for slug, host, how in table:
+            print(f"{slug:<{wide[0]}}  {host:<{wide[1]}}  {how}")
         return
 
     if not args.dataset:

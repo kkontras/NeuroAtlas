@@ -100,13 +100,19 @@ class NMTBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         montage: str = "unipolar",
         **_unused: Any,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("nmt", type(self), normalize=normalize)
         if split_mode not in ("official", "kfold"):
             raise ValueError(
                 f"split_mode must be 'official' or 'kfold', got {split_mode!r}"
             )
         if label_mode != "binary":
             raise ValueError(
-                f"NMT only supports label_mode='binary', got {label_mode!r}"
+                f"nmt has one label mode, binary (normal or abnormal recording), "
+                f"not label_mode={label_mode!r}"
             )
 
         metadata = {
@@ -138,12 +144,9 @@ class NMTBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         self._montage = montage
 
         if not Path(raw_root).exists():
-            raise FileNotFoundError(
-                f"NMT raw_root not found: {raw_root}\n"
-                f"Run `python -m neuroatlas.entrypoints.fetch --dataset nmt --download` (form-gated — see the "
-                f"script's manual-action block) to stage the data, or point "
-                f"`raw_root` at an existing copy of the NMT layout."
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data("nmt", raw_root, "raw_root"))
 
         self._all_recordings: List[Dict[str, Any]] = discover_nmt_recordings(
             raw_root, splits=("train", "eval"),
@@ -225,7 +228,8 @@ class NMTBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
 
         if not rec_indices:
             raise RuntimeError(
-                f"NMT split {split!r} has 0 recordings — check split_mode and fold index."
+                f"nmt fold {self._fold}: its {split} split has no recordings "
+                f"(split_mode={self._split_mode}, n_folds={self._n_folds})"
             )
 
         stride_s = self._stride_s if split == "train" else self._window_s

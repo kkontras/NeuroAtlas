@@ -34,6 +34,16 @@ DEFAULT_VARIANT = "default"
 SUITES = ("single", "full")
 
 
+def _suite_fix(given: str, value: str, benchmark: str) -> str:
+    """The command being run with ``--dataset <value>`` in place of *given*;
+    `show` (which lists the datasets) when it is not known."""
+    from neuroatlas.cli import corrected_command
+
+    return (corrected_command({given: value})
+            or corrected_command({f"--dataset={given}": f"--dataset={value}"})
+            or f"neuroatlas show {benchmark} (lists its datasets)")
+
+
 class CatalogError(ValueError):
     """A benchmark file that does not say what it must, or a name that is not
     in the catalog. Its text is what is wrong, then a ``fix:`` line
@@ -55,17 +65,87 @@ class DatasetEntry:
 
 @dataclass(frozen=True)
 class Metrics:
+    """How a benchmark is scored. What each metric key means is the metric
+    registry's (:mod:`neuroatlas.metrics_info`); this says which keys, where
+    in a fold's metrics they are, and the words that put them in context."""
     headline: str
     higher_is_better: bool = True
-    dummy: Any = None               # number, {slug: number}, or None
+    # The headline's chance level when the registry's does not hold: a number,
+    # "prevalence", "1/C"; None takes the registry's (the YAML key was `dummy`).
+    chance: Any = None
     secondary: Tuple[str, ...] = ()
-    tolerance: Optional[float] = None   # |ours - paper| that still counts as reproduced
+    unit: Optional[str] = None          # one scored item: "30 s epoch", "subject", "trial"
+    # Where every metric of a row is in a fold's metrics, for a task that fits
+    # several probes per fold: ("threshold_3.0s",), ("ahi_fraction",
+    # "threshold_10.0s"). The YAML spells it `at: ahi_fraction@10.0s` / `at: 3.0s`.
+    at: Tuple[str, ...] = ()
+    describe: Optional[str] = None      # the headline in one line: unit, classes, pooling
+    fold: Optional[str] = None          # what a fold is
+    spread: Optional[str] = None        # what ± is over; None: one value, no ±
+    note: Optional[str] = None          # one more line under the title
 
-    def dummy_for(self, slug: str) -> Optional[float]:
-        if isinstance(self.dummy, dict):
-            value = self.dummy.get(slug)
-            return None if value is None else float(value)
-        return None if self.dummy is None else float(self.dummy)
+    def at_text(self) -> Optional[str]:
+        """``at`` as the YAML spells it (the JSON ``at`` field)."""
+        if not self.at:
+            return None
+        *field_, threshold = self.at
+        seconds = threshold[len("threshold_"):-1] if threshold.startswith("threshold_") else threshold
+        return "@".join([*field_, f"{seconds}s"])
+
+    def at_seconds(self) -> Optional[float]:
+        """The event threshold the headline is read at, in seconds."""
+        if not self.at or not self.at[-1].startswith("threshold_"):
+            return None
+        try:
+            return float(self.at[-1][len("threshold_"):-1])
+        except ValueError:
+            return None
+
+    def event_words(self) -> Optional[str]:
+        """What the threshold counts, in the title's words (``scored arousal``,
+        ``scored apnea or hypopnea``), from ``describe``; else from the field."""
+        import re
+
+        match = re.search(r"more than [\d.]+ s of (.+?) in the epoch", " ".join(
+            str(self.describe or "").split()))
+        if match:
+            return match.group(1)
+        field_ = self.at[0] if len(self.at) > 1 else None
+        return EVENT_WORDS.get(field_ or "", None)
+
+    def at_words(self) -> Optional[str]:
+        """``3 s of scored arousal``: the headline's threshold in words, for
+        messages (machine formats keep :meth:`at_text`)."""
+        seconds = self.at_seconds()
+        if seconds is None:
+            return self.at_text()
+        event = self.event_words()
+        return f"{seconds:g} s" + (f" of {event}" if event else "")
+
+
+#: An event field's words, when a benchmark's ``describe`` does not give them.
+EVENT_WORDS = {"ahi_fraction": "scored apnea or hypopnea",
+               "limb_movement_plm_fraction": "scored periodic limb movement",
+               "arousal_fraction": "scored arousal"}
+
+
+def parse_at(text: Any, where: str = "") -> Tuple[str, ...]:
+    """``ahi_fraction@10.0s`` -> ``("ahi_fraction", "threshold_10.0s")``,
+    ``3s`` -> ``("threshold_3.0s",)``: the keys an event task files a probe
+    under (``threshold_<float seconds>s``, as respiratory_event_detection and
+    arousal_detection write them)."""
+    if text in (None, ""):
+        return ()
+    field_, _, threshold = str(text).rpartition("@")
+    seconds = threshold.strip()
+    if seconds.endswith("s"):
+        seconds = seconds[:-1]
+    try:
+        value = float(seconds)
+    except ValueError:
+        raise CatalogError(f"{where}metrics.at is [field@]<seconds>s, e.g. ahi_fraction@10.0s "
+                           f"or 3.0s, got {text!r}") from None
+    return (*([field_.strip()] if field_.strip() else []), f"threshold_{value}s")
 
 
 @dataclass(frozen=True)
@@ -75,6 +155,8 @@ class Variant:
     embed: Tuple[str, ...]
     probe: Tuple[str, ...]
     datasets: Optional[Tuple[str, ...]] = None   # None = the benchmark's own
+    aliases: Tuple[str, ...] = ()       # earlier names, still accepted and read
+    paper: Optional[str] = None         # which paper figure it reproduces
 
 
 @dataclass(frozen=True)
@@ -133,6 +215,33 @@ class Benchmark:
     variants: Dict[str, Variant] = field(default_factory=dict)
     derived_from: Optional[str] = None
     excluded_models: Tuple[ModelExclusion, ...] = ()
+    # what the default variant is, in the words of the paper (BCI: "no
+    # filtering, mean-pool") and the figure it reproduces
+    default_description: Optional[str] = None
+    default_paper: Optional[str] = None
+
+    # -- metrics --------------------------------------------------------------
+    def metric_info(self, key: str):
+        """*key* as this benchmark means it (:func:`metrics_info.info`)."""
+        from neuroatlas import metrics_info
+
+        return metrics_info.info(key, self)
+
+    def chance(self):
+        """The headline's chance level: a number, ``"prevalence"``, ``"1/C"``
+        or None -- the YAML's ``metrics.chance``, else the registry's."""
+        if self.metrics.chance is not None:
+            return self.metrics.chance
+        return self.metric_info(self.metrics.headline).chance
+
+    def loso_datasets(self, variant: str = DEFAULT_VARIANT) -> List[str]:
+        """The datasets this benchmark probes leave-one-subject-out
+        (``--set n_folds=loso``): one fold per subject."""
+        if self.derived_from:
+            return []
+        return [e.slug for e in self.datasets
+                if any(k == "n_folds" and v.strip().lower() == "loso"
+                       for k, v in _set_pairs(self.probe_args(e, variant)))]
 
     # -- suites ---------------------------------------------------------------
     def suite(self, which: str = "full") -> List[DatasetEntry]:
@@ -158,24 +267,46 @@ class Benchmark:
                     suggest[slug] = close[0]
                 else:
                     hints.append(slug)
+            kept = [s for s in wanted if s in known]
+            fix = _suite_fix(which, ",".join(kept) or "full", self.name)
             raise CatalogError(
-                f"the {self.name} benchmark has no dataset {', '.join(hints)}\n"
-                f"fix: --dataset single, full, or some of: {', '.join(known) or 'none yet'}",
+                f"the {self.name} benchmark has no dataset {', '.join(hints)}; its datasets: "
+                f"{', '.join(known)}\nfix: {fix}",
                 suggest=suggest)
         return [known[s] for s in wanted]
 
     # -- variants -------------------------------------------------------------
     def variant(self, name: str = DEFAULT_VARIANT) -> Variant:
+        """The variant *name* -- or an earlier name of it (``per_patch`` is
+        ``token_flattening``) -- under its current name."""
         if name == DEFAULT_VARIANT:
-            return Variant(DEFAULT_VARIANT, "the paper's headline protocol", self.embed, self.probe)
+            return Variant(DEFAULT_VARIANT,
+                           self.default_description or "the paper's headline protocol",
+                           self.embed, self.probe, paper=self.default_paper)
+        name = self.variant_folders().get(name, name)
         if name not in self.variants:
+            import difflib
+
+            close = difflib.get_close_matches(name, list(self.variant_folders()), n=1)
+            hint = f" (did you mean {close[0]}?)" if close else ""
             options = ", ".join([DEFAULT_VARIANT, *self.variants])
-            raise CatalogError(f"the {self.name} benchmark has no variant {name!r}\n"
-                               f"fix: --variant {options.replace(', ', ' | ')}")
+            raise CatalogError(f"the {self.name} benchmark has no variant {name!r}{hint}; "
+                               f"its variants: {options}\n"
+                               f"fix: neuroatlas show {self.name} (explains each)",
+                               suggest={name: close[0]} if close else None)
         return self.variants[name]
 
     def variant_names(self) -> List[str]:
         return [DEFAULT_VARIANT, *self.variants]
+
+    def variant_folders(self) -> Dict[str, str]:
+        """``{folder or name: variant}``: each variant's name and its earlier
+        names, so results written under an earlier name still read as the
+        variant's (``results.variant_of``)."""
+        out = {name: name for name in self.variant_names()}
+        for v in self.variants.values():
+            out.update({alias: v.name for alias in v.aliases})
+        return out
 
     # -- models ---------------------------------------------------------------
     def excluded_families(self) -> Dict[str, str]:
@@ -372,21 +503,39 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
     m = data["metrics"] or {}
     if "headline" not in m:
         raise CatalogError(f"{source}: metrics.headline is required")
+    # `chance` was called `dummy`; a benchmark file written before reads the same
+    chance = m.get("chance", m.get("dummy"))
+    if not (chance is None or chance in ("prevalence", "1/C")
+            or (isinstance(chance, (int, float)) and not isinstance(chance, bool))):
+        raise CatalogError(f"{source}: metrics.chance is a number, prevalence or 1/C, "
+                           f"got {chance!r}")
+    text = lambda key: " ".join(str(m[key]).split()) if m.get(key) not in (None, "") else None
     metrics = Metrics(m["headline"], bool(m.get("higher_is_better", True)),
-                      m.get("dummy"), tuple(m.get("secondary") or ()),
-                      float(m["tolerance"]) if m.get("tolerance") is not None else None)
+                      chance, tuple(m.get("secondary") or ()),
+                      unit=text("unit"), at=parse_at(m.get("at"), f"{source}: "),
+                      describe=text("describe"), fold=text("fold"), spread=text("spread"),
+                      note=text("note"))
 
     variants = {}
+    taken = {DEFAULT_VARIANT}
     for name, v in (data.get("variants") or {}).items():
         if name == DEFAULT_VARIANT:
             raise CatalogError(f"{source}: `{DEFAULT_VARIANT}` is the implicit variant")
         subset = v.get("datasets")
         if subset is not None and not set(subset) <= set(slugs):
             raise CatalogError(f"{source}: variant {name} names datasets outside the benchmark")
+        aliases = tuple(str(a) for a in (v.get("aliases") or ()))
+        if taken & {name, *aliases}:
+            raise CatalogError(f"{source}: variant name {sorted(taken & {name, *aliases})[0]!r} "
+                               f"is used twice")
+        taken |= {name, *aliases}
         variants[name] = Variant(name, " ".join(str(v.get("description", "")).split()),
                                  _args(v.get("embed"), f"{source} {name}.embed"),
                                  _args(v.get("probe"), f"{source} {name}.probe"),
-                                 tuple(subset) if subset is not None else None)
+                                 tuple(subset) if subset is not None else None,
+                                 aliases=aliases,
+                                 paper=" ".join(str(v["paper"]).split()) if v.get("paper") else None)
+    default = data.get("default_variant") or {}
     planned = tuple({"name": str(p["name"]), "reason": str(p.get("reason", ""))}
                     for p in (data.get("planned") or []))
     exclusions = []
@@ -407,6 +556,9 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
         datasets=tuple(entries), single=single, planned=planned, metrics=metrics,
         variants=variants, derived_from=data.get("derived_from"),
         excluded_models=tuple(exclusions),
+        default_description=(" ".join(str(default["description"]).split())
+                             if default.get("description") else None),
+        default_paper=" ".join(str(default["paper"]).split()) if default.get("paper") else None,
     )
 
 

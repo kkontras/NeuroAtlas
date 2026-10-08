@@ -225,6 +225,22 @@ def _probe_edf_header(path: str) -> Tuple[float, float, Tuple[int, int, int]]:
     return native_fs, duration_s, start_hms
 
 
+
+def aub_med_folders(raw_dir, annotations_dir=None):
+    """(raw_dir, annotations_dir) as the reader reads them.
+
+    Either may be the dataset's folder: the EDFs are then read from it, or
+    from the ``raw/`` folder under it, and ``Seizure_times.py`` from it, or
+    from the ``annotations/`` folder under it. A folder that already holds
+    them is used as given; ``annotations_dir=None`` stays None.
+    """
+    from neuroatlas.extensions.datasets._layout import descend
+
+    raw = str(descend(raw_dir, ["raw"], "*.edf"))
+    if annotations_dir is None:
+        return raw, None
+    return raw, str(descend(annotations_dir, ["annotations"], "Seizure_times.py"))
+
 def discover_aub_med_recordings(
     raw_dir: str | Path,
     annotations_dir: Optional[str | Path] = None,
@@ -242,6 +258,7 @@ def discover_aub_med_recordings(
     Returns:
         List of :class:`AUBMedRecording` sorted by ``(subject_id, record_no)``.
     """
+    raw_dir, annotations_dir = aub_med_folders(raw_dir, annotations_dir)
     raw_dir = Path(raw_dir)
     if annotations_dir is None:
         annotations_dir = raw_dir.parent / "annotations"
@@ -255,10 +272,22 @@ def discover_aub_med_recordings(
         return []
 
     recordings: List[AUBMedRecording] = []
+    # one header read per recording: the item's live line counts them; a
+    # skipped one is counted once per run (which, and why, in the log)
+    from neuroatlas import progress, quiet
+
+    item = progress.current()
+    item.phase("indexing windows", total=len(raw_paths), unit="recordings")
+    skip_text = ("AUB-MED: {hit} of {of} recordings skipped: an unexpected file name or an "
+                 "unreadable EDF header (-v: which, and why)")
+    all_names = [p.name for p in raw_paths]
+    quiet.count("skipped recordings:aub_med", skip_text, hit=[], of=all_names)
     for p in raw_paths:
+        item.update(advance=1)
         m = _RECORD_NAME_RE.match(p.stem)
         if m is None:
-            logger.warning("Skipping EDF with unexpected name: %s", p.name)
+            logger.info("skipping EDF with unexpected name: %s", p.name)
+            quiet.count("skipped recordings:aub_med", skip_text, hit=[p.name], of=all_names)
             continue
         subject_id = m.group(1).lower()
         record_no = int(m.group(2))
@@ -266,7 +295,8 @@ def discover_aub_med_recordings(
         try:
             native_fs, duration_s, start_hms = _probe_edf_header(str(p))
         except Exception as exc:
-            logger.warning("Failed to probe %s (%s) — skipping", p.name, exc)
+            logger.info("failed to probe %s (%s): skipping", p.name, exc)
+            quiet.count("skipped recordings:aub_med", skip_text, hit=[p.name], of=all_names)
             continue
 
         n_samples_at_target = int(round(duration_s * TARGET_FS))
@@ -386,10 +416,10 @@ class AUBMedDataset(Dataset):
             )
         self._recordings: List[AUBMedRecording] = list(recordings)
         if not self._recordings:
-            raise RuntimeError(
-                f"AUBMedDataset: no recordings discovered under {self._raw_dir}. "
-                f"Run `python -m neuroatlas.entrypoints.fetch --dataset aub_med --download` to fetch the data."
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data("aub_med", self._raw_dir, "raw_dir",
+                                            what="no recordings in"))
 
         if recording_indices is None:
             active = set(range(len(self._recordings)))
@@ -417,9 +447,8 @@ class AUBMedDataset(Dataset):
 
         if not self._windows:
             raise RuntimeError(
-                f"AUBMedDataset produced 0 windows for window_s={self._window_s}. "
-                f"Check that active recordings are long enough "
-                f"({self._window_samples} samples @ 256 Hz)."
+                f"aub_med: no {self._window_s:g} s window fits in any of these recordings "
+                f"(each is shorter than {self._window_s:g} s)"
             )
 
         logger.info(
@@ -659,15 +688,19 @@ class AUBMedDataset(Dataset):
             return
         self._signal_cache_size = max(self._signal_cache_size, n)
 
-        from tqdm.auto import tqdm
+        from neuroatlas import progress
 
         rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         t0 = time.perf_counter()
         cold = 0
-        for i in tqdm(rec_indices, desc="preload AUB-MED shard", unit="rec", leave=False):
+        # on the item's live line, not a bar under it
+        item = progress.current()
+        item.phase("reading the recordings into memory", total=n, unit="recordings")
+        for i in rec_indices:
             if i not in self._signal_cache:
                 cold += 1
             self._load_signals(i)
+            item.update(advance=1)
 
         elapsed = time.perf_counter() - t0
         rss1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

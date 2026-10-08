@@ -229,14 +229,18 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         named = set(split.train) | set(split.val) | set(split.test)
         overlap = named & present
         if not overlap:
-            raise ValueError(
-                f"{self.DATASET_NAME}: fold manifest {split.source_path} names "
-                f"{len(named)} ids, none of which match the {len(present)} "
-                f"subjects discovered under data_root (manifest "
-                f"{sorted(named)[:2]} vs discovered {sorted(present)[:2]}). "
-                "Refusing to fall back to a random split, which would silently "
-                "not be the paper's folds."
-            )
+            # A random split instead would not be the paper's folds: refuse.
+            from neuroatlas.cli import _msg
+
+            where = getattr(self, "_data_root", None) or "the data folder"
+            found = (f"it holds {len(present)} other subjects (e.g. "
+                     f"{', '.join(sorted(present)[:2])}; the folds name e.g. "
+                     f"{', '.join(sorted(named)[:2])})" if present
+                     else "it holds no subjects")
+            raise ValueError(_msg.compose(
+                f"{self.DATASET_NAME}: none of the {len(named)} subjects of the benchmark's "
+                f"folds is in {where}: {found}",
+                f"neuroatlas config set {self.DATASET_NAME}.data_root DIR"))
         logger.info(
             "%s: folds from %s (fold %d of %d), %d/%d manifest ids present",
             self.DATASET_NAME, split.source_path, fold, split.n_folds,
@@ -267,6 +271,7 @@ class PhysioExBenchmarkDataModule(BenchmarkDataModule):
         pipeline = PIPELINE_REGISTRY[pipeline_name]()
         fold = int(fold) if fold is not None else 0
         self._check_fold_count(n_folds)
+        self._data_root = str(data_root)
 
         _ensure_physioex()
         # Dynamic import of the physioex dataset class

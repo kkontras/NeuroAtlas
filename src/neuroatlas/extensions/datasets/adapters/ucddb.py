@@ -147,7 +147,8 @@ class UCDDBBenchmarkDataModule(BenchmarkDataModule):
 
         if signal_kind != "raw":
             raise ValueError(
-                f"UCDDB currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"ucddb reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(

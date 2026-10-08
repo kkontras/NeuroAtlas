@@ -95,6 +95,18 @@ DEFAULT_CACHE_FILENAME: str = f"bonn_{CACHE_SCHEMA_TAG}.h5"
 # ---------------------------------------------------------------------------
 
 
+def data_folder(raw_root: str | Path) -> Path:
+    """The folder holding the five set folders: ``raw_root`` itself, or a
+    folder under it (``raw/``, or an archive's top folder) that holds them."""
+    from neuroatlas.extensions.datasets._layout import descend
+
+    for marker in ("Z", "setA", "A"):
+        found = descend(raw_root, ["raw", "*"], marker)
+        if (found / marker).is_dir():
+            return found
+    return Path(raw_root)
+
+
 def _find_set_directory(raw_root: Path, set_letter: str) -> Path:
     """Locate the directory containing the .TXT files for one set.
 
@@ -174,7 +186,7 @@ def load_raw_corpus(
     Returns a mapping with the same keys as the HDF5 datasets, plus the
     attributes under ``"attrs"``.
     """
-    raw_root = Path(raw_root)
+    raw_root = data_folder(raw_root)
     sets = tuple(sets)
     unknown = [s for s in sets if s not in SET_TO_CODE]
     if unknown:

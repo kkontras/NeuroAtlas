@@ -80,8 +80,8 @@ def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],
            formats: Optional[Mapping[str, str]] = None) -> None:
     """``notes`` maps a row index to lines printed under it in a table, and
     to its ``note`` field elsewhere. ``extra`` names fields only JSON carries.
-    ``labels`` renames a column's header in the table (keys stay as they are
-    in CSV and JSON); ``formats`` gives a column's number format in the table
+    ``labels`` renames a column's header in the table and in Markdown (keys
+    stay as they are in CSV and JSON); ``formats`` gives a column's number format in the table
     and Markdown (e.g. ``"{:.3g}"``) instead of three decimals."""
     out = out or sys.stdout
     # a caller that has notes for the table gets a note column elsewhere,
@@ -120,7 +120,8 @@ def render(rows: Sequence[Dict[str, Any]], columns: Sequence[str],
         out.write(buf.getvalue())
         return
     if fmt == "md":
-        out.write("| " + " | ".join(keys) + " |\n")
+        # a human format: the table's headers (CSV and JSON keep the keys)
+        out.write("| " + " | ".join((labels or {}).get(k, k) for k in keys) + " |\n")
         out.write("|" + "|".join("---" for _ in keys) + "|\n")
         for row in cells:
             out.write("| " + " | ".join(c.replace("|", "\\|") for c in row) + " |\n")

@@ -126,34 +126,7 @@ per_model:
     O1_M2: O1_M2
     O2_M1: O2_M1
     Pz_M2: Pz_M2
-  timemoe:
-    C3_M2: C3_M2
-    C4_M1: C4_M1
-    Cz_M2: Cz_M2
-    F3_M2: F3_M2
-    F4_M1: F4_M1
-    O1_M2: O1_M2
-    O2_M1: O2_M1
-    Pz_M2: Pz_M2
   moirai:
-    C3_M2: C3_M2
-    C4_M1: C4_M1
-    Cz_M2: Cz_M2
-    F3_M2: F3_M2
-    F4_M1: F4_M1
-    O1_M2: O1_M2
-    O2_M1: O2_M1
-    Pz_M2: Pz_M2
-  lagllama:
-    C3_M2: C3_M2
-    C4_M1: C4_M1
-    Cz_M2: Cz_M2
-    F3_M2: F3_M2
-    F4_M1: F4_M1
-    O1_M2: O1_M2
-    O2_M1: O2_M1
-    Pz_M2: Pz_M2
-  timesfm:
     C3_M2: C3_M2
     C4_M1: C4_M1
     Cz_M2: Cz_M2
@@ -202,10 +175,7 @@ notes:
   sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
   chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
   sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
   sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
-  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

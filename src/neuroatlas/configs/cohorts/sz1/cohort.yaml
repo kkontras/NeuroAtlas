@@ -14,9 +14,9 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  SeizeIt1 — binary seizure detection from 19-channel unipolar EEG
-  resampled to 256 Hz. Anonymous Institution wearable-EEG cohort. Hospital
-  annotations (_a1.tsv). Patient-level k-fold evaluation.
+  SeizeIT1: adult seizure monitoring; binary seizure detection from
+  19-channel unipolar EEG resampled to 256 Hz, with the hospital's seizure
+  annotations. Patient-level k-fold evaluation.
 
 cohort:
   centre: "UZ Leuven, Belgium"
@@ -78,7 +78,7 @@ runtime_defaults:
   balance: weighted_sampler
   batch_size: 64
   cache_root: ""
-  data_root: "${EEG_DATA_ROOT}/SeizeIT1/Data"
+  data_root: "${EEG_DATA_ROOT}/sz1"
   fold: 0
   label_mode: binary
   montage: unipolar

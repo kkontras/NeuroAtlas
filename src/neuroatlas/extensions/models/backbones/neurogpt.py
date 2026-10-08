@@ -41,8 +41,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
+from neuroatlas import quiet
+
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     is_bci_batch,
@@ -365,9 +367,9 @@ class NeuroGPTBackbone(BenchmarkBackbone):
         # Per-channel DC removal
         x = x - x.mean(dim=-1, keepdim=True)
 
-        # ESAT-8 adaptive epoch_seconds
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.window_seconds
@@ -381,7 +383,7 @@ class NeuroGPTBackbone(BenchmarkBackbone):
             src_sfreq_f = float(meta_sfreq)
         else:
             src_sfreq_f = T / epoch_sec
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(x, src_sfreq_f, _TARGET_SFREQ, backend=_backend)
         x = snap_to_epoch_length(x, _TARGET_SFREQ, meta)
 
@@ -429,11 +431,11 @@ class NeuroGPTBackbone(BenchmarkBackbone):
                 else:
                     x = _zscore_per_channel(x)
             else:
-                logger.warning(
-                    "[backbone=neurogpt] apply_recording_normalization=False — "
-                    "NeuroGPT is scale-invariant via per-channel z-score; "
-                    "disabling changes the embedding domain."
-                )
+                quiet.warn_once(
+                    logger, "neurogpt normalization off",
+                    "NeuroGPT: apply_recording_normalization=False, so its input is not "
+                    "z-scored per channel as it expects; the embeddings are off its training "
+                    "distribution (an ablation)")
 
             # Channel mapping into fixed 22-slot layout
             raw_channels = meta[0].get("channels", None) if meta else None

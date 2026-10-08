@@ -48,8 +48,8 @@ per_model:
   steegformer: {mode: label_pass_through}
 
 notes:
-  biot: "Not run on Bonn's single channel: BIOT reads bipolar double-banana pairs, and one electrode forms no pair, so the wrapper refuses the input (zero matched slots)."
-  eegnetv4: "Not run on Bonn's single channel: the EEGNetv4 wrapper reads C3, Cz and C4 by name, and Bonn's one channel (labelled FZ) is none of them, so every window would reach the network as zeros; the wrapper refuses the input."
+  biot: "Not run on Bonn's single channel: BIOT reads 16 bipolar pairs, and Bonn's one channel (labelled FZ) is in none of them."
+  eegnetv4: "Not run on Bonn's single channel: EEGNetv4 reads C3, Cz and C4, and Bonn's one channel (labelled FZ) is none of them."
   chronos: "Univariate model: the one channel is embedded as it is."
   moment: "Univariate model: the one channel is embedded as it is."
   moirai: "Univariate model: the one channel is embedded as it is."

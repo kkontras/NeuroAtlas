@@ -139,7 +139,8 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="patient_classification",
-        description="Aggregate epoch embeddings per subject and train a subject-level classifier.",
+        description="Subject-level classification from each subject's averaged embeddings "
+                    "(diagnosis).",
         evaluator=evaluate_patient_classification,
         score=score,
     )

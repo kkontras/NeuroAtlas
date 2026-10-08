@@ -26,7 +26,6 @@ acquisition:
   kind: physionet
   ref: hmc-sleep-staging
   version: "1.1"
-  subdir: recordings
   size_gb: 15.7                        # the project page's total uncompressed size
   expect: {glob: "SN[0-9][0-9][0-9].edf", count: 151}   # RECORDS: 151 recordings
 
@@ -67,10 +66,10 @@ pipeline:
   preprocessor: null
 
 runtime_defaults:
-  # The physioex loader globs `<root>/<subject>.edf` plus
-  # `<subject>_sleepscoring.edf`, so the root is the `recordings/`
-  # subdirectory, not the release root above it.
-  data_root: "${EEG_DATA_ROOT}/data/Guido/hmc/physionet.org/files/hmc-sleep-staging/1.1/recordings"
+  # The physioex loader searches the folder recursively for `<subject>.edf`
+  # plus `<subject>_sleepscoring.edf`, so it finds them in the `recordings/`
+  # folder the download writes under it.
+  data_root: "${EEG_DATA_ROOT}/hmc"
   batch_size: 8
   num_workers: 0
   fold: 0
@@ -90,15 +89,4 @@ spec:
   metadata_keys: [fold, signal_kind, pipeline_name]
 
 provenance:
-  # Nothing here has been run: HMC's corpus is not on the machine this was
-  # written on; `provenance.last_verified: null` below is the record.
   last_verified: null
-  known_issues:
-    - "Never loaded. The 4 EEG channels and their 10-20 names come from
-       adapters/hmc.py, the data_root from configs/dataset_paths_sofia.yaml;
-       neither has been checked against the corpus."
-    - "The fold manifest's ids (SN003, SN009, ...) have not been matched
-       against the subject ids the loader discovers. A mismatch raises
-       rather than falling back to a random split (physioex_base
-       _resolve_splits), so it will be loud, but it has not been seen to
-       pass."

@@ -106,7 +106,7 @@ class STAGESDataset(BasePhysioDataset):
         self,
         site: Optional[str] = None,
         recording: str = "first",
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/stages",
+        root: str = "${EEG_DATA_ROOT}/stages",
         **kwargs,
     ):
         if site is not None and site not in SITES:
@@ -166,10 +166,9 @@ class STAGESDataset(BasePhysioDataset):
                     for col, val in row.items()
                 }
         else:
-            logger.warning(
-                "STAGES harmonized metadata CSV not found: %s",
-                harmonized_path,
-            )
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+
+            warn_no_demographics(logger, "stages", harmonized_path)
 
         full: Dict[str, Dict[str, Any]] = {}
         full_path = datasets_dir / "stages-dataset-0.3.0.csv"
@@ -183,9 +182,9 @@ class STAGESDataset(BasePhysioDataset):
                     for col, val in row.items()
                 }
         else:
-            logger.warning(
-                "STAGES full metadata CSV not found: %s", full_path
-            )
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+
+            warn_no_demographics(logger, "stages", full_path)
 
         return harmonized, full
 

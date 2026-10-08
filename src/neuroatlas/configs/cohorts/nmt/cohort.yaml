@@ -14,11 +14,10 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  NMT Scalp EEG Dataset (NUST-SEECS, Pakistan) — binary normal/abnormal
-  classification from 19-channel scalp EEG at 200 Hz, resampled to 256 Hz
-  at load. 2,417 recordings, one per unique participant. Official
-  train/eval split with subject-disjoint val carve-out, plus
-  subject-stratified k-fold. Direct-EDF backend — no HDF5 cache.
+  NMT Scalp EEG Dataset (NUST-SEECS, Pakistan): binary normal/abnormal
+  classification from 19-channel scalp EEG at 200 Hz, resampled to 256 Hz.
+  2,417 recordings, one per participant. The official train/eval split with
+  a subject-disjoint validation set, or subject-stratified k-fold.
 
 cohort:
   centre: "NUST-SEECS, Pakistan"
@@ -107,9 +106,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- the paper's text and its NMT numbers
-       disagree. App. D.1.3 gives the official train/eval split (2,232 /
-       185), which is what split_mode=official (the default) does. The
-       published numbers came from the paper's epilepsy probe, which ran
-       5-fold CV over 2,414 recordings (3c6721c configs/folds/nmt.json)."

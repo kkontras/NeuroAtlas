@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import io
 import json
+import logging
 import os
 import pickle
 import socket
@@ -54,6 +55,41 @@ class CacheLockError(RuntimeError):
     """Raised when a cache directory is locked by another writer."""
 
 
+def _locked_text(cache_dir: Path, info: str) -> str:
+    """Another process holds the lock (the kernel frees it when that process
+    ends, so only a live writer holds it): who, and what to do."""
+    who = ""
+    try:
+        holder = json.loads(info) if info else {}
+        if holder.get("pid"):
+            who = f" (pid {holder['pid']}" + (f" on {holder['host']}" if holder.get("host")
+                                              else "") + ")"
+    except (ValueError, TypeError, AttributeError):
+        who = ""
+    try:
+        from neuroatlas.cli import command_with
+
+        again = command_with()
+    except Exception:
+        again = None
+    return (f"the embeddings in {cache_dir} are being written by another neuroatlas "
+            f"process{who}" + (f"\nfix: {again} (once that process has finished)"
+                               if again else ""))
+
+
+def _extract_again(cache_dir: Path) -> str:
+    """The fix lines for embeddings that cannot be read: remove them, then
+    run the command again (it extracts them anew)."""
+    lines = f"\nfix: rm -r {cache_dir}"
+    try:
+        from neuroatlas.cli import command_with
+
+        again = command_with()
+    except Exception:
+        again = None
+    return lines + (f"\nfix: {again}" if again else "")
+
+
 def build_cache_key(parts: Dict[str, object]) -> str:
     payload = json.dumps(parts, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -91,17 +127,13 @@ def load_embedding_payload(cache_dir: Path, mmap_mode: Optional[str] = None) -> 
     n_label = int(labels.shape[0])
     if n_feat != n_label or n_feat != len(items):
         raise CacheCorruptError(
-            f"cache row-count mismatch at {cache_dir}: "
-            f"features={n_feat} labels={n_label} items={len(items)}; its rows do not "
-            f"line up (a sequence checkpoint extracted before its windows were "
-            f"unrolled to one row per epoch writes this) -- delete the directory "
-            f"and re-extract."
-        )
+            f"the embeddings in {cache_dir} do not line up: {n_feat:,} embeddings, "
+            f"{n_label:,} labels and {len(items):,} window records"
+            + _extract_again(cache_dir))
     if (cache_dir / "progress.json").exists():
         raise CacheCorruptError(
-            f"finalized cache at {cache_dir} still has progress.json — "
-            f"finalize was interrupted; delete the directory and re-extract."
-        )
+            f"the embeddings in {cache_dir} are incomplete: their writing was interrupted"
+            + _extract_again(cache_dir))
     return EmbeddingPayload(features=features, labels=labels, metadata=items)
 
 
@@ -172,7 +204,8 @@ def merge_embedding_chunks(cache_dir: Path) -> bool:
             shutil.copy2(meta_src, cache_dir / "metadata.json")
 
         total_rows = sum(f.shape[0] for f in all_features)
-        print(f"[cache] merged {n_chunks} chunks → {total_rows} rows at {cache_dir}")
+        logging.getLogger(__name__).info("merged %d chunks into %d rows at %s",
+                                         n_chunks, total_rows, cache_dir)
         return True
     finally:
         try:
@@ -281,13 +314,7 @@ class IncrementalEmbeddingWriter:
             if not force:
                 os.close(self._lock_fd)
                 self._lock_fd = None
-                raise CacheLockError(
-                    f"cache {self.cache_dir} is locked by another writer "
-                    f"({info or '<no info file>'}). "
-                    f"Set EEGBENCHMARKS_FORCE_LOCK=1 (or pass force_lock=True) "
-                    f"to override — only do this if you are certain the holder "
-                    f"is dead."
-                )
+                raise CacheLockError(_locked_text(self.cache_dir, info))
             # Force path: close this fd, remove both lock files, re-acquire.
             os.close(self._lock_fd)
             self._lock_info_path.unlink(missing_ok=True)

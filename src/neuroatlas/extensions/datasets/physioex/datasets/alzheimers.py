@@ -64,7 +64,7 @@ class AlzheimersDataset(BasePhysioDataset):
     def __init__(
         self,
         subset: Optional[str] = None,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/AlzheimerData",
+        root: str = "${EEG_DATA_ROOT}/alzheimers",
         **kwargs,
     ):
         if subset is not None and subset not in ("AD", "HC"):

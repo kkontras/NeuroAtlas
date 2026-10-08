@@ -1,11 +1,11 @@
 # TUSZ v2.0.3 preprocessor
 
-Converts the Temple University Hospital Seizure Corpus (EDF + TUSZ annotations) into the standard continuous-HDF5 cache.  TUSZ is the largest dataset we ship; building it on a single machine would take many hours, so the pipeline is explicitly split-aware and shardable for Condor.
+Converts the Temple University Hospital Seizure Corpus (EDF + TUSZ annotations) into the standard continuous-HDF5 cache.  TUSZ is the largest dataset we ship; building it on a single machine would take many hours, so the pipeline is explicitly split-aware and shardable over a scheduler.
 
 - **Raw data layout.**  `{raw_root}/{split}/{subject}/{session}/{montage_dir}/{stem}.edf` with matching `{stem}.csv_bi` (binary seizure labels on the TERM whole-recording channel) and `{stem}.csv` (per-channel multi-class seizure types).
 - **Splits.**  TUSZ ships with its own `train` / `dev` / `eval` split.  We keep each one intact *and* produce an `all` merge on top (needed for subject-disjoint k-fold).
 - **Sibling metadata.**  TUSZ itself has no age / sex / diagnosis fields.  We join against the separate `tuh_eeg_epilepsy` corpus if its root is supplied (see `readers.load_tuh_eeg_epilepsy_metadata`).
-- **Voltage units.**  `read_edf_unipolar` queries `pyedflib.EdfReader.getPhysicalDimension` per channel, eagerly scales to µV via the shared `dataio/_edf_units.edf_unit_to_uv_scale` table (×1 / ×1e3 / ×1e6 for uV/mV/V), and persists the raw declarations into a `physical_units` dataset of shape `(n_recordings, 19)` (byte-strings, ordered as `UNIPOLAR_ELECTRODES`; missing electrodes are the empty string).  `TUSZContinuousDataset` forwards the per-recording row into `meta["physical_units"]` on every window.  Legacy caches that predate this field are read with an implicit-uV fallback, matching the prior behaviour.
+- **Voltage units.**  `read_edf_unipolar` queries `pyedflib.EdfReader.getPhysicalDimension` per channel, eagerly scales to µV via the shared `dataio/_edf_units.edf_unit_to_uv_scale` table (×1 / ×1e3 / ×1e6 for uV/mV/V), and persists the raw declarations into a `physical_units` dataset of shape `(n_recordings, 19)` (byte-strings, ordered as `UNIPOLAR_ELECTRODES`; missing electrodes are the empty string).  `TUSZContinuousDataset` forwards the per-recording row into `meta["physical_units"]` on every window.  A cache without this field is read as µV.
 
 ## Files
 
@@ -18,22 +18,25 @@ Converts the Temple University Hospital Seizure Corpus (EDF + TUSZ annotations) 
 
 ## Three-step build pipeline
 
-1. **Shard build** (`build_cache`) — per-split HDF5 file, optionally sharded via `shard_index / num_shards` for Condor parallelism.  One worker reads a subset of EDFs, resamples them to 256 Hz, writes them end-to-end.
+1. **Shard build** (`build_cache`) — per-split HDF5 file, optionally sharded via `shard_index / num_shards` for scheduler fan-out.  One worker reads a subset of EDFs, resamples them to 256 Hz, writes them end-to-end.
 2. **Shard merge** (`merge_shards`) — combines `tusz_<ver>_<split>_<tag>_shardNNN.h5` files into `tusz_<ver>_<split>_<tag>.h5`.  Recording offsets, `event_recording_idx` and `event_channel_tcp` are shifted to stay globally consistent.
 3. **Split merge** (`merge_splits`) — concatenates `train`, `dev`, `eval` into `tusz_<ver>_all_<tag>.h5` and adds a `split_labels` dataset that records which split each recording came from.  This is what the k-fold dataio reads.
 
 Pipeline commands:
 
 ```bash
-# One shard on Condor
-python -m neuroatlas.extensions.datasets.preprocessors.preprocess_tusz \
-    --raw-root /anonorg/.../TUSZ/v2.0.3/edf \
-    --cache-root /anonorg/.../caches/tusz \
-    --split train --shard-index $CONDOR_TASK_ID --num-shards 16
+# shard K of N, one per scheduler job (all three splits)
+neuroatlas data prepare tusz --shard 0/16
+```
 
-# Merge shards per-split, then merge splits
-python -m neuroatlas.entrypoints.merge_tusz_shards \
-    --cache-root /anonorg/.../caches/tusz --splits train dev eval --merge-splits
+```python
+# merge the shards of each split, then the splits
+from neuroatlas.extensions.datasets.epilepsy.tusz import merge_shards, merge_splits
+
+root = "<cache root>/prepared/tusz"
+for split in ("train", "dev", "eval"):
+    merge_shards(root, split)
+merge_splits(root)
 ```
 
 ## Key design points
@@ -62,7 +65,7 @@ from neuroatlas.extensions.datasets.epilepsy.tusz import (
 )
 ```
 
-Or equivalently via the backward-compat shim at the parent package:
+Or equivalently via the parent package:
 
 ```python
 from neuroatlas.extensions.datasets.epilepsy.tusz_preprocessor import (

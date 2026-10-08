@@ -43,7 +43,7 @@ MASS_STAGES_MAP: Dict[str, int] = {
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/raw/mass"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/mass"
 
 SUBSETS = [1, 2, 3, 4, 5]
 
