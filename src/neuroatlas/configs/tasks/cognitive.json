@@ -1,0 +1,13 @@
+{
+  "about": "PhysioNet 2026 cognitive-impairment classification, one prediction per subject.",
+  "_doc": "PhysioNet 2026 cognitive-impairment classification. label_mode cognitive_impairment is the reader's mode (adapters/physionet2026.py LABEL_MODES): 1 impaired / 0 not, from each epoch's cognitive_impairment field through CI_TO_LABEL; ci_label is the metadata field that mode writes.",
+  "task": {
+    "name": "patient_classification",
+    "aggregation": "mean,mean_std"
+  },
+  "datasets": {
+    "physionet2026": {
+      "label_mode": "cognitive_impairment"
+    }
+  }
+}

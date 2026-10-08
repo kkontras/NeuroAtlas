@@ -1,0 +1,144 @@
+dataset: dcsm
+channels_available:
+- C3-M2
+- C4-M1
+- F3-M2
+- F4-M1
+- O1-M2
+- O2-M1
+channels_used:
+- C3-M2
+- C4-M1
+- F3-M2
+- F4-M1
+- O1-M2
+- O2-M1
+per_model:
+  eegpt:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  cbramod:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  labram:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  neurolm:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  reve:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  steegformer:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  neurorvq:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  neurogpt:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  biot:
+    C3-M2: C3
+    C4-M1: C4
+    F3-M2: F3
+    F4-M1: F4
+    O1-M2: O1
+    O2-M1: O2
+  sleepfm:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  chronos:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  moment:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  moirai:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  core_sleep:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  sleep_transformer:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+  sleepyco:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+    F3-M2: F3-M2
+    F4-M1: F4-M1
+    O1-M2: O1-M2
+    O2-M1: O2-M1
+notes:
+  eegpt: Linked-mastoid bipolars → referential 10-20 anchors. Paper pretrained unipolar at 58 channels; the bipolar→unipolar mapping is an approximation.
+  labram: Linked-mastoid bipolars → standard_1020 referential anchors; shared vocabulary with NeuroLM.
+  neurolm: Linked-mastoid bipolars → referential 10-20 anchors.
+  reve: Linked-mastoid bipolars → lowercase 10-20 names per REVE position bank.
+  steegformer: Linked-mastoid bipolars → referential 10-20 anchors; monopolar anchor approximation.
+  neurorvq: Linked-mastoid bipolars → referential 10-20 anchors.
+  neurogpt: Linked-mastoid bipolars → referential 10-20 anchors in NeuroGPT's legacy layout (match-ratio 6/22).
+  biot: 6 monopolar channels → uppercase 10-20 names. Wrapper computes 2 derivations (F3-C3, F4-C4), 8 single-electrode approximations, 6 zero-padded.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.

@@ -1,0 +1,73 @@
+dataset: sleep_edf_expanded
+channels_available:
+- EEG Fpz-Cz
+- EEG Pz-Oz
+channels_used:
+- EEG Fpz-Cz
+- EEG Pz-Oz
+per_model:
+  eegpt:
+    EEG Fpz-Cz: FPZ
+    EEG Pz-Oz: PZ
+  cbramod:
+    EEG Fpz-Cz: Fpz-Cz
+    EEG Pz-Oz: Pz-Oz
+  labram:
+    EEG Fpz-Cz: FPZ
+    EEG Pz-Oz: PZ
+  neurolm:
+    EEG Fpz-Cz: FPZ
+    EEG Pz-Oz: PZ
+  reve:
+    EEG Fpz-Cz: Fpz
+    EEG Pz-Oz: Pz
+  steegformer:
+    EEG Fpz-Cz: Fpz
+    EEG Pz-Oz: Pz
+  neurorvq:
+    EEG Fpz-Cz: Fpz
+    EEG Pz-Oz: Pz
+  neurogpt:
+    EEG Fpz-Cz: FZ
+    EEG Pz-Oz: PZ
+  biot:
+    EEG Fpz-Cz: FP1-F3
+    EEG Pz-Oz: P3-O1
+  sleepfm:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  chronos:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  moment:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  moirai:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  core_sleep:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  sleep_transformer:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+  sleepyco:
+    EEG Fpz-Cz: EEG Fpz-Cz
+    EEG Pz-Oz: EEG Pz-Oz
+notes:
+  eegpt: Bipolar midline onto referential FPZ/PZ; paper pretrained unipolar, bipolar → nearest-electrode is an approximation.
+  cbramod: CBraMod is index-based and permutation-invariant across channels; pass the original bipolar label through unchanged.
+  labram: Bipolar midline onto standard_1020 referential names; shared vocabulary with NeuroLM.
+  neurolm: Uppercase per NeuroLM standard_1020 vocabulary.
+  reve: Mixed-case 10-10 names per REVE position bank.
+  steegformer: Bipolar midline onto referential Fpz/Pz; mixed-case per STEEGFORMER_CHANNEL_MAP vocabulary.
+  neurorvq: Mixed-case 10-10 names; wrapper lowercases internally for 102-label vocabulary lookup.
+  neurogpt: Bipolar midline onto FZ/PZ referential slots in NeuroGPT's legacy 10-20 layout (match-ratio 2/22).
+  biot: 2 midline bipolars mapped to nearest BIOT double-banana slots (Fpz-Cz→FP1-F3 frontal, Pz-Oz→P3-O1 posterior). 14/16 slots zero-padded — very poor coverage.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.

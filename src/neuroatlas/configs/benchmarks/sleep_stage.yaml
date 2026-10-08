@@ -1,0 +1,51 @@
+schema_version: 1
+name: sleep_stage
+title: Sleep staging
+domain: sleep
+question: Which sleep stage (W, N1, N2, N3, REM) is each 30 s epoch?
+paper: App. C.2
+task: sleep_staging
+embed: --set window_s=30 --set stride_s=30
+probe: ""
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - cfs
+  - {slug: dcsm, embed: ""}
+  - {slug: dod, embed: ""}
+  - hmc
+  - hpap_lab_full
+  - {slug: isruc, embed: ""}
+  - {slug: mass, embed: ""}
+  - mesa
+  - mros
+  - {slug: physionet2026, embed: ""}
+  - {slug: shhs, embed: ""}
+  - {slug: sleep_edf_expanded, embed: ""}
+  - stages
+  - {slug: ucddb, embed: ""}
+  - {slug: wsc, embed: ""}
+single: sleep_edf_expanded
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
+metrics:
+  # Cohen's kappa, as paper v2 reports staging (Sec. 4.2, Fig. 3a); the
+  # probe's C is chosen on validation kappa (configs/tasks/sleep_staging.json).
+  headline: cohen_kappa
+  higher_is_better: true
+  secondary: [balanced_accuracy, macro_f1]
+  unit: 30 s epoch
+  describe: >
+    Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3, REM), each
+    fold's test subjects pooled, unscored epochs left out
+  fold: >
+    5 subject-level folds (SHHS: one fixed split); the probe's C is chosen
+    from 0.001-100 on validation Cohen's kappa, unweighted loss
+  spread: population SD over the folds

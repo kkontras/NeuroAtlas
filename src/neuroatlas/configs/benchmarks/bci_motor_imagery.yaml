@@ -1,0 +1,77 @@
+schema_version: 1
+name: bci_motor_imagery
+title: Motor imagery
+domain: bci
+question: >
+  Which movement is the person imagining in one trial? Tested on people the probe never saw (leave-one-subject-out).
+paper: App. C.4
+# no task: each cohort's own (linear_probe); trial windows come from its manifest
+embed: --pooling mean
+probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+datasets: [bnci2014_001, bnci2014_004, bnci2015_001, dreyer2023, liu2024, shin2017a, weibo2014]
+single: bnci2014_001
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [sleep_transformer, sleepyco, core_sleep]
+    reason: >
+      sleep-staging sequence models that take sequences of 30 s epochs, not
+      the benchmark's trials
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
+metrics:
+  # Plain balanced accuracy; chance (1/C) differs by cohort, so it is a
+  # column of its own (the metric registry: balanced_accuracy -> 1/C).
+  headline: balanced_accuracy
+  higher_is_better: true
+  secondary: [cohen_kappa, macro_f1]
+  unit: trial
+  describe: >
+    balanced accuracy over one held-out subject's trials (the mean of the
+    per-class recalls)
+  fold: >
+    leave-one-subject-out, one fold per subject (another subject is the
+    validation fold, the rest train); logistic regression, balanced loss,
+    regularisation C = 1
+  spread: population SD over the held-out subjects
+  note: >
+    The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
+    number (App. C.4, Eq. 4), which puts chance at 0.5 for every C.
+# The variants carry the paper's names (Sec. 4.4, App. D.6, D.8): "no
+# filtering" / "confound filtering" crossed with "mean-pool" / "token
+# flattening". `--variant` also accepts the `aliases`, and results folders
+# named after them are read as the variant's.
+default_variant:
+  description: >
+    no filtering, mean-pool: the paper's 4 s trial after the cue in this
+    reader's 4-40 Hz motor-imagery band, and each trial's patch tokens averaged
+    into one vector. The paper's no-filtering embeddings kept each model's own
+    passband; here only the start of the trial differs from confound
+    filtering, not the band
+  paper: Fig. 26a, the no-filtering bars (mean pool, App. D.8)
+variants:
+  token_flattening:
+    aliases: [per_patch]
+    description: >
+      no filtering, token flattening: as the default, but a trial's patch
+      tokens are concatenated in token order into one vector (tokens x
+      dimension) instead of averaged
+    paper: Fig. 5a, the no-filtering bars
+    embed: --pooling per_patch
+    probe: --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  confound_filtering:
+    aliases: [confound_control]
+    description: >
+      confound filtering, mean-pool: band 4-40 Hz and the trial starts 1 s
+      after the cue (1-4 s), so the score cannot come from the cue's evoked
+      response or the eye movement towards it
+    paper: Fig. 26a, the confound-filtering bars, and Fig. 26b (mean pool)
+    embed: --set confound_control=true --pooling mean
+    probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  confound_filtering_token_flattening:
+    aliases: [confound_control_per_patch]
+    description: confound filtering and token flattening, both of the above
+    paper: Fig. 5a, the confound-filtering bars, and Fig. 5b
+    embed: --set confound_control=true --pooling per_patch
+    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

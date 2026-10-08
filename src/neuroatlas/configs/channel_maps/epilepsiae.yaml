@@ -1,0 +1,96 @@
+# Applied by the runner before each wrapper sees a batch
+# (benchmarking_helpers/channels/channel_map.py). Every registered model
+# family has an entry; `mode: label_pass_through` hands the wrapper these
+# labels unchanged, as it got them while this map was reference only. This
+# YAML documents the authoritative (Epilepsiae, model) channel plan.
+
+dataset: epilepsiae
+channels_available:
+  [FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2]
+# Default montage is bipolar TCP (20 pairs) for epilepsy runs; unipolar
+# 19 when the entrypoint overrides montage='unipolar'.
+channels_used:
+  [FP1-F7, F7-T3, T3-T5, T5-O1,
+   FP2-F8, F8-T4, T4-T6, T6-O2,
+   T3-C3, C3-CZ, CZ-C4, C4-T4,
+   FP1-F3, F3-C3, C3-P3, P3-O1,
+   FP2-F4, F4-C4, C4-P4, P4-O2]
+
+per_model:
+  # REVE resolves bipolar 'A-B' names by splitting on '-' and averaging
+  # the two electrode positions (reve.py:104-131), so the target names
+  # are the bipolar strings themselves and each half must exist in the
+  # REVE position bank.
+  reve:
+    FP1-F7: FP1-F7
+    F7-T3: F7-T3
+    T3-T5: T3-T5
+    T5-O1: T5-O1
+    FP2-F8: FP2-F8
+    F8-T4: F8-T4
+    T4-T6: T4-T6
+    T6-O2: T6-O2
+    T3-C3: T3-C3
+    C3-CZ: C3-CZ
+    CZ-C4: CZ-C4
+    C4-T4: C4-T4
+    FP1-F3: FP1-F3
+    F3-C3: F3-C3
+    C3-P3: C3-P3
+    P3-O1: P3-O1
+    FP2-F4: FP2-F4
+    F4-C4: F4-C4
+    C4-P4: C4-P4
+    P4-O2: P4-O2
+  cbramod:
+    mode: label_pass_through
+    # CBraMod's ACPE Conv2d is index-based; labels are not consulted by the
+    # model. Wrapper drops EOG/EMG/ECG/EKG/RESP/TEMP/EVENT auxiliaries by
+    # prefix substring match; remaining channels pass through in dataset order.
+    non_eeg_drop_prefixes: [EOG, EMG, ECG, EKG, RESP, TEMP, EVENT]
+  biot:
+    FP1-F7: FP1-F7
+    F7-T3: F7-T7
+    T3-T5: T7-P7
+    T5-O1: P7-O1
+    FP2-F8: FP2-F8
+    F8-T4: F8-T8
+    T4-T6: T8-P8
+    T6-O2: P8-O2
+    T3-C3: T3-C3
+    C3-CZ: C3-CZ
+    CZ-C4: CZ-C4
+    C4-T4: C4-T4
+    FP1-F3: FP1-F3
+    F3-C3: F3-C3
+    C3-P3: C3-P3
+    P3-O1: P3-O1
+    FP2-F4: FP2-F4
+    F4-C4: F4-C4
+    C4-P4: C4-P4
+    P4-O2: P4-O2
+  brain_age_cnn: {mode: label_pass_through}
+  chronos: {mode: label_pass_through}
+  core_sleep: {mode: label_pass_through}
+  deepsoz_hem: skip
+  eegnetv4: skip
+  eegpt: {mode: label_pass_through}
+  labram: {mode: label_pass_through}
+  moirai: {mode: label_pass_through}
+  moment: {mode: label_pass_through}
+  neurogpt: {mode: label_pass_through}
+  neurolm: {mode: label_pass_through}
+  neurorvq: {mode: label_pass_through}
+  seizure_transformer: {mode: label_pass_through}
+  sleep_transformer: {mode: label_pass_through}
+  sleepfm: {mode: label_pass_through}
+  sleepyco: {mode: label_pass_through}
+  steegformer: skip
+
+notes:
+  eegnetv4: "Not run on the 20-pair bipolar montage: EEGNetv4 reads C3, Cz and C4, and none of them is a channel here."
+  steegformer: "Not run on the 20-pair bipolar montage: S-TEEGformer resolves monopolar 10-20 names only, and none of the 20 pairs matches its vocabulary (0 of 20 matched)."
+  deepsoz_hem: "Not run on the 20-pair bipolar montage: DeepSOZ-HEM has no input for the four central pairs (T3-C3, C3-CZ, CZ-C4, C4-T4); it runs on 19-electrode unipolar montages."
+  biot: "Exact renames, not approximations: T3=T7, T4=T8, T5=P7, T6=P8, so F7-T3 is BIOT's F7-T7 slot. All 16 slots filled directly; the four central-chain pairs feed none."
+  reve: "Bipolar TCP 20-pair montage. REVE midpoints each pair's 3D positions (position_utils.py convention). Each half is a 10-20 electrode that must resolve in brain-bzh/reve-positions."
+  cbramod: "Label pass-through (index-based ACPE). Bipolar 20-pair montage feeds the encoder unchanged; ACPE encodes spatial structure from channel ordering."

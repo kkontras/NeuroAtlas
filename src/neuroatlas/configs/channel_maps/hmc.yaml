@@ -1,0 +1,86 @@
+dataset: hmc
+channels_available:
+  - F4
+  - C4
+  - O2
+  - C3
+channels_used:
+  - F4
+  - C4
+  - O2
+  - C3
+
+per_model:
+  eegpt:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  cbramod:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  labram:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  neurolm:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  reve:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  biot:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  chronos:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  moment:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  moirai:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleepfm:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
+  core_sleep:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleep_transformer:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleepyco:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
+notes:
+  eegpt: "Linked-mastoid bipolars → referential 10-20 anchors."
+  labram: "Linked-mastoid bipolars → standard_1020 referential anchors."
+  neurolm: "Linked-mastoid bipolars → referential 10-20 anchors."
+  reve: "Linked-mastoid bipolars → 10-20 names per REVE position bank."
+  biot: "4 monopolar anchors from bipolars. Wrapper computes derivations where possible; remaining slots zero-padded."

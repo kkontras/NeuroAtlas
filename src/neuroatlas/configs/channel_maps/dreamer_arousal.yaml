@@ -1,0 +1,227 @@
+dataset: dreamer_arousal
+channels_available: &id001
+- AF3
+- F7
+- F3
+- FC5
+- T7
+- P7
+- O1
+- O2
+- P8
+- T8
+- FC6
+- F4
+- F8
+- AF4
+channels_used: *id001
+per_model:
+  eegpt:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  labram:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  neurolm:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  biot:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  cbramod:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  reve:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  sleepfm:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  chronos:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  moment:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  moirai:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  core_sleep:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  sleep_transformer:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+  sleepyco:
+    AF3: AF3
+    F7: F7
+    F3: F3
+    FC5: FC5
+    T7: T7
+    P7: P7
+    O1: O1
+    O2: O2
+    P8: P8
+    T8: T8
+    FC6: FC6
+    F4: F4
+    F8: F8
+    AF4: AF4
+notes:
+  eegpt: BCI EEG → referential 10-20 anchors; uppercased.
+  cbramod: CBraMod is index-based; channel labels passed through unchanged.
+  labram: BCI EEG → standard_1020 referential anchors; uppercased.
+  neurolm: BCI EEG → uppercase 10-20 names per NeuroLM vocabulary.
+  reve: BCI EEG → 10-20 names per REVE position bank.
+  biot: BCI channels → uppercase 10-20 names.
+  sleepfm: SleepFM is channel-label-agnostic; channels passed through unchanged.
+  chronos: Univariate TS FM; channel names unused. Identity mapping.
+  moment: Univariate TS FM; channel names unused. Identity mapping.
+  moirai: Univariate TS FM; channel names unused. Identity mapping.
+  core_sleep: Identity mapping; backbone selects C4.
+  sleep_transformer: Identity mapping; backbone selects C4.
+  sleepyco: Identity mapping; backbone selects C4.

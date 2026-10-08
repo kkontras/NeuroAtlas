@@ -1,0 +1,27 @@
+{
+  "about": "Arousal detection on MASS subset SS01, the one with arousal annotations, at the same thresholds as arousal.",
+  "_doc": "MASS arousal detection, SS01 only.",
+  "task": {
+    "name": "arousal_detection",
+    "subset_filter": "SS01",
+    "thresholds": [
+      0.0,
+      1.0,
+      3.0,
+      5.0,
+      7.0,
+      9.0
+    ]
+  },
+  "datasets": {
+    "mass": {
+      "subsets": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  }
+}

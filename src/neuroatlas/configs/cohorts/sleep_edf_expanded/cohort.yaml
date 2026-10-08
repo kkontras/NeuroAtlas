@@ -1,0 +1,99 @@
+# sleep_edf_expanded — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: sleep_edf_expanded
+name: Sleep-EDF Database Expanded
+domain: sleep
+paper_dataset: true
+
+description: >
+  Sleep-EDF Database Expanded: Sleep Cassette and Sleep Telemetry PSG, read
+  from the raw EDFs.
+
+cohort:
+  centre: "Sleep-EDF Expanded (PhysioNet), Netherlands"
+  country: NL
+  powerline_hz: 50
+
+acquisition:
+  kind: physionet
+  ref: sleep-edfx
+  version: 1.0.0
+  size_gb: 8.1                        # the project page's total uncompressed size
+  expect: {glob: "*-PSG.edf", count: 197}   # RECORDS: 153 SC + 44 ST
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      implemented_by: adapters.sleep_edf_expanded
+    condition:
+      granularity: recording   # one label for the whole recording; window scores are aggregated to the recording before scoring
+      implemented_by: adapters.sleep_edf_expanded
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+    age:
+      granularity: recording   # one age per subject; window predictions are mean-pooled to the subject before the ridge fit
+      note: >
+        chronological age in years; regression via `--task brain_age`
+        (Appendix B.3 re-labels this cohort, it does not add a dataset)
+      implemented_by: adapters.sleep_edf_expanded._age_labels
+  also_implemented:
+    - sex
+splits:
+  manifest: folds.json
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  batch_size: 32
+  data_root: "${EEG_DATA_ROOT}/sleep_edf_expanded"
+  label_mode: sleep_stage
+  num_folds: 5
+  signal_kind: raw
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - sleep_stage
+      - condition
+    enforced_by: adapters.sleep_edf_expanded
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.sleep_edf_expanded.SleepEDFExpandedBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - num_folds
+    - subsets
+    - label_mode
+
+provenance:
+  last_verified: 2026-09-21

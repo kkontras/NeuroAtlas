@@ -1,0 +1,57 @@
+{
+  "about": "Brain age (App. C.3): ridge regression of age on each subject's mean embedding (each recording's for ISRUC and WSC); alpha chosen by nested 4-fold CV on train+val, then refit there and scored by MAE on the test fold.",
+  "_doc": "Brain age (Appendix C.3): ridge regression of chronological age on each unit's mean embedding (a subject, or a recording where cohort_protocols says so). alpha is chosen by nested CV -- 4 inner folds stratified on age bins [0,35,50,65,80,200] over the merged train+val units, seed 43, StandardScaler -- from the grid below, then refit on train+val and scored on the test fold; metrics.best_test (and metrics.ridge_subject_nested_cv) is that score, selected on MAE. The validation-split ridge and the epoch-level ridge also run, as secondary blocks. cohort_protocols sets each cohort's split: it re-splits the cohort's own sleep-staging embeddings at probe time, so none of it enters the embedding cache key. A cohort not listed (cfs, mros) keeps its reader's own age-stratified folds.",
+  "task": {
+    "name": "brain_age",
+    "nested_cv": true,
+    "n_inner_folds": 4,
+    "nested_cv_seed": 43,
+    "cohort_protocols": {
+      "sleep_edf_expanded": {
+        "_doc": "Sleep Cassette only: 78 subjects, 153 nights; the 22 telemetry subjects are excluded before folding (cv_filter_scope pool), and the two nights of a subject are pooled into one vector.",
+        "cv_filter": {"subset": "cassette"},
+        "cv_filter_scope": "pool",
+        "n_folds": 5,
+        "split_seed": 42,
+        "age_bins": [0, 35, 50, 65, 80, 200],
+        "aggregation_group": "subject_id",
+        "drop_unscored": false
+      },
+      "isruc": {
+        "_doc": "One unit per recording (124: subgroup II has two per subject; I_086 and I_095 have no age), folded at subject level so a subject's recordings stay together.",
+        "n_folds": 5,
+        "split_seed": 42,
+        "age_bins": [0, 35, 50, 65, 80, 200],
+        "aggregation_group": "recording_id",
+        "drop_unscored": false
+      },
+      "physionet2026": {
+        "_doc": "Brain-age gap: 100 healthy + 100 impaired subjects, age-matched, are held out of every fold; folds are drawn over the rest and the ridge is trained on the healthy subjects only (cv_filter on the splits).",
+        "cv_filter": {"ci_label": 0},
+        "cv_filter_scope": "splits",
+        "holdout_eval_groups": [{"ci_label": 0}, {"ci_label": 1}],
+        "holdout_eval_size_per_group": 100,
+        "holdout_eval_match_field": "age",
+        "holdout_eval_seed": 1729,
+        "n_folds": 5,
+        "split_seed": 42,
+        "age_bins": [0, 35, 50, 65, 80, 200],
+        "aggregation_group": "subject_id",
+        "drop_unscored": false
+      },
+      "wsc": {
+        "_doc": "One unit per visit recording, folded at subject level (a subject's visits stay together; each visit keeps its own age).",
+        "n_folds": 5,
+        "split_seed": 42,
+        "age_bins": [0, 35, 50, 65, 80, 200],
+        "aggregation_group": "recording_id",
+        "drop_unscored": false
+      }
+    }
+  },
+  "probe": {
+    "type": "linear",
+    "selection_metric": "mae",
+    "ridge_alpha_sweep": [0.1, 1, 5, 10, 20, 30, 50, 100]
+  }
+}

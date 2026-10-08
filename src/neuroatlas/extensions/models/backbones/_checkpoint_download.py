@@ -1,0 +1,1016 @@
+"""Fetching model checkpoints into the models root.
+
+Each source type knows how to bring one checkpoint to its ``checkpoint_path``:
+a file of a Hugging Face repository, a folder of one, a file committed to a
+GitHub repository, files committed to one at a pinned commit, a GitHub release
+asset, one member of a Google Drive zip, or one file inside a public Docker
+image. Where the upstream file's SHA-256 is recorded below it is checked before
+the file is put in place, so a changed or truncated upstream file fails loudly
+instead of loading.
+
+:func:`missing_files` says what a folder checkpoint still lacks, so a folder
+that holds only a config is not mistaken for the weights.
+"""
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import logging
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+from neuroatlas import progress
+from neuroatlas._paths import checkout_root, home
+
+logger = logging.getLogger(__name__)
+
+
+# --------------- what each source holds --------------- #
+
+@dataclass(frozen=True)
+class HubFolder:
+    """A checkpoint that is a folder of a Hugging Face repository.
+
+    ``per_checkpoint_subfolder``: the repository holds one subfolder per
+    checkpoint, named like the local folder (PierreGtch/EEGNetv4 keeps
+    ``EEGNetv4_BNCI2014001/{kwargs.pkl,model-params.pkl,...}``); otherwise the
+    whole repository is the checkpoint. ``companions`` are other repositories
+    the model also loads, each fetched whole into a sibling folder.
+    """
+    required: Tuple[str, ...]
+    per_checkpoint_subfolder: bool = False
+    companions: Tuple[Tuple[str, str], ...] = ()   # (sibling folder name, repo id)
+
+
+HUB_FOLDERS: Dict[str, HubFolder] = {
+    "PierreGtch/EEGNetv4": HubFolder(required=("kwargs.pkl", "model-params.pkl"),
+                                     per_checkpoint_subfolder=True),
+    "brain-bzh/reve-base": HubFolder(
+        required=("config.json", "configuration_reve.py", "modeling_reve.py", "model.safetensors"),
+        companions=(("reve-positions", "brain-bzh/reve-positions"),)),
+}
+
+# Files each companion repository must provide (it is downloaded whole).
+COMPANION_REQUIRED: Dict[str, Tuple[str, ...]] = {
+    "brain-bzh/reve-positions": ("config.json", "configuration_bank.py", "position_bank.py",
+                                 "model.safetensors"),
+}
+
+# What an untrained REVE needs from brain-bzh/reve-base: the config and the
+# modelling code it runs with trust_remote_code -- not the weights.
+REVE_REPO = "brain-bzh/reve-base"
+REVE_CODE_FILES = ("config.json", "configuration_reve.py", "modeling_reve.py")
+
+# Hub files that re-package an upstream checkpoint: fetched, checked by SHA-256,
+# and written at checkpoint_path as the ``{"state_dict": ...}`` torch file the
+# wrapper loads.
+#   eeg-telecom-paris/eegpt-large-official holds the 413 tensors of EEGPT's
+#   eegpt_mcae_58chs_4s_large4E.ckpt (sha256 9d63ebc8...), without the
+#   optimiser state; all 102 ``target_encoder.*`` tensors the wrapper loads are
+#   bit-identical to the upstream file (compared 2026-10-02). The upstream
+#   Figshare share is behind a browser challenge that no script passes.
+HUB_SAFETENSORS_AS_TORCH: Dict[str, Tuple[str, str]] = {
+    "eeg-telecom-paris/eegpt-large-official": (
+        "weights.safetensors",
+        "c45c31cb42f68f8b9c630a7739a8084ae5dd6a6608a0d732a5165f180c755a96"),
+}
+
+# Docker images that are the only official distribution of a checkpoint:
+# image -> (path of the file inside the image, its SHA-256).
+DOCKER_FILES: Dict[str, Tuple[str, str]] = {
+    "yujjio/seizure_transformer": (
+        "usr/local/lib/python3.10/dist-packages/wu_2025/model.pth",
+        "79b14e4715fef055ba252ae3f7a072325907e3d5d11bf91a8070d4220995f65d"),
+}
+
+# Google Drive zips: url -> (the member to keep, its SHA-256).
+DRIVE_ZIP_MEMBERS: Dict[str, Tuple[str, str]] = {
+    "https://drive.google.com/uc?export=download&id=1FwjtO3JLd1Di0yRmz7g4B0niyY0gzQEd": (
+        "ckpt_fold-01.pth",
+        "402ce091662f297e0faf53cb903ed84829eaed68c8599a1706dbdd6aaff1f68c"),
+}
+
+
+@dataclass(frozen=True)
+class CommitFiles:
+    """A checkpoint folder made of files committed to a public GitHub repository,
+    fetched from raw.githubusercontent.com at one pinned commit, each checked
+    against its recorded SHA-256 before it is put in place.
+
+    For upstream code and weights whose licence keeps them out of this MIT
+    package: the copy a user runs comes from upstream, not from us.
+    ``files``: (path in the repository, name in the local folder, SHA-256).
+    """
+    repo: str
+    commit: str
+    files: Tuple[Tuple[str, str, str], ...]
+    licence: str
+
+    def url(self, repo_path: str) -> str:
+        return f"https://raw.githubusercontent.com/{self.repo}/{self.commit}/{repo_path}"
+
+    def sha256(self, name: str) -> str:
+        return next(sha for _, local, sha in self.files if local == name)
+
+
+# source_reference (the browsable tree at the commit) -> what to fetch.
+GITHUB_COMMIT_FILES: Dict[str, CommitFiles] = {
+    # DeepSOZ-HEM (Shama et al. 2023; SzCORE 2025 #4): the model code the
+    # wrapper imports and the fold-4 checkpoint. GPL-3.0, so neither ships with
+    # neuroatlas (MIT); until 2026-10-05 both were vendored under
+    # backbones/third_party/deepsoz_hem/, byte-identical to these files
+    # (SHA-256 compared that day). a7c13bd is upstream's latest commit
+    # (2025-02-23); the checkpoint is a plain git blob there, not Git LFS.
+    "https://github.com/amruth-sn/deepsoz-hem/tree/a7c13bdbb6d86e016f929ba108370cc614e9882c": CommitFiles(
+        repo="amruth-sn/deepsoz-hem",
+        commit="a7c13bdbb6d86e016f929ba108370cc614e9882c",
+        files=(
+            ("deepsoz-hem/src/deepsoz/baselines.py", "baselines.py",
+             "07cec7b6418ee5f69ba8c1e3ef429148cc50e04a7bca302dc8080d9ee09c40e8"),
+            ("deepsoz-hem/src/deepsoz/deepsoz_fold4.pth_4.tar", "deepsoz_fold4.pth_4.tar",
+             "db1ffaeebbe87865a3a8e5148ee7953b6118c689eaec8733405f7a1cad9263d4"),
+            ("LICENSE", "LICENSE",
+             "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"),
+        ),
+        licence="GPL-3.0",
+    ),
+}
+
+
+def commit_files_note(reference: str) -> Optional[str]:
+    """The licence line `models status` shows for a :data:`GITHUB_COMMIT_FILES` checkpoint."""
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        return None
+    return (f"{pinned.licence}: code and weights are not part of neuroatlas; `models download` "
+            f"fetches them from github.com/{pinned.repo} at commit {pinned.commit[:7]}")
+
+
+def check_commit_files(folder, reference: str, names, identifier: str) -> None:
+    """Refuse files in *folder* that are not the pinned upstream bytes.
+
+    The wrapper runs the downloaded code, so it checks before importing it.
+    """
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        raise FileNotFoundError(f"No files are recorded for {reference}, so {folder} cannot be checked.")
+    for name in names:
+        path = Path(folder) / name
+        got, want = _sha256(path), pinned.sha256(name)
+        if got != want:
+            raise FileNotFoundError(
+                f"{path} is not {name} of {pinned.repo} at commit {pinned.commit[:7]} "
+                f"(SHA-256 {got}, expected {want})\n"
+                f"fix: rm {path} && neuroatlas models download {identifier}")
+
+
+def hub_repo(reference: str) -> str:
+    """``org/repo`` from either that or the browser URL of the repository."""
+    for prefix in ("https://huggingface.co/", "http://huggingface.co/", "huggingface.co/"):
+        if reference.startswith(prefix):
+            reference = reference[len(prefix):]
+            break
+    return reference.strip("/")
+
+
+def missing_files(checkpoint_path, source_type: str, source_reference: str) -> List[str]:
+    """What a checkpoint still lacks on disk, as paths; [] when it is complete.
+
+    A single-file checkpoint lacks itself when absent. A folder checkpoint
+    (see :data:`HUB_FOLDERS`, :data:`GITHUB_COMMIT_FILES`) lacks each required
+    file, and each required file of its companion folders.
+    """
+    path = Path(checkpoint_path) if checkpoint_path else Path("")
+    pinned = GITHUB_COMMIT_FILES.get(source_reference or "") if source_type == "github_commit_files" else None
+    if pinned is not None and str(path) not in ("", "."):
+        return [str(path / name) for _, name, _ in pinned.files if not (path / name).is_file()]
+    folder = HUB_FOLDERS.get(hub_repo(source_reference or "")) if source_type == "huggingface" else None
+    if folder is None:
+        return [] if str(path) not in ("", ".") and path.exists() else [str(path)]
+    lacking = [str(path / name) for name in folder.required if not (path / name).is_file()]
+    for sibling, repo in folder.companions:
+        lacking += [str(path.parent / sibling / name) for name in COMPANION_REQUIRED.get(repo, ())
+                    if not (path.parent / sibling / name).is_file()]
+    return lacking
+
+
+def reve_code_missing(checkpoint_dir) -> List[str]:
+    """What an untrained REVE lacks: the config and code, and the position bank."""
+    path = Path(checkpoint_dir)
+    lacking = [str(path / n) for n in REVE_CODE_FILES if not (path / n).is_file()]
+    lacking += [str(path.parent / "reve-positions" / n)
+                for n in COMPANION_REQUIRED["brain-bzh/reve-positions"]
+                if not (path.parent / "reve-positions" / n).is_file()]
+    return lacking
+
+
+def default_hub_cache() -> Path:
+    """The Hugging Face cache transformers and huggingface_hub read by default."""
+    return Path(os.environ.get("HF_HUB_CACHE") or (
+        Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub"))
+
+
+def hub_cache_snapshot(repo_id: str, files, cache_dirs=None) -> Optional[Path]:
+    """A cached snapshot of *repo_id* that holds every one of *files*, else None.
+
+    A snapshot folder alone is not enough: an interrupted download or a
+    config-only fetch leaves one without the weights.
+    """
+    folder = "models--" + repo_id.replace("/", "--")
+    for cache in (cache_dirs or [default_hub_cache()]):
+        snapshots = Path(cache) / folder / "snapshots"
+        if not snapshots.is_dir():
+            continue
+        for snap in sorted(snapshots.iterdir()):
+            if all((snap / name).is_file() for name in files):   # follows the blob symlinks
+                return snap
+    return None
+
+
+@dataclass(frozen=True)
+class ReveSources:
+    """Where REVE's model files and its position bank load from.
+
+    Each is the local folder when it is complete, else the repo id when the
+    Hugging Face cache holds a complete snapshot (transformers reads it from
+    there, offline too), else None; ``lacking`` lists what neither has.
+    """
+    model: Optional[str]
+    positions: Optional[str]
+    lacking: Tuple[str, ...]
+
+    @property
+    def from_hub_cache(self) -> bool:
+        return REVE_REPO in (self.model,) or "brain-bzh/reve-positions" in (self.positions,)
+
+
+def reve_sources(checkpoint_dir, random_init: bool) -> ReveSources:
+    path = Path(checkpoint_dir)
+
+    def pick(local: Path, repo: str, files):
+        if all((local / n).is_file() for n in files):
+            return str(local), []
+        if hub_cache_snapshot(repo, files) is not None:
+            return repo, []
+        return None, [str(local / n) for n in files if not (local / n).is_file()]
+
+    model, lacking = pick(path, REVE_REPO,
+                          REVE_CODE_FILES if random_init else HUB_FOLDERS[REVE_REPO].required)
+    positions, lacking_pos = pick(path.parent / "reve-positions", "brain-bzh/reve-positions",
+                                  COMPANION_REQUIRED["brain-bzh/reve-positions"])
+    return ReveSources(model, positions, tuple(lacking + lacking_pos))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+# --------------- progress: what a download shows while it runs --------------- #
+# Every transfer below reports to the item `models download` (or a run that
+# fetches on the fly) has open: neuroatlas.progress shows one live line,
+# "downloading 45% (143 MB of 318 MB, 12 MB/s, 0m 12s, ~0m 14s left)", and
+# the bytes counted here make the item's result line ("downloaded, 318 MB").
+
+
+def _copy(response, handle, name: str, total: Optional[int] = None) -> int:
+    """Copy a urlopen *response* into *handle*, the bytes onto the live line.
+    Returns how many were copied."""
+    item = progress.current()
+    if total is None:
+        try:
+            total = int((getattr(response, "headers", None) or {}).get("Content-Length") or 0) or None
+        except (TypeError, ValueError):
+            total = None
+    item.phase("downloading", total=total, unit="bytes")
+    item.update(note=name)
+    copied = 0
+    while True:
+        chunk = response.read(1 << 20)
+        if not chunk:
+            break
+        handle.write(chunk)
+        copied += len(chunk)
+        item.update(advance=len(chunk))
+        item.count("bytes", len(chunk))
+    return copied
+
+
+class _Counting:
+    """A response read through by someone else (tarfile): its bytes onto the line."""
+
+    def __init__(self, response):
+        self._response = response
+        self._item = progress.current()
+
+    def read(self, n: int = -1) -> bytes:
+        data = self._response.read(n)
+        if data:
+            self._item.update(advance=len(data))
+            self._item.count("bytes", len(data))
+        return data
+
+
+class _HubBar:
+    """What huggingface_hub takes for a tqdm bar: its counts go to the item."""
+
+    def __init__(self, item, total=None, initial=0):
+        self._item = item
+        if item.phase_text != "downloading":
+            # a download inside loading weights: the line says so from its first file
+            item.phase("downloading", unit="bytes")
+        item.add_total(total)                      # a snapshot's files add up
+        if initial:
+            item.update(advance=int(initial), carried=int(initial))
+
+    def update(self, n=1):
+        n = int(n or 0)
+        self._item.update(advance=n)
+        self._item.count("bytes", n)
+
+    def __getattr__(self, name):            # set_description, refresh, close, ...
+        return lambda *a, **k: None
+
+
+@contextlib.contextmanager
+def hub_progress(*watched, at_first_byte: bool = False):
+    """A Hugging Face download on our line instead of huggingface_hub's bars.
+
+    Its bars are switched off, and the byte counts its downloads report
+    (huggingface_hub's file_download progress hook) are routed to the item's
+    live line, with the files' sizes as the total. Where that hook is not
+    there (another huggingface_hub version), the bytes arriving under the
+    *watched* folders are shown instead.
+
+    ``at_first_byte``: around a step that downloads only when a file is
+    missing (a model's ``from_pretrained`` while its weights load): the line
+    keeps its phase until a download starts.
+    """
+    item = progress.current()
+    if not isinstance(item, progress.Progress):
+        yield                                      # no line of ours: its bars stay
+        return
+    undo = []
+    try:
+        from huggingface_hub.utils import (
+            are_progress_bars_disabled,
+            disable_progress_bars,
+            enable_progress_bars,
+        )
+
+        if not are_progress_bars_disabled():
+            disable_progress_bars()
+            undo.append(enable_progress_bars)
+    except Exception:                                  # not installed, or a stand-in
+        pass
+    if not at_first_byte:
+        item.phase("downloading", unit="bytes")
+    hooked = False
+    try:
+        import huggingface_hub.file_download as file_download
+
+        original = file_download._get_progress_bar_context
+        if callable(original):
+            def bar_context(*args, total=None, initial=0, **kwargs):
+                return contextlib.nullcontext(_HubBar(item, total, initial))
+
+            file_download._get_progress_bar_context = bar_context
+            undo.append(lambda: setattr(file_download, "_get_progress_bar_context", original))
+            hooked = True
+    except Exception:
+        pass
+    # the bytes arriving on disk too: xet reports in large steps, and another
+    # huggingface_hub version may not report at all
+    written = progress.DiskBytes(*watched) if watched else None
+    if written is not None:
+        item.watch(written)
+    try:
+        yield
+    finally:
+        for step in reversed(undo):
+            step()
+        if written is not None:
+            item.watch(None)
+            if not hooked or not item.counts.get("bytes"):
+                written._next = 0.0
+                item.count("bytes", written() or 0)
+
+
+def _verify(path: Path, expected: Optional[str], what: str) -> None:
+    if not expected:
+        return
+    got = _sha256(path)
+    if got != expected:
+        raise FileNotFoundError(
+            f"{what}: SHA-256 {got}, not the recorded {expected} (a cut-short download, or "
+            f"the upstream file changed); nothing was put in place\n"
+            f"fix: run the download again")
+
+
+def downloads_off() -> bool:
+    return "1" in (os.environ.get("NEUROATLAS_OFFLINE"), os.environ.get("EEGBENCH_OFFLINE"))
+
+
+def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
+                      identifier: Optional[str] = None) -> Path:
+    """Return a valid local path to the checkpoint, downloading if needed.
+
+    Raises FileNotFoundError, saying what to do, when the checkpoint is absent
+    and cannot be fetched (downloads off, a manual source, or a failure).
+    *identifier*, when given, is named in the download command the error gives.
+    """
+    path = Path(checkpoint_path) if checkpoint_path else Path("")
+    lacking = missing_files(path, source_type, source_reference)
+    if not lacking:
+        return path
+
+    if downloads_off():
+        detail = (f" (missing {', '.join(Path(p).name for p in lacking)})"
+                  if path.is_dir() else "")
+        command = (f"neuroatlas models download {identifier}, or add --online" if identifier
+                   else "neuroatlas models status (each checkpoint's weights, and the "
+                        "command that fetches them)")
+        raise FileNotFoundError(
+            f"no weights at {path}{detail}, and this run does not download\n"
+            f"fix: {command}"
+        )
+
+    logger.info("Checkpoint not found at %s — attempting auto-download (source_type=%s)", path, source_type)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    handlers = {
+        "huggingface": _download_huggingface,
+        "github_release": _download_github,
+        "github_release_asset": _download_release_asset,
+        "github_commit_files": _download_github_commit_files,
+        "google_drive_zip": _download_google_drive_zip,
+        "docker_image": _download_docker_image_file,
+        "figshare_private_share": _download_figshare_private_share,
+    }
+    handler = handlers.get(source_type)
+    if handler is None:
+        if source_type in ("github_figshare", "github", "local", "local_artifact"):
+            raise FileNotFoundError(
+                f"no weights at {path} (no automatic download)\n"
+                f"fix: get them from {source_reference} and place them at {path}"
+            )
+        raise FileNotFoundError(
+            f"no weights at {path} (source_type={source_type!r} has no download handler)\n"
+            f"fix: get them from {source_reference} and place them at {path}"
+        )
+    try:
+        return handler(path, source_reference)
+    except FileNotFoundError:
+        raise
+    except Exception as exc:
+        hint = ""
+        if source_type == "huggingface" and (
+                type(exc).__name__ in ("GatedRepoError", "RepositoryNotFoundError")
+                or any(f" {code} " in f" {exc} " for code in ("401", "403"))):
+            hint = (f"\nfix: accept the terms on https://huggingface.co/"
+                    f"{hub_repo(source_reference)}, then neuroatlas config token hf "
+                    f"(a token with access)")
+        raise FileNotFoundError(
+            f"download from {source_reference} failed: "
+            f"{type(exc).__name__}: {str(exc).strip()}{hint}"
+        ) from exc
+
+
+# --------------- tokens: where, never what --------------- #
+
+# Where a Hugging Face token may live, most explicit first. The search order
+# is the one `config show` reports (neuroatlas.config.locate_token).
+_HF_TOKEN_SOURCES = (
+    "NEUROATLAS_HF_TOKEN_FILE",           # explicit override, a path
+    "$NEUROATLAS_HOME/hf_token",          # written next to config.yaml
+    "<checkout>/.secrets/hf_token",        # per-checkout, gitignored
+    "~/.cache/huggingface/token",          # what `huggingface-cli login` writes
+)
+
+
+def resolve_hf_token() -> str | None:
+    """Return a Hugging Face token, or None with a warning naming where we looked.
+
+    Never logs the token itself, and never writes it anywhere.
+    """
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token.strip()
+
+    # A checkout's .secrets/hf_token (config.locate_token looks there too).
+    repo_root = checkout_root() or home()
+    candidates = [
+        os.environ.get("NEUROATLAS_HF_TOKEN_FILE"),
+        home() / "hf_token",
+        repo_root / ".secrets" / "hf_token",
+        Path.home() / ".cache" / "huggingface" / "token",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_file():
+            token = path.read_text().strip()
+            if token:
+                logger.info("Using the Hugging Face token from %s", path)
+                return token
+
+    # a log line, not a warning: most weights are not gated, and a gated
+    # download that fails says so with its own fix (download_checkpoint)
+    logger.info(
+        "no Hugging Face token (looked at $HF_TOKEN, %s): gated models cannot be "
+        "downloaded; neuroatlas config token hf saves one",
+        ", ".join(_HF_TOKEN_SOURCES[1:]),
+    )
+    return None
+
+
+def resolve_github_token() -> str | None:
+    """A GitHub token from $GITHUB_TOKEN, $GH_TOKEN or $NEUROATLAS_HOME/github_token.
+
+    Only private release assets need one. Never logs the token.
+    """
+    for var in ("GITHUB_TOKEN", "GH_TOKEN"):
+        if os.environ.get(var):
+            return os.environ[var].strip()
+    path = home() / "github_token"
+    if path.is_file():
+        token = path.read_text().strip()
+        if token:
+            logger.info("Using the GitHub token from %s", path)
+            return token
+    return None
+
+
+# --------------- download backends --------------- #
+
+_HF_FILENAME_MAP = {
+    # Maps HF repo_id → path-within-repo when that differs from the local
+    # checkpoint_path's basename. Only needed when the HF repo stores the
+    # weight under a subfolder (e.g. neurolm's "checkpoints/VQ.pt").
+    "Weibang/NeuroLM": "checkpoints/VQ.pt",
+    "wenhuic/Neuro-GPT": "pretrained_model/pytorch_model.bin",
+    "ntinosbarmpas/NeuroRVQ": "pretrained_models/foundation_models/NeuroRVQ_EEG_foundation_model_v1.pt",
+}
+
+
+def download_hub_folder(local_dir: Path, repo_id: str, allow_patterns=None,
+                        token: Optional[str] = None) -> Path:
+    """Fetch (part of) a hub repository into *local_dir*, as plain files."""
+    from huggingface_hub import snapshot_download
+
+    local_dir.mkdir(parents=True, exist_ok=True)
+    with hub_progress(local_dir):
+        snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns,
+                          token=token)
+    return local_dir
+
+
+def fetch_reve_code(checkpoint_dir) -> Path:
+    """What an untrained REVE needs: reve-base's config and code, and the position bank."""
+    path = Path(checkpoint_dir)
+    token = resolve_hf_token()
+    download_hub_folder(path, REVE_REPO, allow_patterns=list(REVE_CODE_FILES) + ["LICENSE", "README.md"],
+                        token=token)
+    download_hub_folder(path.parent / "reve-positions", "brain-bzh/reve-positions", token=token)
+    lacking = reve_code_missing(path)
+    if lacking:
+        raise FileNotFoundError(f"{REVE_REPO} did not provide {', '.join(lacking)}.")
+    return path
+
+
+def _download_huggingface(local_path: Path, repo_id: str) -> Path:
+    """Download a checkpoint from HuggingFace Hub.
+
+    *repo_id* may be written either way a spec author would naturally write
+    it -- "org/repo" or the URL you get from the browser address bar. The
+    Hub API only accepts the former, and a full URL otherwise fails at
+    download time rather than at registration, so normalise it here.
+    """
+    repo_id = hub_repo(repo_id)
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise FileNotFoundError(
+            f"no weights at {local_path}, and huggingface_hub is not installed\n"
+            f"fix: pip install huggingface_hub, or get them from https://huggingface.co/{repo_id}"
+        )
+
+    token = resolve_hf_token()
+    folder = HUB_FOLDERS.get(repo_id)
+    if folder is not None:
+        return _download_hub_checkpoint_folder(local_path, repo_id, folder, token)
+    if repo_id in HUB_SAFETENSORS_AS_TORCH:
+        return _download_safetensors_as_torch(local_path, repo_id, token)
+
+    repo_filename = _HF_FILENAME_MAP.get(repo_id, local_path.name)
+    tail = Path(repo_filename).parts
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    if local_path.parts[-len(tail):] == tail:
+        # The repository's layout ends the way local_path does (NeuroLM's
+        # checkpoints/VQ.pt under .../neurolm/checkpoints/): download in place.
+        local_dir = local_path
+        for _ in tail:
+            local_dir = local_dir.parent
+        with hub_progress(local_dir):
+            downloaded = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                              local_dir=str(local_dir), token=token))
+    else:
+        # It does not (NeuroGPT's pretrained_model/pytorch_model.bin, kept as
+        # .../neurogpt/pytorch_model.bin): fetch next to it, then move it there.
+        with tempfile.TemporaryDirectory(dir=local_path.parent) as tmp:
+            with hub_progress(tmp):
+                fetched = Path(hf_hub_download(repo_id=repo_id, filename=repo_filename,
+                                               local_dir=tmp, token=token))
+            shutil.move(str(fetched), str(local_path))
+        downloaded = local_path
+    logger.info("Downloaded %s from HuggingFace %s", repo_filename, repo_id)
+    return downloaded
+
+
+def _download_hub_checkpoint_folder(local_path: Path, repo_id: str, folder: HubFolder,
+                                    token: Optional[str]) -> Path:
+    if folder.per_checkpoint_subfolder:
+        # the repo's <name>/ lands at local_path when local_dir is its parent
+        download_hub_folder(local_path.parent, repo_id, allow_patterns=[f"{local_path.name}/*"],
+                            token=token)
+    else:
+        download_hub_folder(local_path, repo_id, token=token)
+    for sibling, companion in folder.companions:
+        download_hub_folder(local_path.parent / sibling, companion, token=token)
+    lacking = missing_files(local_path, "huggingface", repo_id)
+    if lacking:
+        raise FileNotFoundError(
+            f"https://huggingface.co/{repo_id} did not provide "
+            f"{', '.join(lacking)}; the repository layout may have changed.")
+    logger.info("Downloaded %s from HuggingFace %s", local_path.name, repo_id)
+    return local_path
+
+
+def _download_safetensors_as_torch(local_path: Path, repo_id: str, token: Optional[str]) -> Path:
+    import torch
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load as load_bytes
+
+    filename, sha256 = HUB_SAFETENSORS_AS_TORCH[repo_id]
+    with tempfile.TemporaryDirectory(prefix="neuroatlas_dl_", dir=str(local_path.parent)) as tmp:
+        with hub_progress(tmp):
+            fetched = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_dir=tmp,
+                                           token=token))
+        progress.current().phase("checking SHA-256")
+        _verify(fetched, sha256, f"https://huggingface.co/{repo_id}/{filename}")
+        # read into memory rather than memory-map: an open map keeps the file
+        # busy and the temporary folder cannot be removed on NFS
+        progress.current().phase("writing the torch checkpoint")
+        state = load_bytes(fetched.read_bytes())
+        partial = Path(tmp) / local_path.name
+        torch.save({"state_dict": state,
+                    "neuroatlas_source": f"https://huggingface.co/{repo_id}/{filename} (sha256 {sha256})"},
+                   str(partial))
+        del state
+        shutil.move(str(partial), str(local_path))
+    logger.info("Wrote %s from HuggingFace %s/%s", local_path, repo_id, filename)
+    return local_path
+
+
+def _download_github(local_path: Path, repo_url: str) -> Path:
+    """Clone a GitHub repo (shallow) and copy the checkpoint file.
+
+    Supports repos where weights are committed directly (SleepFM, TF-C).
+    Uses a mapping of known repos → internal checkpoint paths.
+    """
+    _GITHUB_CHECKPOINT_MAP = {
+        "zou-group/sleepfm-clinical": "sleepfm/checkpoints/model_base/best.pt",
+        "ycq091044/BIOT": "pretrained-models/EEG-PREST-16-channels.ckpt",
+        "935963004/LaBraM": "checkpoints/labram-base.pth",
+    }
+
+    # Extract org/repo from URL
+    repo_slug = repo_url.rstrip("/").split("github.com/")[-1].split(".git")[0]
+    internal_path = _GITHUB_CHECKPOINT_MAP.get(repo_slug)
+
+    if internal_path is None:
+        raise FileNotFoundError(
+            f"no weights at {local_path} (no known file in the GitHub repository {repo_slug})\n"
+            f"fix: get them from {repo_url} and place them at {local_path}"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="eegbench_dl_") as tmpdir:
+        clone_url = f"https://github.com/{repo_slug}.git"
+        logger.info("Cloning %s (shallow) to download checkpoint...", clone_url)
+        _git_clone(clone_url, os.path.join(tmpdir, "repo"), repo_slug)
+        src = Path(tmpdir) / "repo" / internal_path
+        if not src.exists():
+            raise FileNotFoundError(
+                f"Expected checkpoint at {internal_path} in {repo_slug} but not found after cloning."
+            )
+        shutil.copy2(str(src), str(local_path))
+        progress.current().count("bytes", local_path.stat().st_size)
+
+        # Also copy config.json / LICENSE if present alongside
+        for extra in ("config.json", "LICENSE"):
+            extra_src = src.parent / extra
+            extra_dst = local_path.parent / extra
+            if extra_src.exists() and not extra_dst.exists():
+                shutil.copy2(str(extra_src), str(extra_dst))
+
+    logger.info("Downloaded %s from %s", local_path.name, repo_slug)
+    return local_path
+
+
+_GIT_PROGRESS = re.compile(
+    r"(Receiving objects|Resolving deltas|Updating files):\s+(\d+)% \((\d+)/(\d+)\)"
+    r"(?:, ([\d.]+) (KiB|MiB|GiB|bytes))?")
+_GIT_UNITS = {"bytes": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}
+
+
+def _git_clone(url: str, dest: str, what: str) -> None:
+    """``git clone --depth 1`` with git's own progress (``Receiving objects:
+    45% (123/456), 12.3 MiB``) turned into the live line, instead of a
+    silent minute; git's last words when it fails."""
+    item = progress.current()
+    item.phase(f"cloning {what}")
+    fd, log = tempfile.mkstemp(prefix="neuroatlas-git-", suffix=".log")
+    seen = {"offset": 0, "text": ""}
+    phases = {"Receiving objects": f"cloning {what}", "Resolving deltas": "resolving deltas",
+              "Updating files": "checking out files"}
+
+    def poll():
+        with open(log, "rb") as fh:
+            fh.seek(seen["offset"])
+            new = fh.read()
+        seen["offset"] += len(new)
+        seen["text"] = (seen["text"] + new.decode("utf-8", errors="replace"))[-4096:]
+        matches = list(_GIT_PROGRESS.finditer(seen["text"]))
+        if matches:
+            m = matches[-1]
+            text, total = phases[m.group(1)], int(m.group(4))
+            if item.phase_text != text or item.total != total:
+                # objects differ in size (one is the checkpoint): no time left
+                item.phase(text, total=total, unit="objects", eta=False)
+                item.watch(poll)
+            note = None
+            if m.group(5):
+                note = progress.size(float(m.group(5)) * _GIT_UNITS[m.group(6)])
+            item.update(done=int(m.group(3)), note=note)
+        return None
+
+    item.watch(poll)
+    try:
+        done = subprocess.run(["git", "clone", "--progress", "--depth", "1", url, dest],
+                              stdout=subprocess.DEVNULL, stderr=fd)
+    finally:
+        os.close(fd)
+        item.watch(None)
+        with open(log, encoding="utf-8", errors="replace") as fh:
+            said = fh.read()
+        os.unlink(log)
+    if done.returncode:
+        last = [line.strip() for line in re.split(r"[\r\n]+", said) if line.strip()][-2:]
+        raise RuntimeError(f"git clone {url} exited {done.returncode}: " + " | ".join(last))
+
+
+def _download_release_asset(local_path: Path, asset_url: str) -> Path:
+    """Fetch a file that is a GitHub release asset, by its direct URL.
+
+    Unlike _download_github, which clones a repository and copies a committed
+    file, this expects source_reference to be the asset link itself
+    (``.../releases/download/<tag>/<file>``). Three S-TEEGformer checkpoints and
+    the supervised sleep baselines are published that way.
+
+    A private repository answers 404 to an unauthenticated request, so the error
+    says so rather than reporting a missing file.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    token = resolve_github_token()
+
+    def fetch(url, accept="application/octet-stream"):
+        request = urllib.request.Request(url, headers={"Accept": accept})
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        return urllib.request.urlopen(request)
+
+    def save(response):
+        partial = local_path.with_name(local_path.name + ".partial")
+        with open(partial, "wb") as handle:
+            _copy(response, handle, local_path.name)
+        partial.replace(local_path)
+
+    logger.info("Downloading release asset %s", asset_url)
+    try:
+        with fetch(asset_url) as response:
+            save(response)
+        return local_path
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (401, 403, 404):
+            raise
+        # A browse-style /releases/download/ link 404s on a private repository
+        # even with a token; only the API asset endpoint honours one. Resolve
+        # the asset id and retry there before giving up.
+        if not token:
+            raise FileNotFoundError(
+                f"HTTP {exc.code} from {asset_url} (a private repository needs a GitHub token)\n"
+                f"fix: neuroatlas config token github (or $GITHUB_TOKEN), "
+                f"then download again; or place the file at {local_path}"
+            ) from exc
+        try:
+            _, _, rest = asset_url.partition("github.com/")
+            owner, repo, _, _, tag, filename = rest.split("/")[:6]
+            api = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+            with fetch(api, "application/vnd.github+json") as response:
+                release = json.load(response)
+            asset_id = next(a["id"] for a in release["assets"] if a["name"] == filename)
+            with fetch(f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}") as response:
+                save(response)
+            return local_path
+        except Exception as inner:
+            raise FileNotFoundError(
+                f"HTTP {exc.code} from {asset_url}, and from the GitHub API with your token "
+                f"({inner})\n"
+                f"fix: check that the token can read the repository, or place the file at "
+                f"{local_path}"
+            ) from exc
+
+
+def _download_github_commit_files(local_path: Path, reference: str) -> Path:
+    """Fetch the files :data:`GITHUB_COMMIT_FILES` pins for *reference* into the
+    folder *local_path*, from raw.githubusercontent.com at the pinned commit.
+
+    Only the files the folder lacks are fetched. Each lands as ``<name>.partial``,
+    is checked against its SHA-256, and only then takes its name; a mismatch
+    removes it and raises, so nothing unverified is ever put in place.
+    """
+    import urllib.request
+
+    pinned = GITHUB_COMMIT_FILES.get(reference)
+    if pinned is None:
+        raise FileNotFoundError(f"No files are recorded for {reference}.")
+    local_path.mkdir(parents=True, exist_ok=True)
+    for repo_path, name, sha256 in pinned.files:
+        target = local_path / name
+        if target.is_file():
+            continue
+        url = pinned.url(repo_path)
+        partial = target.with_name(name + ".partial")
+        logger.info("Downloading %s", url)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, open(partial, "wb") as handle:
+                _copy(response, handle, name)
+            _verify(partial, sha256, url)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        partial.replace(target)
+    logger.info("Fetched %s from %s at %s (%s)", ", ".join(n for _, n, _ in pinned.files),
+                pinned.repo, pinned.commit[:7], pinned.licence)
+    return local_path
+
+
+def _download_google_drive_zip(local_path: Path, drive_url: str) -> Path:
+    """Fetch a zip the upstream authors host on Google Drive and pull one file out.
+
+    SleePyCo publishes its checkpoints this way, linked from the Main Results
+    table of github.com/gist-ailab/SleePyCo. We download from them rather than
+    redistributing the weights, so the file lands here byte-identical to theirs.
+
+    Only the recorded member (see :data:`DRIVE_ZIP_MEMBERS`) is kept, written
+    to *local_path* after its SHA-256 is checked.
+    """
+    import urllib.request
+    import zipfile
+
+    member, sha256 = DRIVE_ZIP_MEMBERS.get(drive_url, (None, None))
+    with tempfile.TemporaryDirectory(prefix="eegbench_gd_") as tmpdir:
+        archive = Path(tmpdir) / "download.zip"
+        logger.info("Downloading %s", drive_url)
+        with urllib.request.urlopen(drive_url) as response, open(archive, "wb") as handle:
+            _copy(response, handle, "the upstream zip")
+        if not zipfile.is_zipfile(archive):
+            # Drive serves an HTML consent page instead of the file when the
+            # object is large enough to trigger its virus-scan interstitial.
+            raise FileNotFoundError(
+                f"{drive_url} did not return a zip\n"
+                f"fix: open it in a browser, unzip it, and place "
+                f"{member or 'the .pth inside'} at {local_path}"
+            )
+        with zipfile.ZipFile(archive) as zf:
+            names = zf.namelist()
+            if member is None:
+                members = [n for n in names if n.endswith(".pth")]
+                if not members:
+                    raise FileNotFoundError(f"No .pth inside the archive at {drive_url}.")
+                member = members[0]
+            elif member not in names:
+                raise FileNotFoundError(
+                    f"The archive at {drive_url} no longer holds {member} (it has {', '.join(names)}).")
+            extracted = Path(tmpdir) / "member"
+            with zf.open(member) as src, open(extracted, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        _verify(extracted, sha256, f"{member} from {drive_url}")
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(extracted), str(local_path))
+        logger.info("Extracted %s from the upstream archive", member)
+    return local_path
+
+
+def _download_docker_image_file(local_path: Path, image_ref: str) -> Path:
+    """Pull one file out of a public Docker Hub image, without docker.
+
+    The registry's HTTP API is anonymous for public images: fetch a pull token,
+    the image manifest, then stream the layers (newest first) through tarfile
+    until the recorded path turns up. Only that file is written; the layers are
+    never stored. SeizureTransformer's authors publish their weights only this
+    way (``docker pull yujjio/seizure_transformer``).
+    """
+    import json
+    import tarfile
+    import urllib.request
+
+    image = image_ref.split("://", 1)[-1]
+    repo, _, tag = image.partition(":")
+    tag = tag or "latest"
+    if repo not in DOCKER_FILES:
+        raise FileNotFoundError(f"No file recorded for docker image {repo}.")
+    member, sha256 = DOCKER_FILES[repo]
+    if "/" not in repo:
+        repo = f"library/{repo}"
+
+    with urllib.request.urlopen(
+            f"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull",
+            timeout=60) as response:
+        token = json.load(response)["token"]
+
+    def get(url, accept):
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": accept})
+        return urllib.request.urlopen(request, timeout=120)
+
+    manifest_types = ", ".join([
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.index.v1+json",
+    ])
+    registry = f"https://registry-1.docker.io/v2/{repo}"
+    with get(f"{registry}/manifests/{tag}", manifest_types) as response:
+        manifest = json.load(response)
+    if "manifests" in manifest:          # a multi-platform index: take linux/amd64
+        chosen = next((m for m in manifest["manifests"]
+                       if m.get("platform", {}).get("os") == "linux"
+                       and m.get("platform", {}).get("architecture") == "amd64"), manifest["manifests"][0])
+        with get(f"{registry}/manifests/{chosen['digest']}", manifest_types) as response:
+            manifest = json.load(response)
+
+    wanted = {member, "./" + member, "/" + member}
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = local_path.with_name(local_path.name + ".partial")
+    item = progress.current()
+    layers = list(reversed(manifest["layers"]))
+    for i, layer in enumerate(layers, 1):
+        logger.info("Scanning layer %s (%.0f MB) of %s for %s",
+                    layer["digest"][:19], layer.get("size", 0) / 1e6, repo, member)
+        # each layer streams through, newest first, until the file turns up
+        item.phase("downloading", total=layer.get("size") or None, unit="bytes")
+        item.update(note=f"image layer {i}/{len(layers)}")
+        with get(f"{registry}/blobs/{layer['digest']}", "*/*") as response, \
+                tarfile.open(fileobj=_Counting(response), mode="r|*") as tar:
+            for entry in tar:
+                if entry.name in wanted and entry.isfile():
+                    with tar.extractfile(entry) as src, open(partial, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    try:
+                        _verify(partial, sha256, f"{member} from docker://{image}")
+                    except FileNotFoundError:
+                        partial.unlink(missing_ok=True)
+                        raise
+                    partial.replace(local_path)
+                    logger.info("Extracted %s from docker://%s", member, image)
+                    return local_path
+    raise FileNotFoundError(f"docker://{image} does not contain {member}.")
+
+
+def _download_figshare_private_share(local_path: Path, share_url: str) -> Path:
+    """Figshare private shares cannot be fetched by a script.
+
+    The share page sits behind a browser challenge, and the v2 API has no
+    endpoint that resolves a private-link token to its articles: the listing
+    this used to call (``/v2/articles?private_link=...``) ignores the token
+    and returns the newest *public* articles, so it downloaded strangers'
+    files. Say what to do instead.
+    """
+    raise FileNotFoundError(
+        f"{share_url} is a Figshare private share, which only a browser can open\n"
+        f"fix: download {local_path.name} from it and place it at {local_path}"
+    )

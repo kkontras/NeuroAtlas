@@ -1,0 +1,44 @@
+{
+  "dataset": "stages_gssa",
+  "n_subjects": 26,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "GSSA00008",
+      "GSSA00013",
+      "GSSA00015",
+      "GSSA00019",
+      "GSSA00022_3",
+      "GSSA00022_4"
+    ],
+    "1": [
+      "GSSA00003",
+      "GSSA00007",
+      "GSSA00009",
+      "GSSA00014",
+      "GSSA00022"
+    ],
+    "2": [
+      "GSSA00002",
+      "GSSA00010",
+      "GSSA00011",
+      "GSSA00012",
+      "GSSA00020"
+    ],
+    "3": [
+      "GSSA00001",
+      "GSSA00016",
+      "GSSA00017",
+      "GSSA00027",
+      "GSSA00029"
+    ],
+    "4": [
+      "GSSA00004",
+      "GSSA00005",
+      "GSSA00022_2",
+      "GSSA00023",
+      "GSSA00025"
+    ]
+  }
+}

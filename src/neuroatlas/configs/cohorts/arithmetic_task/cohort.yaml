@@ -1,0 +1,82 @@
+# arithmetic_task — dataset manifest
+#
+# Schema: _schema.yaml
+# Facts read from the preprocessing script that produced this cohort's pickles
+# and from the pickles themselves; see provenance below.
+
+schema_version: 1
+
+slug: arithmetic_task
+name: ArithmeticTask
+domain: bci
+paper_dataset: true
+
+description: >
+  In-house arithmetic-stress recordings over two experiments: rest, mental
+  arithmetic, and a meditation or breathing control.
+
+cohort:
+  centre: "KU Leuven, Belgium"
+  country: BE
+  powerline_hz: 50
+
+acquisition:
+  kind: internal
+  prepared_only: >
+    bci_cognitive reads ArithmeticTask_preprocessed_*.pkl (1 s windows at
+    128 Hz), the authors' own recordings; the authors provide it on request.
+    fix: ask the authors for ArithmeticTask_preprocessed_*.pkl, then
+    neuroatlas config set arithmetic_task.preprocessed_path FILE
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: trial
+  default: trial_class
+  modes:
+    trial_class:
+      note: >
+        rest=0, arithmetic=1, meditation/breathing=2, per
+        the upstream preprocessing. Experiment 1 recorded meditation, experiment
+        2 breathing; both map to 2. The script declares 52 subjects but the
+        pickles hold 45 -- experiment 2's S02-S09 are absent, skipped because
+        their directory or EDF is missing from the raw tree. 45 is what the
+        published embeddings and probes were built from.
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py (get_subject_split)
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  batch_size: 64
+  preprocessed_path: null              # `config set arithmetic_task.preprocessed_path FILE`
+  fold: 0
+  n_folds: 5
+  num_workers: 0
+
+spec:
+  datamodule: neuroatlas.extensions.datasets.adapters.cognitive.ArithmeticTaskBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+
+provenance:
+  last_verified: 2026-09-30
+  note: >
+    45 subjects, 1.0 s windows, resampled to 128 Hz. Classes: rest (0), arithmetic (1), meditation_breathing (2).
+    Labels read from the upstream preprocessing rather than inferred from the
+    stored integers.

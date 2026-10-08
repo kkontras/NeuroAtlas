@@ -1,0 +1,46 @@
+dataset: shhs
+channels_available:
+- C4-A1
+channels_used:
+- C4-A1
+per_model:
+  eegpt:
+    C4-A1: C4
+  cbramod:
+    C4-A1: C4-A1
+  labram:
+    C4-A1: C4
+  neurolm:
+    C4-A1: C4
+  reve:
+    C4-A1: C4
+  steegformer:
+    C4-A1: C4
+  neurorvq:
+    C4-A1: C4
+  neurogpt:
+    C4-A1: C4
+  biot:
+    C4-A1: C4
+  sleepfm:
+    C4-A1: C4-A1
+  chronos:
+    C4-A1: C4-A1
+  moment:
+    C4-A1: C4-A1
+  moirai:
+    C4-A1: C4-A1
+notes:
+  eegpt: C4-A1 onto EEGPT's referential C4, one of the 58 channels EEGPT was pretrained on.
+  cbramod: CBraMod is index-based + permutation-invariant; pass the bipolar label through unchanged.
+  labram: C4-A1 → C4 referential anchor; shared vocabulary with NeuroLM.
+  neurolm: Uppercase per NeuroLM standard_1020 vocabulary.
+  reve: Lowercase 10-20 names per REVE position bank; bipolar → referential approximation consistent with EEGPT/LaBraM.
+  steegformer: Linked-ear bipolar → referential C4 anchor; monopolar anchor approximation.
+  neurorvq: Linked-ear bipolar C4-A1 → referential C4 anchor; monopolar anchor approximation.
+  neurogpt: Linked-ear bipolar → referential C4 anchor in NeuroGPT's 22-ch layout (match-ratio 1/22).
+  biot: Single monopolar C4-A1 → C4. Wrapper fills 2 slots via approximation (F4-C4~C4, C4-P4~C4), 14 zero-padded.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

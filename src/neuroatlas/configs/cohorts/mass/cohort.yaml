@@ -1,0 +1,85 @@
+# mass — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: mass
+name: Montreal Archive of Sleep Studies (MASS)
+domain: sleep
+paper_dataset: true
+
+description: >
+  Montreal Archive of Sleep Studies: PSG scored for sleep stages; subset
+  SS01 is also annotated for microarousals.
+
+cohort:
+  centre: "Montreal Archive of Sleep Studies, Canada"
+  country: CA
+  powerline_hz: 60
+
+acquisition:
+  kind: manual
+  upstream: https://borealisdata.ca/dataverse/MASS
+  note: >
+    Access is granted on request (a data use agreement through Borealis). The
+    reader expects SS01/ ... SS05/, each with the PSG EDFs and an annotations/
+    folder of base EDFs: <path>/SS03/01-03-0001 PSG.edf.
+
+signal:
+  notch_freq: 60.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      classes:
+        - W
+        - N1
+        - N2
+        - N3
+        - REM
+      note: 5-class AASM staging per 30 s epoch
+splits:
+  manifest: folds.json
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  # No `montage` key: mass_fm_probe.sh passed `--montage mass_eeg_6` as
+  # channel_specs, which the runner always replaced with channel_maps/mass.yaml
+  # channels_used -- 19 channels, not the 6 the name says. No code ever read the
+  # name; the channels come from the channel map. (As a runtime default it
+  # crashed the datamodule.)
+  subsets: [1, 2, 3, 4, 5]                  # all five MASS subsets; lived only in mass_fm_probe.sh
+  batch_size: 32
+  data_root: "${EEG_DATA_ROOT}/mass"
+  num_folds: 5
+  signal_kind: raw
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.mass.MASSBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - num_folds
+
+provenance:
+  last_verified: 2026-09-21

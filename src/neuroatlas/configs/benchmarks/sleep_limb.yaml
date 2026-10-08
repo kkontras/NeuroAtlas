@@ -1,0 +1,36 @@
+schema_version: 1
+name: sleep_limb
+title: Limb movement detection
+domain: sleep
+question: Does a 30 s epoch contain a periodic limb movement?
+paper: App. C.2
+task: limb
+embed: --set window_s=30 --set stride_s=30
+probe: --probe-type linear --class-weight balanced --tune-c 1.0
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: physionet2026, embed: ""}
+single: physionet2026
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
+metrics:
+  # AUPRC at 0.5 s of periodic limb movement, as paper v2 reports it
+  # (Fig. 17c); configs/tasks/limb.json probes the 0.5 s threshold for it.
+  headline: auprc
+  at: limb_movement_plm_fraction@0.5s
+  higher_is_better: true
+  secondary: [macro_f1, balanced_accuracy, auroc]
+  unit: 30 s epoch
+  describe: >
+    AUPRC over 30 s epochs, positive = more than 0.5 s of scored periodic limb
+    movement in the epoch, each fold's test subjects pooled
+  fold: 5 subject-level folds; logistic regression, balanced loss, C = 1
+  spread: population SD over the folds

@@ -1,0 +1,181 @@
+dataset: wsc
+channels_available:
+- C3_M2
+- C4_M1
+- Cz_M2
+- F3_M2
+- F4_M1
+- O1_M2
+- O2_M1
+- Pz_M2
+channels_used:
+- C3_M2
+- C4_M1
+- Cz_M2
+- F3_M2
+- F4_M1
+- O1_M2
+- O2_M1
+- Pz_M2
+per_model:
+  eegpt:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  cbramod:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  labram:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  neurolm:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  reve:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: Cz
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: Pz
+  steegformer:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: Cz
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: Pz
+  neurorvq:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  neurogpt:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  biot:
+    C3_M2: C3
+    C4_M1: C4
+    Cz_M2: CZ
+    F3_M2: F3
+    F4_M1: F4
+    O1_M2: O1
+    O2_M1: O2
+    Pz_M2: PZ
+  sleepfm:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  chronos:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  moment:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  moirai:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  core_sleep:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  sleep_transformer:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+  sleepyco:
+    C3_M2: C3_M2
+    C4_M1: C4_M1
+    Cz_M2: Cz_M2
+    F3_M2: F3_M2
+    F4_M1: F4_M1
+    O1_M2: O1_M2
+    O2_M1: O2_M1
+    Pz_M2: Pz_M2
+notes:
+  eegpt: Linked-mastoid bipolars → referential 10-20 anchors. Paper pretrained unipolar; the bipolar→unipolar mapping is an approximation.
+  labram: Linked-mastoid bipolars → standard_1020 referential anchors.
+  neurolm: Linked-mastoid bipolars → referential 10-20 anchors.
+  reve: Linked-mastoid bipolars → lowercase 10-20 names per REVE position bank.
+  steegformer: Linked-mastoid bipolars → referential 10-20 anchors; mixed-case per STEEGFORMER_CHANNEL_MAP (Cz not CZ, Pz not PZ).
+  neurorvq: Linked-mastoid bipolars → referential 10-20 anchors.
+  neurogpt: Linked-mastoid bipolars → referential 10-20 anchors in NeuroGPT's legacy layout (match-ratio 8/22).
+  biot: 8 monopolar channels → uppercase 10-20 names (CZ/PZ not in derivation table). Up to 2 derivations (F3-C3, F4-C4) + 8 approx + 6 zero-padded when all channels present. Most recordings (59%) have
+    only C3+O1 → 4 approx, 12 zero-padded. Reference-alias fallback tries M1/AVG when M2 not found.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
