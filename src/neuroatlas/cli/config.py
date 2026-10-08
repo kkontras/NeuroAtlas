@@ -41,62 +41,59 @@ def _abs(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = Parser(
         prog="neuroatlas config",
-        description="Where NeuroAtlas finds your data and puts what it makes. "
-                    "The settings file is $NEUROATLAS_HOME/config.yaml (default "
-                    "~/.neuroatlas/config.yaml); `neuroatlas config path` prints it.",
+        description="Set where NeuroAtlas reads datasets and writes caches, results and "
+                    "model weights. The settings are saved in ~/.neuroatlas/config.yaml, "
+                    "or in $NEUROATLAS_HOME/config.yaml when that variable is set.",
     )
     sub = parser.add_subparsers(dest="action", metavar="<action>")
 
     init = sub.add_parser("init", help="Write the settings file.",
-                          description="Write the settings file. Give one project folder and "
-                                      "everything goes under it: DIR/data, DIR/cache, "
-                                      "DIR/results and DIR/models. A --*-root option puts "
-                                      "that one somewhere else.")
+                          description="Write the settings file. With a project folder DIR, "
+                                      "everything goes to DIR/data, DIR/cache, DIR/results "
+                                      "and DIR/models. A `--*-root` option moves one of them.")
     init.add_argument("root", nargs="?", metavar="DIR",
-                      help="The project folder; its data, cache, results and models "
-                           "sub-folders are created as needed.")
+                      help="Project folder. Its sub-folders are created when needed.")
     init.add_argument("--data-root", metavar="DIR",
-                      help="Raw datasets, one sub-folder each. Default: DIR/data.")
+                      help="Folder with the raw datasets, one sub-folder per dataset "
+                           "(default: DIR/data).")
     for setting in cfg.SETTINGS.values():
         if setting.key == "data_root":
             continue
         init.add_argument(f"--{setting.key.replace('_', '-')}", metavar="DIR",
-                          help=f"{setting.help[0].upper()}{setting.help[1:]}. Default: "
-                               f"DIR/{PROJECT_FOLDERS[setting.key]}, or "
-                               f"{setting.default_text} without DIR.")
+                          help=f"{setting.help} (default: DIR/{PROJECT_FOLDERS[setting.key]}, "
+                               f"else {setting.default_text}).")
     init.add_argument("--dataset-path", action="append", default=[], type=_dataset_key,
                       metavar="DATASET.KEY=PATH",
-                      help="A dataset stored outside its default sub-folder, e.g. "
-                           "ucddb.data_root=/mnt/ucddb. Repeatable.")
+                      help="Folder of a dataset kept elsewhere, as in "
+                           "ucddb.data_root=/mnt/ucddb. Can be repeated.")
     init.add_argument("--force", action="store_true",
-                      help="Replace an existing settings file.")
+                      help="Overwrite an existing settings file.")
 
-    sub.add_parser("show", help="Print every setting, whether it exists, and where it came from.")
+    sub.add_parser("show", help="Print each setting, whether its folder exists and where "
+                                "the value comes from.")
 
     set_ = sub.add_parser("set", help="Change one setting.",
-                          description="Change one setting: a root (data_root, cache_root, "
-                                      "output_root, models_root), or a dataset path "
-                                      "DATASET.KEY such as chbmit.bids_root. A dataset "
-                                      "or key that nothing reads is refused, with the "
-                                      "keys that dataset does read; `neuroatlas data "
-                                      "status <dataset>` names the one to set.")
-    set_.add_argument("key")
-    set_.add_argument("value")
+                          description="Change one setting. KEY is data_root, cache_root, "
+                                      "output_root, models_root or a dataset folder such as "
+                                      "chbmit.bids_root. `neuroatlas data status DATASET` "
+                                      "shows the key a dataset reads.")
+    set_.add_argument("key", help="Setting name, such as data_root or ucddb.data_root.")
+    set_.add_argument("value", help="New value, usually a folder.")
 
-    unset = sub.add_parser("unset", help="Remove one setting, returning it to its default.")
-    unset.add_argument("key")
+    unset = sub.add_parser("unset", help="Remove one setting, so it goes back to its default.")
+    unset.add_argument("key", help="Setting name.")
 
-    sub.add_parser("path", help="Print where the settings file is.")
+    sub.add_parser("path", help="Print the path of the settings file.")
 
     token = sub.add_parser(
-        "token", help="Save a Hugging Face, GitHub or NSRR token (asked for, never shown).",
-        description="Save a token where neuroatlas reads it: $NEUROATLAS_HOME/<name>_token, "
-                    "chmod 600. It is asked for without being shown, or read from stdin "
-                    "(`neuroatlas config token hf < file`), and never printed. hf: Hugging "
-                    "Face, needed only for a gated repository; github: needed only when a "
-                    "GitHub download is refused with an access error (401, 403 or 404); "
-                    "nsrr: `data download` of the NSRR sleep datasets.")
-    token.add_argument("name", choices=sorted(_TOKENS), help="Which token.")
+        "token", help="Save a Hugging Face, GitHub or NSRR token.",
+        description="Save an access token for Hugging Face (hf), GitHub (github) or NSRR "
+                    "(nsrr). Type it when asked, or pipe it in as in `neuroatlas config "
+                    "token hf < file`. It is saved to `$NEUROATLAS_HOME/<name>_token`, "
+                    "readable only by you, and never printed.")
+    token.add_argument("name", choices=sorted(_TOKENS),
+                       help="hf for gated Hugging Face repositories, github when GitHub "
+                            "refuses a download, or nsrr for the NSRR sleep datasets.")
     token.add_argument("--remove", action="store_true", help="Delete the saved token.")
     return parser
 

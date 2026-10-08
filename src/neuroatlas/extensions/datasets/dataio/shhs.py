@@ -1,621 +1,500 @@
+"""SHHS (Sleep Heart Health Study) reader: NSRR's EDFs and NSRR's XML annotations.
+
+Each night is prepared the way the SHHS preprocessing behind the SleepTransformer
+and CoRe-Sleep checkpoints prepared SHHS-1 (Phan et al.'s MATLAB scripts,
+``process_and_save_1file.m``), so the epochs and their labels are the ones those
+models were trained on:
+
+* EEG: the EDF's ``EEG`` signal (C4-A1), resampled to 100 Hz with MATLAB's
+  ``resample`` (reproduced by :func:`matlab_resample`) and band-passed
+  0.3-40 Hz with a zero-phase 101-tap FIR (``fir1`` + ``filtfilt``).
+* 30 s epochs, each labelled from the ``Stages|Stages`` events of the NSRR XML.
+* Epochs scored as movement or unscored (codes other than 0-5) are left out.
+* When wake outnumbers every sleep stage, wake is trimmed from the start and
+  end of the night until it equals the largest sleep stage (the original's
+  counting, kept as it is).
+* R&K to AASM: stage 4 joins stage 3 as N3. Labels are 0-4 = W, N1, N2, N3, REM.
+* Epochs in which a 2 s window of the EEG, the EOG (R - L) or the chin EMG,
+  each prepared the same way, is exactly flat are left out of scoring (label
+  -1): their log spectrum is infinite, and the original removed them. The
+  EOG and EMG are read for this test only.
+
+Every recording is read, including nights that lack one of the five stages:
+the benchmark's folds cover all 8444 recordings.
+
+Layout under the dataset's folder (what ``neuroatlas data download shhs``
+fetches)::
+
+    polysomnography/edfs/shhs1/shhs1-200001.edf
+    polysomnography/edfs/shhs2/shhs2-200077.edf
+    polysomnography/annotations-events-nsrr/shhs{1,2}/<recording>-nsrr.xml
+    datasets/shhs1-dataset-<version>.csv     nsrrid, age_s1 (age at visit 1)
+    datasets/shhs2-dataset-<version>.csv     nsrrid, age_s2 (age at visit 2)
 """
-SHHS (Sleep Heart Health Study) dataset loader for EEGBenchmarks.
-Adapted from ~/Documents/CoRe-Sleep/datasets/sleepset.py.
+from __future__ import annotations
 
-Provides SleepDataLoader with .train_loader / .valid_loader / .test_loader
-yielding batches: {"data": {"stft_eeg": ..., "stft_eog": ...}, "label": ..., ...}
-"""
-
-__all__ = ["SleepDataLoader"]
-
-from pathlib import Path
-
-import einops
-from torch.utils.data import DataLoader, Dataset
-import numpy as np
-import csv
-import torch
-import os
-import copy
-import random
-import pickle
-import h5py
-from tqdm import tqdm
-from scipy.io import loadmat
-from collections import defaultdict
 import logging
-import easydict
-from os.path import join as pjoin
-from neuroatlas.benchmarking_helpers import dataloader_worker_init_fn
+import re
+from dataclasses import dataclass
+from math import gcd
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
 
-# Default path for bundled assets shipped with this module
-_ASSETS_DIR = Path(__file__).parent / "assets"
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
-nested_dict = lambda: defaultdict(nested_dict)
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CHANNEL",
+    "EPOCH_SECONDS",
+    "LABEL_NAMES",
+    "SAMPLING_RATE",
+    "Recording",
+    "SHHSDataset",
+    "age_tables",
+    "load_ages",
+    "matlab_resample",
+    "night_plan",
+    "prepare_night",
+    "read_stages",
+    "scan_recordings",
+]
+
+#: The EEG the reader serves: the EDF's ``EEG`` signal, C4 referenced to A1.
+CHANNEL = "C4-A1"
+SAMPLING_RATE = 100
+EPOCH_SECONDS = 30
+_EPOCH_SAMPLES = SAMPLING_RATE * EPOCH_SECONDS
+LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
+
+#: R&K codes of the NSRR XML (0 wake, 1-4 NREM, 5 REM) to the labels served.
+_RK_TO_AASM = np.array([0, 1, 2, 3, 3, 4])
+
+#: EDF signal labels: the EEG served, and the EOG pair and chin EMG read
+#: only to find the flat epochs the original removed.
+_EEG, _EOG_L, _EOG_R, _EMG = "EEG", "EOG(L)", "EOG(R)", "EMG"
+
+_VISITS = ("shhs1", "shhs2")
 
 
-class Sleep_Dataset(Dataset):
+# ---------------------------------------------------------------------------
+# Signal preparation (the MATLAB steps, reproduced)
+# ---------------------------------------------------------------------------
 
-    def __init__(self, config: easydict.EasyDict, views: dict, set_name: str):
-        super()
-        self.dataset = views
-        self.views = list(self.dataset.keys())
-        self.config = config
-        self.set_name = set_name
+def matlab_resample(x: np.ndarray, p: int, q: int, n: int = 10, beta: float = 5.0) -> np.ndarray:
+    """MATLAB's ``resample(x, p, q)`` for a vector: the same firls/Kaiser
+    anti-aliasing filter, delay compensation and output length, so a night
+    resampled here equals the original to float rounding."""
+    from scipy import signal as sps
 
-        self._init_attributes()
+    g = gcd(int(p), int(q))
+    p, q = int(p) // g, int(q) // g
+    x = np.asarray(x, dtype=np.float64)
+    if p == q:
+        return x.copy()
+    pqmax = max(p, q)
+    fc = 1.0 / 2.0 / pqmax
+    length = 2 * n * pqmax + 1
+    h = sps.firls(length, [0, 2 * fc, 2 * fc, 1], [1, 1, 0, 0]) * np.kaiser(length, beta)
+    h = p * h / h.sum()
+    half = (length - 1) / 2
+    lx = len(x)
+    pad = int(np.floor(q - np.mod(half, q)))
+    h = np.concatenate([np.zeros(pad), h])
+    half += pad
+    delay = int(np.floor(np.ceil(half) / q))
+    tail = 0
+    while np.ceil(((lx - 1) * p + len(h) + tail) / q) - delay < np.ceil(lx * p / q):
+        tail += 1
+    h = np.concatenate([h, np.zeros(tail)])
+    y = sps.upfirdn(h, x, p, q)
+    out_len = int(np.ceil(lx * p / q))
+    return y[delay:delay + out_len]
 
-        if self.filter_patients["use_type"]:
-            self._find_list_of_patients()
-            self.broken_mod_dict = self._get_broken_modalities(
-                filename=self.config.dataset.broken_patients_filepath)
 
-        self._get_cumulatives()
+def _fir(kind: str) -> np.ndarray:
+    """MATLAB ``fir1(100, ...)`` at 100 Hz: 0.3-40 Hz band-pass (EEG, EOG) or
+    10 Hz high-pass (EMG), Hamming window, unit gain in the pass band."""
+    from scipy import signal as sps
 
-    def _init_attributes(self):
-        self.num_views = len(self.dataset)
-        self.normalize = True
-        self.outer_seq_length = self.config.dataset.outer_seq_length
-        self.filter_patients = self.config.dataset.filter_patients[self.set_name]
+    if kind == "emg":
+        return sps.firwin(101, 10.0, pass_zero=False, fs=SAMPLING_RATE)
+    return sps.firwin(101, [0.3, 40.0], pass_zero=False, fs=SAMPLING_RATE)
 
-    def _get_cumulatives(self):
-        view = list(self.dataset.keys())[0]
-        self.cumulatives = {"lengths": [0], "files": {}}
-        for file_idx in range(len(self.dataset[view]["dataset"])):
-            file = self.dataset[view]["dataset"][file_idx]
-            patient_num = int(file["filename"].split("/")[-1][1:5])
-            file_len = int(file["len_windows"])
 
-            if self.filter_patients["use_type"] == "include_only_skipped":
-                self._single_patient_cumulative_includeskipped(patient_num, file_len, file_idx)
-            elif self.filter_patients["use_type"] == "subsample":
-                if not self.filter_patients["whole_patient"]:
-                    raise Warning("Whole patients is not true.")
-                self._single_patient_cumulative_includeskipped(patient_num, file_len, file_idx)
-            else:
-                self._single_patient_cumulative_full(patient_num, file_len, file_idx)
+def _prepare(x: np.ndarray, fs: float, kind: str) -> np.ndarray:
+    """Resample one signal to 100 Hz and filter it as the original did
+    (``filtfilt`` pads with 3 * (taps - 1) samples)."""
+    from scipy import signal as sps
 
-    def set_mean_std(self, mean, std):
-        self.mean = mean
-        self.std = std
+    fs_int = int(round(fs))
+    if abs(fs - fs_int) > 1e-6:
+        raise ValueError(f"a sampling rate of {fs:g} Hz is not a whole number")
+    if fs_int != SAMPLING_RATE:
+        x = matlab_resample(x, SAMPLING_RATE, fs_int)
+    return sps.filtfilt(_fir(kind), [1.0], np.asarray(x, dtype=np.float64),
+                        padtype="odd", padlen=300)
 
-    def _find_list_of_patients(self):
-        self.patient_list = []
-        for view in self.dataset:
-            for file_idx in range(len(self.dataset[view]["dataset"])):
-                file = self.dataset[view]["dataset"][file_idx]
-                patient_num = int(file["filename"].split("/")[-1][1:5])
-                self.patient_list.append(patient_num)
-        self.patient_list = np.unique(np.array(self.patient_list))
 
-    def _load_n_norm_mat(self, file_info: dict, patient_idx: int, mod: str) -> dict:
-        file_name = file_info["dataset"][mod]["filename"]
-        data_idx = file_info["data_pos"]
-        data_num = file_info["data_num"]
-        end_file = file_info["end_file"]
-        start_file = file_info["start_file"]
-        end_idx = data_num + data_idx
+def _flat_epochs(x: np.ndarray, n_epochs: int) -> np.ndarray:
+    """Epochs with a 2 s window (1 s hop, the 29 windows of the original's
+    spectrogram) whose samples are all exactly zero."""
+    epochs = np.asarray(x[: n_epochs * _EPOCH_SAMPLES]).reshape(n_epochs, _EPOCH_SAMPLES)
+    nonzero = epochs != 0
+    flat = np.zeros(n_epochs, dtype=bool)
+    win, hop = 2 * SAMPLING_RATE, SAMPLING_RATE
+    for start in range(0, _EPOCH_SAMPLES - win + 1, hop):
+        flat |= ~nonzero[:, start:start + win].any(axis=1)
+    return flat
 
-        if "skip_skips" not in self.filter_patients or self.filter_patients["skip_skips"]:
-            skip_view = torch.empty(0)
-        else:
-            skip_view = file_info["skip_views"][mod]
 
-        f = h5py.File(file_name, 'r', swmr=True)
-        if "stft" in mod:
-            signal = f["X2"][:, :, data_idx:end_idx]
-            signal = np.expand_dims(signal, axis=1)
-            if self.normalize and hasattr(self, "mean") and hasattr(self, "std"):
-                signal = einops.rearrange(signal,
-                                          "freq channels time inner -> inner time channels freq")
-                signal = (signal - self.mean[mod]["ch_0"]) / self.std[mod]["ch_0"]
-                signal = einops.rearrange(signal,
-                                          "inner time channels freq -> inner channels freq time")
-            img = torch.from_numpy(signal).unsqueeze(dim=2)
-        else:
-            # raw timeseries — X1 is (n_samples, n_epochs), e.g. (3000, N) at 100 Hz
-            signal = f["X1"][:, data_idx:end_idx].T.copy()  # (N, 3000)
-            signal = np.expand_dims(signal, axis=1).astype(np.float32)  # (N, 1, 3000)
-            if self.normalize and hasattr(self, "mean") and hasattr(self, "std"):
-                mean_val = self.mean.get(mod, 0.0)
-                std_val = self.std.get(mod, 1.0)
-                if isinstance(mean_val, dict):
-                    mean_val = mean_val.get("ch_0", 0.0)
-                    std_val = std_val.get("ch_0", 1.0)
-                signal = (signal - mean_val) / (float(std_val) + 1e-8)
-            img = torch.from_numpy(signal)  # (N, 1, 3000) — no extra unsqueeze
+# ---------------------------------------------------------------------------
+# Annotations
+# ---------------------------------------------------------------------------
 
-        label = f["label"][0, data_idx:end_idx]
-        init = torch.zeros(len(label))
-        if data_idx == start_file and end_file > data_idx and len(init) > 0:
-            init[0] = 1
-        elif end_idx == end_file:
-            init[-1] = 1
-        label = torch.from_numpy(label).long() - 1
+_STAGE_TYPE = b"<EventType>Stages|Stages</EventType>"
+_STAGE_EVENT = re.compile(
+    rb"<EventType>Stages\|Stages</EventType>\s*"
+    rb"<EventConcept>[^<|]*\|(-?\d+)</EventConcept>\s*"
+    rb"<Start>([0-9.eE+-]+)</Start>\s*"
+    rb"<Duration>([0-9.eE+-]+)</Duration>"
+)
 
-        ids = [{"patient_num": patient_idx, "ids": i} for i in range(data_idx, end_idx)]
 
-        return {"data": img, "label": label, "init": init, "skip_view": skip_view, "ids": ids}
+def _stage_events(path: Path) -> List[Tuple[int, float, float]]:
+    """(code, start s, duration s) of every ``Stages|Stages`` event."""
+    data = Path(path).read_bytes()
+    events = [(int(c), float(s), float(d)) for c, s, d in _STAGE_EVENT.findall(data)]
+    if len(events) == data.count(_STAGE_TYPE):
+        return events
+    # laid out differently from NSRR's usual file: parse it as XML
+    import xml.etree.ElementTree as ET
 
-    def _find_file_to_open(self, file_cumul_idx, previous_output) -> dict:
-        if "index" not in previous_output:
-            raise ValueError("Missing attribute 'index' in previous_output")
-        if "remaining_sleep_epochs" not in previous_output:
-            raise ValueError("Missing attribute 'remaining_sleep_epochs' in previous_output")
+    events = []
+    for event in ET.fromstring(data).iter("ScoredEvent"):
+        if (event.findtext("EventType") or "").strip() != "Stages|Stages":
+            continue
+        concept = (event.findtext("EventConcept") or "").strip()
+        events.append((int(concept.rsplit("|", 1)[-1]), float(event.findtext("Start")),
+                       float(event.findtext("Duration"))))
+    return events
 
-        index = previous_output["index"]
-        remaining_sleep_epochs = previous_output["remaining_sleep_epochs"]
 
-        patient_num = -1
-        lo = self.cumulatives["lengths"][file_cumul_idx]
-        hi = self.cumulatives["lengths"][file_cumul_idx + 1]
-        if hi > index and lo <= index:
-            cumul_file = self.cumulatives["files"]["{}-{}".format(lo, hi)]
-            data_idx = index - lo + cumul_file["data_idx"]["start_idx"]
-            new_remaining = max(remaining_sleep_epochs - (cumul_file["data_idx"]["end_idx"] - data_idx), 0)
-            data_num = remaining_sleep_epochs - new_remaining
+def read_stages(path: Path) -> np.ndarray:
+    """The R&K code of every 30 s epoch from the start of the recording (-1
+    where no stage event covers it)."""
+    events = _stage_events(path)
+    if not events:
+        return np.zeros(0, dtype=np.int64)
+    n = max(int(round((start + duration) / EPOCH_SECONDS)) for _, start, duration in events)
+    stages = np.full(n, -1, dtype=np.int64)
+    for code, start, duration in events:
+        first = int(round(start / EPOCH_SECONDS))
+        stages[first:first + int(round(duration / EPOCH_SECONDS))] = code
+    return stages
 
-            previous_output["index"] += data_num
-            previous_output["remaining_sleep_epochs"] = new_remaining
-            new_output = {
-                "data_pos": data_idx,
-                "data_num": data_num,
-                "end_file": cumul_file["data_idx"]["end_idx"],
-                "start_file": cumul_file["data_idx"]["start_idx"],
-                "remaining_sleep_epochs": previous_output["remaining_sleep_epochs"],
-                "dataset": cumul_file["dataset"],
+
+def _trim_wake(stages: np.ndarray) -> np.ndarray:
+    """Positions the original's wake trimming keeps (``stages``: R&K codes
+    0-5, unscored already removed).
+
+    When wake is the largest class, the wake at the start and end of the
+    night is cut until wake equals the largest sleep stage: from the start
+    first, the rest from the end. The original counts the evening wake as
+    the index of the first change of state, one more than the wake epochs
+    before it, and the morning wake as everything after the last change of
+    state; both are kept as they are, so the epochs match.
+    """
+    n = len(stages)
+    keep = np.arange(n)
+    if n == 0:
+        return keep
+    codes, counts = np.unique(stages, return_counts=True)
+    if codes[0] != 0 or len(codes) < 2 or counts[0] <= counts[1:].max():
+        return keep
+    second = int(counts[1:].max())
+    changes = np.flatnonzero(np.diff((stages == 0).astype(np.int8)) != 0)
+    if len(changes) == 0:
+        return keep
+    evening = int(changes[0]) + 2 if stages[0] == 0 else 0
+    morning = n - (int(changes[-1]) + 2) + 1
+    if evening + morning <= second:
+        return keep
+    remove = evening + morning - second
+    if evening > remove:
+        return keep[remove:]
+    return keep[evening:n - (remove - evening)]
+
+
+def night_plan(stages: np.ndarray, n_signal_epochs: Optional[int] = None
+               ) -> Tuple[np.ndarray, np.ndarray]:
+    """(epoch numbers kept, their labels 0-4) for one night.
+
+    ``stages``: :func:`read_stages`. ``n_signal_epochs``: whole 30 s epochs
+    the EDF holds; scored epochs past its end are dropped.
+    """
+    stages = np.asarray(stages, dtype=np.int64)
+    if n_signal_epochs is not None:
+        stages = stages[:max(0, int(n_signal_epochs))]
+    numbers = np.arange(len(stages))
+    scored = (stages >= 0) & (stages <= 5)
+    numbers, stages = numbers[scored], stages[scored]
+    keep = _trim_wake(stages)
+    return numbers[keep], _RK_TO_AASM[stages[keep]]
+
+
+# ---------------------------------------------------------------------------
+# EDFs
+# ---------------------------------------------------------------------------
+
+def _edf_epochs(path: Path) -> int:
+    """Whole 30 s epochs in the EDF, from its header."""
+    with open(path, "rb") as fh:
+        head = fh.read(256)
+    records = int(head[236:244].decode("ascii").strip())
+    duration = float(head[244:252].decode("ascii").strip())
+    return int(records * duration // EPOCH_SECONDS)
+
+
+def _signals(path: Path, labels: Sequence[str]) -> Dict[str, Tuple[np.ndarray, float]]:
+    """Those of the named EDF signals the file has, in µV, with their rates."""
+    import edfio
+
+    from neuroatlas.extensions.datasets.dataio._edf_units import edf_unit_to_uv_scale
+
+    edf = edfio.read_edf(str(path))
+    by_label = {s.label.strip(): s for s in edf.signals}
+    out: Dict[str, Tuple[np.ndarray, float]] = {}
+    for label in labels:
+        sig = by_label.get(label)
+        if sig is None:
+            continue
+        unit = (sig.physical_dimension or "").strip()
+        scale = edf_unit_to_uv_scale(unit) if unit else 1.0
+        out[label] = (np.asarray(sig.data, dtype=np.float64) * scale,
+                      float(sig.sampling_frequency))
+    return out
+
+
+def prepare_night(edf_path: Path, numbers: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """(the EEG of epochs ``numbers``, float32 ``(n, 3000)`` at 100 Hz; and
+    which of them are flat in the EEG, EOG or EMG)."""
+    name = Path(edf_path).name
+    sig = _signals(edf_path, (_EEG, _EOG_L, _EOG_R, _EMG))
+    if _EEG not in sig:
+        raise KeyError(f"shhs: {name} has no EEG signal (C4-A1)")
+    prepared = [_prepare(*sig[_EEG], "eeg")]
+    if _EOG_L in sig and _EOG_R in sig and sig[_EOG_L][1] == sig[_EOG_R][1]:
+        (left, fs), (right, _) = sig[_EOG_L], sig[_EOG_R]
+        n_eog = min(len(left), len(right))
+        prepared.append(_prepare(right[:n_eog] - left[:n_eog], fs, "eog"))
+    if _EMG in sig:
+        prepared.append(_prepare(*sig[_EMG], "emg"))
+    n = min(len(x) for x in prepared) // _EPOCH_SAMPLES
+    numbers = np.asarray(numbers, dtype=np.int64)
+    if len(numbers) and int(numbers.max()) >= n:
+        raise ValueError(f"shhs: {name} ends at epoch {n}, before scored epoch "
+                         f"{int(numbers.max())}")
+    flat = np.zeros(n, dtype=bool)
+    for x in prepared:
+        flat |= _flat_epochs(x, n)
+    epochs = prepared[0][: n * _EPOCH_SAMPLES].reshape(n, _EPOCH_SAMPLES)[numbers]
+    return epochs.astype(np.float32), flat[numbers]
+
+
+# ---------------------------------------------------------------------------
+# Recordings and ages
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Recording:
+    recording_id: str        # "shhs1-200001": the fold manifest's unit
+    patient_id: str          # "200001": NSRR's nsrrid, the same person at both visits
+    visit: int               # 1 or 2
+    edf_path: Path
+    xml_path: Path
+    age: Optional[float]     # age at this visit, None when the table has none
+
+    @property
+    def subject_id(self) -> str:
+        """The unit the folds and the embedding chunks are cut by: the recording."""
+        return self.recording_id
+
+
+def polysomnography(root: Path) -> Path:
+    """The folder holding ``edfs/`` and ``annotations-events-nsrr/``."""
+    from neuroatlas.extensions.datasets._layout import descend
+
+    return descend(root, ["polysomnography"], "edfs")
+
+
+def _datasets_folder(root: Path) -> Path:
+    poly = polysomnography(root)
+    for candidate in (Path(root) / "datasets", poly.parent / "datasets"):
+        if candidate.is_dir():
+            return candidate
+    return Path(root) / "datasets"
+
+
+def _natural(text: str) -> Tuple:
+    return tuple((0, int(part), "") if part.isdigit() else (1, 0, part)
+                 for part in re.split(r"(\d+)", text) if part)
+
+
+def age_tables(root: Path) -> Dict[int, Optional[Path]]:
+    """``{visit: datasets/shhs<visit>-dataset-<version>.csv}``, the newest
+    version when there are several; None where there is none."""
+    folder = _datasets_folder(root)
+    out: Dict[int, Optional[Path]] = {}
+    for visit in (1, 2):
+        found = sorted(folder.glob(f"shhs{visit}-dataset-*.csv"), key=lambda p: _natural(p.name))
+        out[visit] = found[-1] if found else None
+    return out
+
+
+def load_ages(root: Path) -> Dict[Tuple[int, str], float]:
+    """``{(visit, nsrrid): age}`` from the visit tables (``age_s1``, ``age_s2``:
+    age in years at that visit; NSRR codes 90 and older as 90)."""
+    import pandas as pd
+
+    ages: Dict[Tuple[int, str], float] = {}
+    for visit, path in age_tables(root).items():
+        if path is None:
+            continue
+        column = f"age_s{visit}"
+        # NSRR's tables are not all UTF-8 (shhs2-dataset has cp1252 quotes)
+        table = pd.read_csv(path, usecols=["nsrrid", column], encoding="latin-1",
+                            low_memory=False)
+        for nsrrid, age in zip(table["nsrrid"], table[column]):
+            if pd.notna(nsrrid) and pd.notna(age):
+                ages[(visit, str(int(nsrrid)))] = float(age)
+    return ages
+
+
+def scan_recordings(root: Path) -> List[Recording]:
+    """Every SHHS recording under ``root`` that has its NSRR annotation file,
+    in natural order (SHHS-1 first)."""
+    poly = polysomnography(Path(root))
+    ages = load_ages(Path(root))
+    pattern = re.compile(r"^shhs([12])-(\d+)$")
+    out: List[Recording] = []
+    for folder in _VISITS:
+        edf_dir = poly / "edfs" / folder
+        xml_dir = poly / "annotations-events-nsrr" / folder
+        if not edf_dir.is_dir():
+            continue
+        for edf in sorted(edf_dir.glob("*.edf"), key=lambda p: _natural(p.name)):
+            match = pattern.match(edf.stem)
+            xml = xml_dir / f"{edf.stem}-nsrr.xml"
+            if match is None or not xml.is_file():
+                continue
+            visit, nsrrid = int(match.group(1)), match.group(2)
+            out.append(Recording(edf.stem, nsrrid, visit, edf, xml, ages.get((visit, nsrrid))))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
+#: Epoch plans by annotation file: building an index again in the same
+#: process (another fold, another split) does not re-read every XML file.
+_PLANS: Dict[Tuple[str, float, int], Tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _plan_for(recording: Recording) -> Tuple[np.ndarray, np.ndarray]:
+    stat = recording.xml_path.stat()
+    key = (str(recording.xml_path), stat.st_mtime, stat.st_size)
+    plan = _PLANS.get(key)
+    if plan is None:
+        plan = night_plan(read_stages(recording.xml_path), _edf_epochs(recording.edf_path))
+        _PLANS[key] = plan
+    return plan
+
+
+class SHHSDataset(Dataset):
+    """One item per kept 30 s epoch: C4-A1 at 100 Hz, ``(1, 3000)`` µV.
+
+    The index (which epochs, their labels) comes from the annotations alone;
+    a night's signal is read and prepared when one of its epochs is first
+    asked for, and kept until another night is read (the loaders batch one
+    night at a time).
+    """
+
+    def __init__(
+        self,
+        recordings: Sequence[Recording],
+        fold_assignments: Optional[Dict[str, Dict[str, str]]] = None,
+        compute_recording_stats: bool = False,
+    ) -> None:
+        self._recordings = {r.recording_id: r for r in recordings}
+        self._order = [r.recording_id for r in recordings]
+        self._fold_assignments = fold_assignments or {}
+        self._compute_recording_stats = compute_recording_stats
+        # (recording_id, epoch number in the night, label 0-4, row of the
+        # epoch in its night's plan); a slice of it is a valid index too
+        self._index: List[Tuple[str, int, int, int]] = []
+        self._index_built = False
+        self._night: Optional[Tuple[str, np.ndarray, np.ndarray, Optional[Dict]]] = None
+
+    def _ensure_index_built(self) -> None:
+        if self._index_built:
+            return
+        for rid in self._order:
+            numbers, labels = _plan_for(self._recordings[rid])
+            for row, (number, label) in enumerate(zip(numbers.tolist(), labels.tolist())):
+                self._index.append((rid, int(number), int(label), row))
+        self._index_built = True
+
+    def _load_night(self, rid: str):
+        if self._night is not None and self._night[0] == rid:
+            return self._night
+        numbers, _ = _plan_for(self._recordings[rid])
+        epochs, flat = prepare_night(self._recordings[rid].edf_path, numbers)
+        stats = None
+        if self._compute_recording_stats and epochs.size:
+            night = epochs.astype(np.float64).reshape(1, -1)
+            stats = {
+                "recording_mean": night.mean(axis=1),
+                "recording_std": night.std(axis=1),
+                "recording_q95": np.quantile(np.abs(night), 0.95, axis=1),
             }
-            patient_num = cumul_file["patient_num"]
+        self._night = (rid, epochs, flat, stats)
+        return self._night
 
-            if "skip_views" not in cumul_file:
-                new_output["skip_views"] = {view: torch.empty(0) for view in self.dataset}
-            elif (type(cumul_file["skip_views"][list(cumul_file["skip_views"].keys())[0]]) == torch.Tensor
-                  and ("skip_skips" in self.filter_patients
-                       and not self.filter_patients["skip_skips"])):
-                new_output["skip_views"] = {
-                    view: cumul_file["skip_views"][view][
-                        data_idx - cumul_file["data_idx"]["start_idx"]:
-                        data_idx + data_num - cumul_file["data_idx"]["start_idx"]]
-                    for view in self.dataset
-                }
+    def evict_subject(self, recording_id: str) -> None:
+        if self._night is not None and self._night[0] == recording_id:
+            self._night = None
 
-            if cumul_file["patient_num"] in previous_output:
-                previous_output[cumul_file["patient_num"]].append(new_output)
-            else:
-                previous_output.update({cumul_file["patient_num"]: [new_output]})
+    @staticmethod
+    def eviction_key(meta: Dict[str, object]) -> Optional[str]:
+        rid = meta.get("recording_id")
+        return str(rid) if rid is not None else None
 
-        return previous_output, patient_num
+    def __len__(self) -> int:
+        self._ensure_index_built()
+        return len(self._index)
 
-    def choose_specific_patient(self, patient_nums, include_chosen=True):
-        for view in self.dataset:
-            new_view_dataset = []
-            for file in self.dataset[view]["dataset"]:
-                if include_chosen:
-                    if int(file["filename"].split("/")[-1][1:5]) in patient_nums:
-                        new_view_dataset.append(file)
-                else:
-                    if int(file["filename"].split("/")[-1][1:5]) not in patient_nums:
-                        new_view_dataset.append(file)
-            self.dataset[view]["dataset"] = new_view_dataset
-        self._get_cumulatives()
-
-    def _subsample_patients(self, std_per_indices):
-        if "subsets" not in self.filter_patients:
-            raise ValueError("'filter_patients' must contain a 'subsets' key.")
-        required_modalities = ["combined", "eeg", "eog"]
-        for modality in required_modalities:
-            if modality not in self.filter_patients["subsets"]:
-                raise ValueError(f"'subsets' must contain '{modality}' key.")
-
-        combined_set = random.sample(list(self.patient_list),
-                                     self.filter_patients["subsets"]["combined"])
-        skip_patient_ids = {
-            patient: torch.cat([
-                torch.zeros(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-                torch.zeros(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-            ], dim=1)
-            for patient in combined_set
+    def __getitem__(self, idx: int) -> Dict[str, object]:
+        self._ensure_index_built()
+        rid, number, label, row = self._index[idx]
+        _, epochs, flat, stats = self._load_night(rid)
+        recording = self._recordings[rid]
+        sample: Dict[str, object] = {
+            "eeg": torch.from_numpy(epochs[row:row + 1].copy()),
+            # a flat epoch is left out of scoring, as the original removed it
+            "sleep_stage": -1 if bool(flat[row]) else label,
+            "subject_id": rid,
+            "recording_id": rid,
+            "patient_id": recording.patient_id,
+            "visit": recording.visit,
+            "epoch_idx": number,
+            "age": recording.age,
         }
-        not_chosen_patients = [p for p in self.patient_list if p not in combined_set]
-
-        eeg_set = random.sample(not_chosen_patients, self.filter_patients["subsets"]["eeg"])
-        skips = {
-            patient: torch.cat([
-                torch.zeros(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-                torch.ones(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-            ], dim=1)
-            for patient in eeg_set
-        }
-        skip_patient_ids.update(skips)
-        not_chosen_patients = [p for p in self.patient_list if p not in combined_set]
-
-        eog_set = random.sample(not_chosen_patients, self.filter_patients["subsets"]["eog"])
-        skips = {
-            patient: torch.cat([
-                torch.ones(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-                torch.zeros(len(std_per_indices[patient]["std_eeg"])).unsqueeze(dim=1),
-            ], dim=1)
-            for patient in eog_set
-        }
-        skip_patient_ids.update(skips)
-
-        self.subsampled_patients = {
-            "combined": combined_set, "eeg": eeg_set, "eog": eog_set,
-            "all": combined_set + eeg_set + eog_set,
-        }
-        logging.debug("Subsample: {} both, {} EEG-only, {} EOG-only.".format(
-            len(combined_set), len(eeg_set), len(eog_set)))
-        return skip_patient_ids
-
-    def _get_broken_modalities(self, filename):
-        with open(filename, "rb") as file:
-            std_per_indices = pickle.load(file)
-
-        if self.filter_patients["use_type"] == "subsample":
-            return self._subsample_patients(std_per_indices)
-
-        if "std_threshold" not in self.filter_patients:
-            raise ValueError("'filter_patients' must contain a 'std_threshold' key.")
-        if "perc_threshold" not in self.filter_patients:
-            raise ValueError("'filter_patients' must contain a 'perc_threshold' key.")
-
-        threshold = self.filter_patients["std_threshold"]
-        perc_threshold = self.filter_patients["perc_threshold"]
-
-        mod_diff = {
-            i: (std_per_indices[i]["std_eeg"][:, 2] - std_per_indices[i]["std_eog"][:, 2]).numpy()
-            for i in std_per_indices.keys() if i in self.patient_list
-        }
-
-        perc_t = {i: (np.abs(mod_diff[i]) > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
-        patients_chosen = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        logging.debug("Patients with broken modalities: {}".format(len(patients_chosen)))
-
-        perc_t = {i: (mod_diff[i] > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
-        patients_chosen_eeg = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        logging.debug("Patients with broken EEG: {}".format(len(patients_chosen_eeg)))
-
-        perc_t = {i: (-mod_diff[i] > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
-        patients_chosen_eog = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        logging.debug("Patients with broken EOG: {}".format(len(patients_chosen_eog)))
-
-        skip_patient_ids = {}
-        for i in patients_chosen:
-            skip_mod = torch.zeros(len(mod_diff[i]), 2)
-            skip_mod[mod_diff[i] > threshold, 0] = 1
-            skip_mod[mod_diff[i] < -threshold, 1] = 1
-            skip_patient_ids[i] = skip_mod
-        return skip_patient_ids
-
-    def _single_patient_cumulative_includeskipped(self, patient_num, file_len, file_idx):
-        if patient_num in self.broken_mod_dict:
-            if self.filter_patients["whole_patient"]:
-                self._single_patient_cumulative_full(patient_num, file_len, file_idx)
-                return
-
-            this_broken = copy.deepcopy(self.broken_mod_dict[patient_num])
-            this_broken[:, 1:2] *= 2
-            skip_labels, skip_labels_lengths = torch.unique_consecutive(
-                this_broken.sum(dim=1), return_counts=True)
-            count, consecutives = 0, []
-            for i in range(len(skip_labels)):
-                end = count + skip_labels_lengths[i]
-                consecutives.append({
-                    "start": count, "end": end, "skip_label": skip_labels[i],
-                    "skip_views": {
-                        "stft_eeg": self.broken_mod_dict[patient_num][
-                            count:count + skip_labels_lengths[i], :1].squeeze(),
-                        "stft_eog": self.broken_mod_dict[patient_num][
-                            count:count + skip_labels_lengths[i], 1:].squeeze(),
-                    }
-                })
-                count = count + skip_labels_lengths[i]
-
-            for cons in consecutives:
-                if cons["skip_label"] == 3 or cons["skip_label"] == 0:
-                    continue
-                self.cumulatives["lengths"].append(
-                    cons["end"] - cons["start"] + self.cumulatives["lengths"][-1])
-                self.cumulatives["files"]["{}-{}".format(
-                    self.cumulatives["lengths"][-2], self.cumulatives["lengths"][-1])] = {
-                    "patient_num": patient_num,
-                    "data_idx": {"start_idx": cons["start"], "end_idx": cons["end"]},
-                    "dataset": {view: self.dataset[view]["dataset"][file_idx] for view in self.dataset},
-                    "skip_views": cons["skip_views"],
-                }
-
-    def _single_patient_cumulative_subsample(self, patient_num, file_len, file_idx):
-        self.cumulatives["lengths"].append(file_len + self.cumulatives["lengths"][-1])
-        self.cumulatives["files"]["{}-{}".format(
-            self.cumulatives["lengths"][-2], self.cumulatives["lengths"][-1])] = {
-            "patient_num": patient_num,
-            "data_idx": {"start_idx": 0, "end_idx": file_len},
-            "dataset": {view: self.dataset[view]["dataset"][file_idx] for view in self.dataset},
-        }
-
-    def _single_patient_cumulative_full(self, patient_num, file_len, file_idx):
-        start_idx, end_idx = 0, file_len
-
-        if hasattr(self, "broken_mod_dict") and patient_num in self.broken_mod_dict:
-            this_broken = copy.deepcopy(self.broken_mod_dict[patient_num])
-            this_broken[:, 1:2] *= 2
-            skip_labels, skip_labels_lengths = torch.unique_consecutive(
-                this_broken.sum(dim=1), return_counts=True)
-            count, consecutives = 0, []
-            for i in range(len(skip_labels)):
-                end = count + skip_labels_lengths[i]
-                consecutives.append({
-                    "start": count, "end": end, "skip_label": skip_labels[i],
-                    "skip_views": {
-                        "stft_eeg": self.broken_mod_dict[patient_num][
-                            count:count + skip_labels_lengths[i], :1].squeeze(),
-                        "stft_eog": self.broken_mod_dict[patient_num][
-                            count:count + skip_labels_lengths[i], 1:].squeeze(),
-                    }
-                })
-                count = count + skip_labels_lengths[i]
-        else:
-            consecutives = [{
-                "start": start_idx, "end": end_idx,
-                "skip_views": {
-                    "stft_eeg": torch.zeros(end_idx - start_idx),
-                    "stft_eog": torch.zeros(end_idx - start_idx),
-                }
-            }]
-
-        for cons in consecutives:
-            self.cumulatives["lengths"].append(
-                cons["end"] - cons["start"] + self.cumulatives["lengths"][-1])
-            self.cumulatives["files"]["{}-{}".format(
-                self.cumulatives["lengths"][-2], self.cumulatives["lengths"][-1])] = {
-                "patient_num": patient_num,
-                "data_idx": {"start_idx": cons["start"], "end_idx": cons["end"]},
-                "dataset": {view: self.dataset[view]["dataset"][file_idx] for view in self.dataset},
-                "skip_views": cons["skip_views"],
-            }
-
-    def _load_view_files(self, file_output, view):
-        view_output = defaultdict(lambda: [])
-        for patient_idx, this_patient_instr in file_output.items():
-            for seqs in this_patient_instr:
-                loaded = self._load_n_norm_mat(file_info=seqs, patient_idx=patient_idx, mod=view)
-                for i in loaded:
-                    view_output[i].append(loaded[i])
-        return dict(view_output)
-
-    def _aggegate_n_update_view(self, output, view_output, view):
-        for out_i in view_output:
-            if out_i == "ids":
-                view_output["ids"] = [item for sublist in view_output["ids"] for item in sublist]
-                ids = torch.cat([torch.Tensor([int(id["ids"])]) for id in view_output["ids"]])
-                patient_nums = torch.cat(
-                    [torch.Tensor([int(id["patient_num"])]) for id in view_output["ids"]])
-                total_ids = torch.cat([patient_nums.unsqueeze(dim=1), ids.unsqueeze(dim=1)], dim=1)
-                output[out_i].update({view: total_ids})
-            else:
-                output[out_i].update({view: torch.cat(view_output[out_i])})
-
-    def __getitem__(self, index):
-        index = index * self.outer_seq_length
-
-        file_output = {"remaining_sleep_epochs": self.outer_seq_length, "index": index}
-        for file_cumul_idx in range(len(self.cumulatives["lengths"]) - 1):
-            file_output, last_pat_num = self._find_file_to_open(
-                file_cumul_idx=file_cumul_idx, previous_output=file_output)
-            if ((last_pat_num in file_output)
-                    and file_output[last_pat_num][-1]["remaining_sleep_epochs"] == 0):
-                break
-
-        file_output.pop("index")
-        file_output.pop("remaining_sleep_epochs")
-
-        output = nested_dict()
-        for view in self.views:
-            view_output = self._load_view_files(file_output=file_output, view=view)
-            self._aggegate_n_update_view(output=output, view_output=view_output, view=view)
-
-        primary_view = self.views[0]
-        output["idx"] = output["ids"][primary_view]
-        output["label"] = output["label"][primary_view]
-        return output
-
-    def __len__(self):
-        return int(self.cumulatives["lengths"][-1] / self.outer_seq_length)
-
-
-class SleepDataLoader:
-
-    def __init__(self, config: easydict.EasyDict):
-        self.config = config
-
-        sleep_dataset_train, sleep_dataset_val, sleep_dataset_test, sleep_dataset_total = (
-            self._get_datasets())
-
-        num_cores = max(len(os.sched_getaffinity(0)) - 1, 0)
-        explicit_workers = self.config.training_params.data_loader_workers
-        train_workers = explicit_workers if explicit_workers == 0 else num_cores
-        logging.debug("Available cores: {}, using: {}".format(len(os.sched_getaffinity(0)), train_workers))
-
-        self.train_loader = torch.utils.data.DataLoader(
-            sleep_dataset_train,
-            batch_size=self.config.training_params.batch_size,
-            num_workers=train_workers,
-            pin_memory=self.config.training_params.pin_memory,
-            worker_init_fn=dataloader_worker_init_fn,
-        )
-        self.valid_loader = torch.utils.data.DataLoader(
-            sleep_dataset_val,
-            batch_size=self.config.training_params.test_batch_size,
-            shuffle=False,
-            num_workers=self.config.training_params.data_loader_workers,
-            pin_memory=self.config.training_params.pin_memory,
-        )
-        self.test_loader = torch.utils.data.DataLoader(
-            sleep_dataset_test,
-            batch_size=self.config.training_params.test_batch_size,
-            shuffle=False,
-            num_workers=self.config.training_params.data_loader_workers,
-            pin_memory=self.config.training_params.pin_memory,
-        )
-        self.total_loader = torch.utils.data.DataLoader(
-            sleep_dataset_total,
-            batch_size=self.config.training_params.test_batch_size,
-            shuffle=False,
-            num_workers=self.config.training_params.data_loader_workers,
-            pin_memory=self.config.training_params.pin_memory,
-        )
-
-        self.norm_agent = Normalization_finder(dataloader=self, config=config)
-        self.metrics = self.norm_agent.get_norm_metrics()
-
-        logging.info("Train: {}, Val: {}, Test: {}".format(
-            len(self.train_loader), len(self.valid_loader), len(self.test_loader)))
-
-        if self.config.get("statistics", {}).get("print", False):
-            self._statistics_mat()
-
-    def _get_datasets(self):
-        views = {}
-        for i in self.config.dataset.data_view_dir:
-            i = dict(i)  # ensure mutable copy
-            i["list_dir"] = pjoin(self.config.dataset.data_roots, i["list_dir"])
-            views[i["data_type"] + "_" + i["mod"]] = i
-        views = self._read_dirs_mat(views)
-        train_views, val_views, test_views = self._split_data_mat(views)
-
-        train_dataset  = Sleep_Dataset(config=self.config, views=train_views,  set_name="train")
-        valid_dataset  = Sleep_Dataset(config=self.config, views=val_views,    set_name="val")
-        test_dataset   = Sleep_Dataset(config=self.config, views=test_views,   set_name="test")
-        total_dataset  = Sleep_Dataset(config=self.config, views=views,        set_name="total")
-        return train_dataset, valid_dataset, test_dataset, total_dataset
-
-    def _read_dirs_mat(self, view_dirs):
-        for view in view_dirs:
-            list_dir = view_dirs[view]["list_dir"]
-            dataset = []
-            if not os.path.isfile(list_dir):
-                # SHHS is read from the authors' preprocessed copy (as `data
-                # status shhs` says), whose recording list this is
-                raise FileNotFoundError(
-                    f"shhs: the preprocessed SHHS copy is not in {os.path.dirname(list_dir)} "
-                    f"(no {os.path.basename(list_dir)} there)\n"
-                    f"fix: ask the authors for the preprocessed copy, then neuroatlas config "
-                    f"set shhs.data_root DIR")
-            with open(list_dir) as csv_file:
-                csv_reader = csv.reader(csv_file, delimiter='\n')
-                for j, row in enumerate(csv_reader):
-                    dt = row[0].split("-")
-                    dataset.append({"filename": dt[0], "len_windows": dt[1]})
-            view_dirs[view]["dataset"] = dataset
-        return view_dirs
-
-    def _split_data_mat(self, views):
-        split_method = self.config.dataset.data_split.split_method
-        if split_method == "patients_test":
-            return self._split_patients_test(
-                dirs_train_whole=views,
-                split_rate_val=self.config.dataset.data_split.val_split_rate,
-                split_rate_test=self.config.dataset.data_split.test_split_rate,
-            )
-        elif split_method == "patients_sleeptransformer":
-            logging.info("Splitting dataset by SleepTransformer split")
-            return self._split_patients_sleeptf(dirs_train_whole=views)
-        else:
-            raise ValueError("Unknown split method: {}".format(split_method))
-
-    def _split_patients_test(self, dirs_train_whole, split_rate_val, split_rate_test):
-        splits_file = self.config.dataset.data_split.get(
-            "trainvaltest_splits_file",
-            str(_ASSETS_DIR / "trainvaltest_splits.pkl"))
-        with open(splits_file, "rb") as f:
-            splits = pickle.load(f)
-
-        train_views = copy.deepcopy(dirs_train_whole)
-        val_views   = copy.deepcopy(dirs_train_whole)
-        test_views  = copy.deepcopy(dirs_train_whole)
-        this_split  = splits[self.config.dataset.fold]
-
-        for view in dirs_train_whole:
-            train_dataset, val_dataset, test_dataset = [], [], []
-            for file in dirs_train_whole[view]["dataset"]:
-                patient_num = file["filename"].split("/")[-1][:5]
-                if patient_num in this_split["test"]:
-                    test_dataset.append(file)
-                elif patient_num in this_split["train"]:
-                    train_dataset.append(file)
-                elif patient_num in this_split["val"]:
-                    val_dataset.append(file)
-                else:
-                    raise Warning("Patient {} has no split assignment.".format(file))
-            train_views[view]["dataset"] = train_dataset
-            val_views[view]["dataset"]   = val_dataset
-            test_views[view]["dataset"]  = test_dataset
-            logging.info("{}: train={}, val={}, test={}".format(
-                view, len(train_dataset), len(val_dataset), len(test_dataset)))
-
-        return train_views, val_views, test_views
-
-    def _split_patients_sleeptf(self, dirs_train_whole):
-        folds_file = self.config.dataset.data_split.get(
-            "folds_file",
-            str(_ASSETS_DIR / "data_split_eval.mat"))
-        f = loadmat(folds_file)
-        f["train_sub"] = f["train_sub"].squeeze() - 1
-        f["eval_sub"]  = f["eval_sub"].squeeze()  - 1
-        f["test_sub"]  = f["test_sub"].squeeze()  - 1
-
-        train_views = copy.deepcopy(dirs_train_whole)
-        val_views   = copy.deepcopy(dirs_train_whole)
-        test_views  = copy.deepcopy(dirs_train_whole)
-
-        for view in dirs_train_whole:
-            num_difference, prev = 0, -1
-            train_dataset, val_dataset, test_dataset = [], [], []
-            for file in dirs_train_whole[view]["dataset"]:
-                patient_num = int(file["filename"].split("/")[-1][1:5])
-                num_difference += patient_num - prev - 1
-                prev = patient_num
-                idx = patient_num - num_difference
-                if idx in f["train_sub"]:
-                    train_dataset.append(file)
-                elif idx in f["eval_sub"]:
-                    val_dataset.append(file)
-                elif idx in f["test_sub"]:
-                    test_dataset.append(file)
-                else:
-                    raise Warning("Patient {} has no split assignment.".format(file))
-            train_views[view]["dataset"] = train_dataset
-            val_views[view]["dataset"]   = val_dataset
-            test_views[view]["dataset"]  = test_dataset
-
-        return train_views, val_views, test_views
-
-
-class Normalization_finder:
-    def __init__(self, dataloader, config):
-        self.config = config
-        self.dataloader = dataloader
-
-    def load_metrics(self):
-        norm_dir = self.config.dataset.get(
-            "norm_dir",
-            str(_ASSETS_DIR / "metrics_eeg_eog_emg_stft.pkl"))
-        logging.info("Loading normalisation metrics from {}".format(norm_dir))
-        with open(norm_dir, "rb") as f:
-            self.metrics = pickle.load(f)
-
-    def get_norm_metrics(self):
-        self.load_metrics()
-        self.dataloader.train_loader.dataset.set_mean_std(self.metrics["mean"], self.metrics["std"])
-        self.dataloader.valid_loader.dataset.set_mean_std(self.metrics["mean"], self.metrics["std"])
-        self.dataloader.total_loader.dataset.set_mean_std(self.metrics["mean"], self.metrics["std"])
-        self.dataloader.test_loader.dataset.set_mean_std(self.metrics["mean"],  self.metrics["std"])
-        return self.metrics
-
-    def load_metrics_ongoing(self, metrics):
-        mean, std = metrics["mean"], metrics["std"]
-        self.metrics = metrics
-        self.dataloader.train_loader.dataset.set_mean_std(mean, std)
-        self.dataloader.valid_loader.dataset.set_mean_std(mean, std)
-        self.dataloader.total_loader.dataset.set_mean_std(mean, std)
-        self.dataloader.test_loader.dataset.set_mean_std(mean, std)
+        if stats is not None:
+            sample.update(stats)
+        if rid in self._fold_assignments:
+            sample["fold_assignments"] = self._fold_assignments[rid]
+        return sample

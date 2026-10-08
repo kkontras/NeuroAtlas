@@ -181,20 +181,20 @@ class Step:
 def prepare_required(slug: str) -> bool:
     """Whether *slug* must be built by `prepare` before `embed` can read it.
 
-    True for a MOABB cohort (acquisition kind ``moabb``) with a declared
-    ``pipeline.preprocessor`` that its manifest does not mark
-    ``required: false``. No paper cohort is one today: the five MI cohorts
-    with a builder (bnci2014_001, bnci2014_004, bnci2015_001, shin2017a,
-    weibo2014) load through the MOABB reader like the other nine, and their
-    pickle is optional. Other cohorts with a builder (the epilepsy HDF5
-    caches) only use it to go faster.
+    True for a cohort with a declared ``pipeline.preprocessor`` that its
+    manifest marks neither ``required: false`` nor ``optional``: the four
+    bci_cognitive cohorts, read from the files `data prepare` builds from
+    their raw data. The five MI cohorts with a builder (bnci2014_001,
+    bnci2014_004, bnci2015_001, shin2017a, weibo2014) load through the MOABB
+    reader like the other nine, and their pickle is optional; the epilepsy
+    HDF5 caches only make reading faster.
     """
     from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
 
     manifest = load_dataset_spec(slug).manifest or {}
-    kind = (manifest.get("acquisition") or {}).get("kind")
     pipeline = manifest.get("pipeline") or {}
-    return (kind == "moabb" and isinstance(pipeline.get("preprocessor"), dict)
+    block = pipeline.get("preprocessor")
+    return (isinstance(block, dict) and not block.get("optional")
             and pipeline.get("required", True) is not False)
 
 
@@ -215,10 +215,12 @@ class Benchmark:
     variants: Dict[str, Variant] = field(default_factory=dict)
     derived_from: Optional[str] = None
     excluded_models: Tuple[ModelExclusion, ...] = ()
-    # what the default variant is, in the words of the paper (BCI: "no
-    # filtering, mean-pool") and the figure it reproduces
+    # what the default variant is, in the words of the paper (BCI:
+    # "confound filtering, mean-pool"), the figure it reproduces, and earlier
+    # names of it (a variant that became the default)
     default_description: Optional[str] = None
     default_paper: Optional[str] = None
+    default_aliases: Tuple[str, ...] = ()
 
     # -- metrics --------------------------------------------------------------
     def metric_info(self, key: str):
@@ -279,11 +281,12 @@ class Benchmark:
     def variant(self, name: str = DEFAULT_VARIANT) -> Variant:
         """The variant *name* -- or an earlier name of it (``per_patch`` is
         ``token_flattening``) -- under its current name."""
+        name = self.variant_folders().get(name, name)
         if name == DEFAULT_VARIANT:
             return Variant(DEFAULT_VARIANT,
                            self.default_description or "the paper's headline protocol",
-                           self.embed, self.probe, paper=self.default_paper)
-        name = self.variant_folders().get(name, name)
+                           self.embed, self.probe, aliases=self.default_aliases,
+                           paper=self.default_paper)
         if name not in self.variants:
             import difflib
 
@@ -304,9 +307,66 @@ class Benchmark:
         names, so results written under an earlier name still read as the
         variant's (``results.variant_of``)."""
         out = {name: name for name in self.variant_names()}
+        out.update({alias: DEFAULT_VARIANT for alias in self.default_aliases})
         for v in self.variants.values():
             out.update({alias: v.name for alias in v.aliases})
         return out
+
+    def settings(self, name: str = DEFAULT_VARIANT) -> Dict[str, str]:
+        """What a variant's embeddings are made with: the ``--set`` pairs and
+        the ``--pooling`` of its embed line, as a results.json records them in
+        each result's metadata."""
+        argv = self.variant(name).embed
+        out = {key: value for key, value in _set_pairs(argv)}
+        for i, arg in enumerate(argv):
+            if arg == "--pooling" and i + 1 < len(argv):
+                out["pooling"] = argv[i + 1]
+            elif arg.startswith("--pooling="):
+                out["pooling"] = arg.partition("=")[2]
+        return out
+
+    def record_variant(self, folder: str, metadata: Optional[Dict[str, Any]]) -> str:
+        """The variant one result belongs to.
+
+        The variant its folder names (*folder*: the folder's own name, a
+        variant's or an earlier name of one, or ``default`` for the dataset's
+        folder itself; ``results.variant_of``), unless the settings the result
+        was made with -- its metadata -- are another variant's. Only the
+        settings that tell this benchmark's variants apart count. So when a
+        variant becomes the default, the results the earlier default wrote in
+        the default's folder still read as what they are (BCI: no filtering,
+        not confound filtering).
+        """
+        folder_variant = self.variant_folders().get(folder, folder)
+        names = self.variant_names()
+        table = {name: self.settings(name) for name in names}
+        keys = sorted({k for s in table.values() for k in s
+                       if len({_setting(t.get(k), k) for t in table.values()}) > 1})
+        meta = metadata or {}
+        if not keys or ("fold" not in meta and not any(k in meta for k in keys)):
+            # nothing to go by: a pair the channel map rules out is recorded
+            # before any data or setting is read
+            return folder_variant
+        made = table.get(folder_variant, {})
+        ran = {}
+        for k in keys:
+            if meta.get(k) not in (None, ""):
+                ran[k] = _setting(meta[k], k)
+            elif k == "pooling" or folder != DEFAULT_VARIANT:
+                # a failed run records its dataset settings, not the pooling;
+                # a variant's folder holds what that variant passes
+                ran[k] = _setting(made.get(k), k)
+            else:
+                # in the default's folder, a run that did not pass a switch
+                # ran with it off (the default passes it whenever it is on)
+                ran[k] = _setting(None, k)
+
+        def made_as(name: str) -> bool:
+            return all(_setting(table[name].get(k), k) == ran[k] for k in keys)
+
+        if folder_variant in table and made_as(folder_variant):
+            return folder_variant
+        return next((name for name in names if made_as(name)), folder_variant)
 
     # -- models ---------------------------------------------------------------
     def excluded_families(self) -> Dict[str, str]:
@@ -462,6 +522,28 @@ def _args(value: Any, where: str) -> Tuple[str, ...]:
     return tuple(shlex.split(value))
 
 
+#: The value a result that does not record a setting was made with: off for a
+#: ``--set`` switch (results written before the switch existed ran without
+#: it), the mean for the pooling.
+_UNRECORDED: Dict[str, Any] = {"pooling": "mean"}
+
+
+def _setting(value: Any, key: str) -> str:
+    """*value* of setting *key* as text that compares across the YAML's
+    spelling (``true``) and a result's metadata (``True``, ``1.0``)."""
+    if value is None or value == "":
+        value = _UNRECORDED.get(key, False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip().lower()
+    if text in ("true", "false"):
+        return text
+    try:
+        return repr(float(text))
+    except ValueError:
+        return text
+
+
 def _set_pairs(argv: Tuple[str, ...]) -> List[Tuple[str, str]]:
     """The ``--set key=value`` pairs in *argv*, in order (``--set=k=v`` too)."""
     out: List[Tuple[str, str]] = []
@@ -517,7 +599,11 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
                       note=text("note"))
 
     variants = {}
-    taken = {DEFAULT_VARIANT}
+    default = data.get("default_variant") or {}
+    default_aliases = tuple(str(a) for a in (default.get("aliases") or ()))
+    taken = {DEFAULT_VARIANT, *default_aliases}
+    if len(taken) != len(default_aliases) + 1:
+        raise CatalogError(f"{source}: default_variant names an alias twice, or `default`")
     for name, v in (data.get("variants") or {}).items():
         if name == DEFAULT_VARIANT:
             raise CatalogError(f"{source}: `{DEFAULT_VARIANT}` is the implicit variant")
@@ -535,7 +621,6 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
                                  tuple(subset) if subset is not None else None,
                                  aliases=aliases,
                                  paper=" ".join(str(v["paper"]).split()) if v.get("paper") else None)
-    default = data.get("default_variant") or {}
     planned = tuple({"name": str(p["name"]), "reason": str(p.get("reason", ""))}
                     for p in (data.get("planned") or []))
     exclusions = []
@@ -559,6 +644,7 @@ def _parse(data: Dict[str, Any], source: str) -> Benchmark:
         default_description=(" ".join(str(default["description"]).split())
                              if default.get("description") else None),
         default_paper=" ".join(str(default["paper"]).split()) if default.get("paper") else None,
+        default_aliases=default_aliases,
     )
 
 

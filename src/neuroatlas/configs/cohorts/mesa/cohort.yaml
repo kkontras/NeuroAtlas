@@ -38,6 +38,12 @@ labels:
       classes: [W, N1, N2, N3, REM]
       note: 5-class AASM staging per 30 s epoch
       implemented_by: adapters.mesa
+    age:
+      granularity: recording   # one age per participant; the window embeddings are mean-pooled to it
+      note: >
+        the participant's age in years, from the NSRR table mesa-sleep-dataset (sleepage5c, the age at the sleep exam), joined on mesaid;
+        regression, by the brain_age benchmark
+      implemented_by: adapters.mesa
 
 splits:
   # Points at the single copy under src/neuroatlas/configs/folds/ rather than a duplicate

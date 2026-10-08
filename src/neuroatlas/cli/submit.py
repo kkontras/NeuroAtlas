@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from neuroatlas.cli import MODELS_HELP, Parser, _msg
+from neuroatlas.cli import MODELS_HELP, LinesFormatter, Parser, _msg
 from neuroatlas.cli._table import NOT_APPLICABLE, add_format_arg, render
 
 # options whose value is a raw submit-file line: it may itself start with "-"
@@ -58,68 +58,61 @@ def _capability(text: str) -> str:
 
 
 def build_submit_parser() -> argparse.ArgumentParser:
-    from neuroatlas.cli.check import DATASET_HELP
+    from neuroatlas.cli.check import BENCHMARK_HELP, DATASET_HELP, VARIANT_HELP
 
     p = Parser(
         prog="neuroatlas submit",
-        description="Write one job per (dataset, checkpoint), each a `neuroatlas run` of "
-                    "that pair, and an HTCondor or SLURM file to queue them. Nothing is "
-                    "queued here; the last line prints the command that does. Jobs run "
-                    "offline, so a pair whose data or weights are not on this machine "
-                    "(skipped), or that its dataset's channel map rules out, gets no job: "
-                    "it is listed with the reason.")
-    p.add_argument("benchmark")
+        description="Write one job per dataset and checkpoint, and an HTCondor or SLURM file "
+                    "that queues them. Nothing is queued until you run the command printed on "
+                    "the last line. Pairs whose data or weights are missing on this machine, "
+                    "or that the channel map rules out, get no job.")
+    p.add_argument("benchmark", help=BENCHMARK_HELP)
     p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="full", metavar="single|full|NAMES",
-                   help=f"Which datasets (default: full, since this is for a whole "
-                        f"benchmark). {DATASET_HELP}")
-    p.add_argument("--variant", default="default",
-                   help="A benchmark variant (default: default; `neuroatlas show <benchmark>` "
-                        "lists them).")
+                   help=f"{DATASET_HELP} (default: full).")
+    p.add_argument("--variant", default="default", help=VARIANT_HELP)
     p.add_argument("--out", required=True, type=Path, metavar="DIR",
                    help="Folder for the job files and logs.")
     p.add_argument("--backend", choices=["condor", "slurm"], default="condor",
-                   help="The scheduler to write for: condor (HTCondor, the default) or slurm.")
+                   help="Scheduler to write the jobs for (default: condor).")
     p.add_argument("--mode", choices=["cached", "retry", "all"], default="cached",
-                   help="cached (default): queue only the jobs that never ran, so running "
-                        "submit again never repeats finished work. retry: also the failed, "
-                        "partial and exited ones. all: every job. A job still in the queue "
-                        "(running, idle, held) is never queued again.")
+                   help="Which jobs to queue (default: cached). cached queues the jobs that "
+                        "never ran, retry also the failed, partial and exited ones, and all "
+                        "every job. A job still in the queue is never queued twice.")
     p.add_argument("--output-root", type=Path, default=None, metavar="DIR",
-                   help="Where the jobs write results (default: the output root).")
+                   help="Where the jobs write results (default: the output_root setting).")
     p.add_argument("--force", action="store_true",
-                   help="Write jobs for pairs whose data or weights are not found here "
-                        "(the channel map is still obeyed).")
+                   help="Also write jobs for pairs whose data or weights are missing here. "
+                        "The channel map still applies.")
     p.add_argument("--reprobe", action="store_true",
-                   help="The jobs fit every fold again (`run --reprobe`) instead of "
-                        "recomputing the metrics of folds whose saved predictions match. "
-                        "With --mode all to re-run jobs that finished.")
+                   help="Make the jobs fit every fold again, as `run --reprobe` does. Use "
+                        "with --mode all to rerun finished jobs.")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="List every pair without a job, and why.")
-    r = p.add_argument_group("resources (per job)")
-    r.add_argument("--gpus", type=int, default=1, metavar="N", help="GPUs per job (default 1).")
-    r.add_argument("--cpus", type=int, default=4, metavar="N", help="CPUs per job (default 4).")
+    r = p.add_argument_group("resources per job")
+    r.add_argument("--gpus", type=int, default=1, metavar="N", help="GPUs per job (default: 1).")
+    r.add_argument("--cpus", type=int, default=4, metavar="N", help="CPUs per job (default: 4).")
     r.add_argument("--memory", type=_memory, default="32G", metavar="SIZE",
-                   help="With a unit: 32G, 1500M (default 32G).")
+                   help="Memory per job, with a unit such as 32G or 1500M (default: 32G).")
     r.add_argument("--time", type=_clock, default=None, metavar="H:MM:SS",
-                   help="Wall time per job, both backends (default 24:00:00). SLURM: --time; "
-                        "HTCondor: +RequestWalltime and +MaxRuntime, in seconds.")
+                   help="Wall time per job (default: 24:00:00). It sets --time for SLURM, and "
+                        "+RequestWalltime and +MaxRuntime in seconds for HTCondor.")
     r.add_argument("--walltime", type=_walltime, default=None, metavar="SECONDS",
-                   help="The same wall time, in seconds (or H:MM:SS).")
+                   help="The same wall time, in seconds or as H:MM:SS.")
     r.add_argument("--gpu-capability", type=_capability, default="auto", metavar="auto|none|X.Y",
-                   help="Least GPU compute capability a job may land on. auto (default): the "
-                        "lowest the installed torch has kernels for. HTCondor: a requirement; "
-                        "SLURM has no standard attribute, so it is printed as a hint.")
+                   help="Lowest GPU compute capability a job may run on (default: auto). auto "
+                        "is the lowest the installed PyTorch supports. For SLURM it is only "
+                        "printed as a hint.")
     r.add_argument("--partition", default=None, help="SLURM partition.")
     r.add_argument("--no-mem", action="store_true",
-                   help="SLURM: leave --mem out (some sites forbid it).")
+                   help="Leave --mem out of SLURM jobs, for sites that forbid it.")
     r.add_argument("--requirements", default=None, help="HTCondor requirements expression.")
     r.add_argument("--walltime-attr", action="append", default=None, metavar="NAME",
-                   help="HTCondor: the job attribute(s) the wall time goes in (default "
-                        "RequestWalltime and MaxRuntime; repeatable).")
+                   help="HTCondor job attribute that holds the wall time (default: "
+                        "RequestWalltime and MaxRuntime). Can be repeated.")
     r.add_argument("--extra", action="append", default=[], metavar="LINE",
-                   help="A raw line for the submit file (SLURM: after #SBATCH, e.g. "
-                        "`--extra --account=myproject`). Repeatable.")
+                   help="Add a raw line to the job file. For SLURM it follows #SBATCH, as in "
+                        "`--extra --account=myproject`. Can be repeated.")
     add_format_arg(p)
     return p
 
@@ -299,21 +292,38 @@ def _skipped_fixes(blocked: List[dict]) -> None:
 
 # --------------------------------------------------------------------------
 
+#: What each state `status` reports means (its --help and docs/cli.md).
+JOB_STATES = {
+    "done": "every fold succeeded",
+    "partial": "some folds failed or are missing",
+    "failed": "no fold succeeded",
+    "exited N": "the job stopped with exit status N before writing results",
+    "stopped": "the job started, then left the queue without an exit status",
+    "removed": "the job was removed from the queue",
+    "running, idle, held": "as the scheduler reports them",
+    "missing": "the job never ran",
+    "waiting": "the job needs the results of another benchmark first",
+}
+
+
+def _states_text() -> str:
+    width = max(len(state) for state in JOB_STATES)
+    return "job states:\n" + "\n".join(f"  {state:<{width}}  {meaning}"
+                                       for state, meaning in JOB_STATES.items())
+
+
 def build_status_parser() -> argparse.ArgumentParser:
     p = Parser(
         prog="neuroatlas status",
-        description="The state of each job of a `submit`: done, partial (some folds failed "
-                    "or are missing), failed (results, none ok), exited N (died before "
-                    "writing results), stopped (started, then vanished from the queue "
-                    "without an exit), removed, running, idle (queued, not started), held "
-                    "(the scheduler holds it until released), missing (never ran), waiting "
-                    "(for another benchmark's results); pairs without a job are counted. The "
-                    "scheduler (condor_q / squeue) is asked when it is on this machine; run "
-                    "status where you submitted.")
+        description="Count the jobs that `submit` wrote by state, such as done, failed, "
+                    "running or missing. Run it where you submitted, so that it can ask the "
+                    "scheduler (condor_q or squeue).",
+        epilog=_states_text(),
+        formatter_class=LinesFormatter)
     p.add_argument("--out", required=True, type=Path, help="The folder `submit` wrote.")
-    p.add_argument("-v", "--verbose", action="store_true", help="One row per job.")
+    p.add_argument("-v", "--verbose", action="store_true", help="Show one row per job.")
     p.add_argument("--no-scheduler", action="store_true",
-                   help="Do not ask condor_q / squeue; decide from the files only.")
+                   help="Do not ask condor_q or squeue. Use only the files.")
     add_format_arg(p)
     return p
 

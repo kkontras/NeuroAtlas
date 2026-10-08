@@ -62,6 +62,22 @@ per_model:
     O2: O2
     C3: C3
 
+  neurogpt:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  neurorvq:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  steegformer:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
   core_sleep:
     F4: F4
     C4: C4
@@ -84,3 +100,6 @@ notes:
   neurolm: "Linked-mastoid bipolars → referential 10-20 anchors."
   reve: "Linked-mastoid bipolars → 10-20 names per REVE position bank."
   biot: "4 monopolar anchors from bipolars. Wrapper computes derivations where possible; remaining slots zero-padded."
+  neurogpt: "The reader names each linked-mastoid bipolar (F4-M1, C4-M1, O2-M1, C3-M2) by its active electrode; that referential anchor is its slot in NeuroGPT's 22-channel layout (4 of 22 filled)."
+  neurorvq: "Linked-mastoid bipolars, named by their active electrode, onto that referential anchor in NeuroRVQ's vocabulary."
+  steegformer: "Linked-mastoid bipolars, named by their active electrode, onto that referential anchor; monopolar anchor approximation."

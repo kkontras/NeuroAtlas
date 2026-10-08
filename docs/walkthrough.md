@@ -255,7 +255,7 @@ Each table starts by saying what its numbers are:
 
 ```
 sleep_stage: Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3, REM), each fold's test subjects pooled, unscored epochs left out; higher is better; chance 0
-folds: 5 subject-level folds (SHHS: one fixed split); the probe's C is chosen from 0.001-100 on validation Cohen's kappa, unweighted loss; ± = population SD over the folds
+folds: 5 subject-level folds; the probe's C is chosen from 0.001-100 on validation Cohen's kappa, unweighted loss; ± = population SD over the folds
 also: bal_acc = balanced accuracy, macro_F1 = macro-F1
 dataset             model            kappa  ±      folds  bal_acc  macro_F1
 sleep_edf_expanded  biot_pretrained  0.758  0.016  5/5    0.669    0.675

@@ -326,9 +326,9 @@ sleep_stage: Sleep staging  (sleep, App. C.2)
 headline    kappa: Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3,
             REM), each fold's test subjects pooled, unscored epochs left out;
             higher is better; chance 0
-folds       5 subject-level folds (SHHS: one fixed split); the probe's C is
-            chosen from 0.001-100 on validation Cohen's kappa, unweighted
-            loss; ± = population SD over the folds
+folds       5 subject-level folds; the probe's C is chosen from 0.001-100 on
+            validation Cohen's kappa, unweighted loss; ± = population SD over
+            the folds
 ...
 datasets    15; the quick dataset (--dataset single): sleep_edf_expanded
   cfs
@@ -346,7 +346,7 @@ every experiment in the paper.
 
 | Benchmark | Headline | Scored over | Folds and ± |
 |---|---|---|---|
-| `sleep_stage` | Cohen's κ, 5 stages. C chosen from 0.001-100 on validation κ, unweighted loss. | 30 s epochs, each fold's test subjects pooled | 5 subject-level folds (SHHS has one fixed split), SD over folds |
+| `sleep_stage` | Cohen's κ, 5 stages. C chosen from 0.001-100 on validation κ, unweighted loss. | 30 s epochs, each fold's test subjects pooled | 5 subject-level folds, SD over folds |
 | `sleep_arousal` | AUPRC. An epoch is positive if it holds more than 3 s of arousal. | 30 s epochs | 5 subject-level folds, SD over folds |
 | `sleep_respiratory` | AUPRC. More than 10 s of apnea or hypopnea (RERAs not counted). | 30 s epochs | the same |
 | `sleep_limb` | AUPRC. More than 0.5 s of periodic limb movement. | 30 s epochs | the same |
@@ -363,20 +363,42 @@ of classes C.
 
 ### BCI variants
 
-`bci_motor_imagery` has three variants besides the default. `bci_erp` and
-`bci_ssvep` have `token_flattening`.
+The four BCI benchmarks run confound filtering by default (App. D.6). Each
+paradigm is filtered its own way:
 
-| Variant | Trial | Embedding | Paper |
+| Paradigm | Confound filtering (the default) | No filtering (`--variant no_filtering`) |
+|---|---|---|
+| Motor imagery | 4-40 Hz, the trial from 1 s to 4 s after the cue | 4-40 Hz, the trial from the cue to 4 s after it |
+| ERP | 0.5-40 Hz, the cohort's own trial window | 1-30 Hz, the cohort's own trial window |
+| SSVEP | 1 Hz high-pass and no low-pass, the cohort's own trial window | 1-50 Hz, the cohort's own trial window |
+| Cognitive | 4-40 Hz, the dataset's file of that band ([built from the raw data](#files-built-from-the-raw-data)) | 0.1-64 Hz, the dataset's other file |
+
+For motor imagery, dropping the first second after the cue means the score
+cannot come from the cue's evoked response or the eye movement towards it.
+SSVEP has no low-pass so that the stimulus harmonics stay in. The MOABB
+datasets are cut at 128 Hz (SSVEP at 256 Hz), with the average reference
+and no notch filter.
+
+Each benchmark has four variants, the two filterings crossed with the two
+ways of turning a trial's patch tokens into one vector:
+
+| Variant | Filtering | Embedding | Paper (motor imagery) |
 |---|---|---|---|
-| `default` | 0-4 s after the cue | patch tokens averaged | Fig. 26a, no-filtering bars (App. D.8) |
-| `token_flattening` | 0-4 s after the cue | patch tokens concatenated in order | Fig. 5a, no-filtering bars |
-| `confound_filtering` | 1-4 s after the cue | patch tokens averaged | Fig. 26a, confound-filtering bars, and Fig. 26b |
-| `confound_filtering_token_flattening` | 1-4 s after the cue | patch tokens concatenated | Fig. 5a, confound-filtering bars, and Fig. 5b |
+| `default` | confound filtering | patch tokens averaged | Fig. 26a, confound-filtering bars, and Fig. 26b |
+| `token_flattening` | confound filtering | patch tokens concatenated in order | Fig. 5a, confound-filtering bars, and Fig. 5b |
+| `no_filtering` | no filtering | patch tokens averaged | Fig. 26a, no-filtering bars |
+| `no_filtering_token_flattening` | no filtering | patch tokens concatenated in order | Fig. 5a, no-filtering bars |
 
-Confound filtering starts the trial 1 s after the cue, so the score cannot
-come from the cue's evoked response or the eye movement towards it.
-`per_patch`, `confound_control` and `confound_control_per_patch` are
-accepted as other names for the last three.
+`neuroatlas show <benchmark>` names the figure of each variant for the
+other paradigms. Other names are accepted: `confound_filtering` and
+`confound_control` for `default`, `confound_filtering_token_flattening`
+and `confound_control_per_patch` for `token_flattening`, and `per_patch`
+for `no_filtering_token_flattening`. A results folder written under one of
+these names reads as that variant.
+
+`results` reads each result as the variant it was made with, which every
+result records. A result made without confound filtering is a
+`no_filtering` result, also when it is in the default's folder.
 
 ### Selecting checkpoints
 
@@ -490,7 +512,6 @@ The `download` column:
 | `credentialed` | You need an approved account or a signed agreement first. For NSRR, `data download` then fetches it with your token. TUH data you download yourself. |
 | `manual` | There is no download API. `data download` tells you where to request it and where to put it. |
 | `from the authors` | Not public. Ask the authors. `data download` tells you where to put it. |
-| `refused` | `data download` does not fetch it, because the host serves something other than what the benchmark reads. This is SHHS. |
 
 ### Download
 
@@ -500,17 +521,21 @@ nothing.
 
 | Host | Datasets | What happens |
 |---|---|---|
-| PhysioNet | Sleep-EDF Expanded (8.1 GB), UCDDB (1.3 GB), HMC (15.7 GB) | `wget` from physionet.org, resumable. Add `--mirror aws` to use PhysioNet's open copy on AWS, which is much faster. |
+| PhysioNet | Sleep-EDF Expanded (8.1 GB), UCDDB (1.3 GB), HMC (15.7 GB), EEGMat (0.18 GB) | `wget` from physionet.org, resumable. Add `--mirror aws` to use PhysioNet's open copy on AWS, which is much faster. |
 | Zenodo | CHB-MIT (21.7 GB), Siena (4.5 GB), Helsinki Neonatal (4.3 GB), DOD (58.1 GB) | Resumable and md5-checked. Zip files are unpacked and then deleted. Keep them with `--keep-archive`. You need about twice the size free while a zip exists. |
-| web | Bonn (3 MB) | Five zip files from the University of Bonn's site, md5-checked and unpacked. |
-| NSRR | CFS, HomePAP, MESA, MrOS, STAGES, WSC | The official `nsrr` tool, after a check for 50 GB of free disk. Needs your NSRR token. |
+| web | Bonn (3 MB), ArithmeticTask (0.7 GB) | Bonn: five zip files from the University of Bonn's site. ArithmeticTask: one zip from OSF holding one zip per experiment. Both md5-checked and unpacked. |
+| NSRR | CFS, HomePAP, MESA, MrOS, SHHS (375 GB), STAGES, WSC | The official `nsrr` tool, after a check for 50 GB of free disk (for SHHS, its 375 GB). Needs your NSRR token. Each study's `datasets/` folder comes with the recordings: its participant tables, which give brain age the participants' ages. |
 | MOABB | the 14 MOABB BCI datasets | MOABB's own download into the MOABB folder. Needs the BCI install lines from [Install](#1-install). |
-| TUH, and sites without an API | TUAB, TUSZ, DCSM, ISRUC, MASS, NMT, EPILEPSIAE, PhysioNet 2026 | Prints where to request the data and where to put it. |
-| the authors | SeizeIT1, SeizeIT2, and the preprocessed files of SHHS, DREAMER, EEGMat and ArithmeticTask | Prints where to put the files once you have them. |
+| TUH, and sites without an API | TUAB, TUSZ, DCSM, ISRUC, MASS, NMT, EPILEPSIAE, PhysioNet 2026, DREAMER | Prints where to request the data and where to put it. |
+| the authors | SeizeIT1, SeizeIT2 | Prints where to put the files once you have them. |
 
-SHHS is read from the CoRe-Sleep preprocessed release, not from the raw
-recordings NSRR serves, so `data download shhs` is refused. Ask the authors
-for the preprocessed copy and point `shhs.data_root` at it.
+`data download shhs` fetches the EDFs of both SHHS visits (8444
+recordings), NSRR's annotations and the dataset tables. The reader takes
+the C4-A1 EEG, resampled to 100 Hz and band-passed 0.3-40 Hz, and scores
+each 30 s epoch from the annotations: stage 4 counts as N3, unscored and
+movement epochs are left out, and wake beyond the largest sleep stage is
+trimmed from the ends of the night. Ages come from the `shhs1-dataset` and
+`shhs2-dataset` tables, each participant's age at that visit.
 
 Measured download times: Sleep-EDF Expanded from the AWS copy took 18 min
 (399 files, 8.2 GB). UCDDB from physionet.org came at about 100 KB/s and
@@ -574,9 +599,11 @@ order:
 `export MNE_DATA=/your/mne_data`.
 
 `run` reads the MOABB recordings directly and cuts the trials itself,
-with each paradigm's band and sampling rate and the trial window the paper
-used. For motor imagery that is 4-40 Hz at 128 Hz, average reference, no
-notch filter, and the 4 s after the cue. There is nothing to prepare first.
+with each paradigm's band and sampling rate and each dataset's trial
+window. By default that is confound filtering: for motor imagery 4-40 Hz
+at 128 Hz, average reference, no notch filter, and the trial from 1 s to
+4 s after the cue ([BCI variants](#bci-variants) lists the others). There
+is nothing to prepare first.
 
 `list datasets --all` also shows MOABB datasets outside the paper. Most of
 them need a newer moabb than 1.2.0, which needs numpy 2. The tool refuses
@@ -597,15 +624,33 @@ The copy goes to `<cache root>/prepared/`. `data prepare` refuses to start
 until the raw data is there. `--dry-run` prints the build command,
 `--dest` writes elsewhere and `--shard K/N` builds one shard.
 
-### Preprocessed files from the authors
+### Files built from the raw data
 
-The four `bci_cognitive` datasets are read from the authors' preprocessed
-files. Until a file is in place, `data status` shows `not prepared`, names
-the file, and gives the setting that points at it:
+The four `bci_cognitive` datasets are read from files that `data prepare`
+builds from their raw data:
 
+```bash
+neuroatlas data download eegmat          # PhysioNet, 180 MB
+neuroatlas data prepare eegmat
 ```
-fix: ask the authors for EEGMat_preprocessed_*.pkl, then neuroatlas config set eegmat.preprocessed_path FILE
-```
+
+ArithmeticTask downloads the same way (OSF, 0.7 GB). DREAMER is on Zenodo,
+where access is granted on request: `data download dreamer_valence` says
+where to ask and where to put `DREAMER.mat`. `dreamer_valence` and
+`dreamer_arousal` read the same file, so put a copy or a link in each
+folder.
+
+`data prepare` writes two files per dataset into `<cache root>/prepared/<dataset>/`,
+both at 128 Hz with a 50 Hz notch and the average reference:
+`<name>_preprocessed_trackD_steegformer.pkl`, filtered 4-40 Hz, which the
+default (confound filtering) reads, and `<name>_preprocessed_steegformer.pkl`,
+filtered 0.1-64 Hz, which the `no_filtering` variants read. EEGMat and
+DREAMER are cut into 4 s windows, ArithmeticTask into 1 s windows.
+
+`data status` shows `not prepared` until the files are built, with the
+command that builds them. A file whose recorded band is the other
+filtering's is refused, with the command that runs the variant it belongs
+to. `preprocessed_path` points at a file built elsewhere.
 
 ## 5. Get the model weights
 
@@ -882,7 +927,7 @@ embeddings of `sleep_stage`.
 Some datasets cache each fold and split separately, in
 `<cache root>/<dataset>/<checkpoint>/{train,val,test}/<key>/`:
 
-- HMC, MESA, STAGES, HomePAP and SHHS
+- HMC, MESA, STAGES and HomePAP
 - the four `bci_cognitive` datasets
 - TUAB after `data prepare tuab`
 - CHB-MIT with `--set backend=hdf5`
@@ -903,6 +948,8 @@ Brain age needs the subjects' ages in the cache. A Sleep-EDF cache built
 without `xlrd`, or an ISRUC cache built without `openpyxl`, holds no ages.
 `brain_age` then stops, names the cache folder, and asks you to delete it
 and run again. Installing the package afterwards does not repair the cache.
+HomePAP, MESA and STAGES keep no ages in the cache: `brain_age` reads them
+from the study's NSRR table each time it probes.
 
 ### Saved predictions are reused
 
@@ -946,8 +993,8 @@ overwrites its files.
 
 A fold never puts one subject on both sides of the split. Bonn has no
 subject identifiers, so its folds are over clips. Most datasets have five
-folds. BCI uses one fold per subject (LOSO), and
-SHHS has one fixed split.
+folds, and BCI uses one fold per subject (LOSO). SHHS's five folds are over
+its 8444 recordings, with a participant's two visits in the same fold.
 
 Where the paper's split is a file, it ships with the package and `run`
 reads it. This covers CHB-MIT, SeizeIT1, SeizeIT2, EPILEPSIAE, TUSZ and
@@ -963,11 +1010,24 @@ Brain age has its own folds and keeps each dataset's published protocol:
 - PhysioNet 2026 holds 100 healthy and 100 impaired age-matched subjects
   out of every fold, and the ridge trains on healthy subjects only.
 - CFS and MrOS use their age-stratified subject folds.
+- SHHS is scored per recording, each with the participant's age at that
+  visit, on its five sleep-staging folds.
+- HomePAP, MESA and STAGES use five age-stratified subject folds (seed 42)
+  over the recordings of their sleep-staging embeddings, one per
+  participant. Each recording's age comes from the study's NSRR table,
+  joined on the participant id:
 
-Brain age runs on six datasets: CFS, ISRUC, MrOS, PhysioNet 2026,
-Sleep-EDF Expanded and WSC. The paper also reports SHHS, MESA, HomePAP and
-STAGES (Table 9). Their participant ages come from NSRR's demographic
-tables, which this release does not read.
+  | Dataset | Table | Age column | Id |
+  |---|---|---|---|
+  | HomePAP | `homepap-baseline-dataset-0.2.0.csv` | `age` (baseline visit) | `nsrrid` (`homepap-lab-full-1600001` is 1600001) |
+  | MESA | `mesa-sleep-dataset-0.8.0.csv` | `sleepage5c` (sleep exam) | `mesaid` (`mesa-sleep-0001` is 1) |
+  | STAGES | `stages-harmonized-dataset-0.3.0.csv` | `nsrr_age` | `subject_code` (the file name, `BOGN00001`) |
+
+  A recording whose participant has no age in the table is left out, and
+  `-v` names it.
+
+Brain age runs on ten datasets: CFS, HomePAP, ISRUC, MESA, MrOS,
+PhysioNet 2026, SHHS, Sleep-EDF Expanded, STAGES and WSC.
 
 #### Changing the folds
 
@@ -1141,7 +1201,7 @@ or quoted globs. It prints one row per dataset, variant and checkpoint.
 ```
 $ neuroatlas results sleep_stage
 sleep_stage: Cohen's kappa over 30 s epochs, 5 stages (W, N1, N2, N3, REM), each fold's test subjects pooled, unscored epochs left out; higher is better; chance 0
-folds: 5 subject-level folds (SHHS: one fixed split); the probe's C is chosen from 0.001-100 on validation Cohen's kappa, unweighted loss; ± = population SD over the folds
+folds: 5 subject-level folds; the probe's C is chosen from 0.001-100 on validation Cohen's kappa, unweighted loss; ± = population SD over the folds
 also: bal_acc = balanced accuracy, macro_F1 = macro-F1
 dataset             model            kappa  ±      folds  bal_acc  macro_F1
 sleep_edf_expanded  biot_pretrained  0.758  0.016  5/5    0.669    0.675

@@ -54,7 +54,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 from neuroatlas import config as user_config
-from neuroatlas.cli import ErrorParser
+from neuroatlas.cli import ErrorParser, LinesFormatter
 from neuroatlas.benchmarking_helpers.probes.metrics import compute_classification_metrics
 from neuroatlas._paths import output_dir
 
@@ -658,51 +658,75 @@ def write_summary_csv(summary: List[Dict[str, Any]], path: Path) -> None:
 
 def _add_reconstruct_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--results-dir", default=None,
-                   help="Probe-results directory holding results.json and "
-                        "probes/. Omit to derive it from --datasets.")
+                   help="Folder with the sleep staging results.json and probes/ (default: "
+                        "found from --datasets).")
     p.add_argument("--models", default=None, type=_parse_csv,
-                   help="Comma-separated checkpoint ids (default: all).")
+                   help="Checkpoint ids, separated by commas (default: all).")
     p.add_argument("--folds", default=None, type=_parse_int_list,
-                   help="Comma-separated fold indices (default: all).")
+                   help="Fold indices, separated by commas (default: all).")
     p.add_argument("--splits", default="test", type=_parse_csv,
-                   help="Comma-separated splits to predict on (default: test).")
+                   help="Splits to predict, separated by commas (default: test).")
     p.add_argument("--group-by", default=None,
-                   help="Metadata field to group recordings by "
-                        "(subgroup, subset, group, site_id).")
+                   help="Metadata field to group recordings by, such as subgroup, subset, "
+                        "group or site_id.")
     p.add_argument("--compute-metrics", action="store_true",
                    help="Also compute classification metrics per group.")
     p.add_argument("--output", default=None,
-                   help="Output JSON (default: <results-dir>/hypnograms.json).")
+                   help="Output JSON file (default: `<results-dir>/hypnograms.json`).")
 
 
 def _add_features_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--output-dir", default=None,
-                   help="Where the CSVs are written (default: the output root).")
+                   help="Where to write the feature CSV files (default: the output root).")
     p.add_argument("--no-summary", action="store_true",
                    help="Skip the per-feature error summary.")
+
+
+#: The --help text after the options: where the staging results are found.
+_EPILOG = """\
+It looks for the sleep staging results of a dataset in these folders, in order:
+  <output root>/sleep_stage/<dataset>/          from `neuroatlas run sleep_stage`
+  <output root>/sleep_stage/<dataset>/<model>/  from the jobs of `neuroatlas submit`
+  <output root>/<dataset>/sleep_staging/        from `neuroatlas probe --task sleep_staging`
+--results-dir gives the folder directly. Stages are coded 0=W, 1=N1, 2=N2, 3=N3
+and 4=REM, in 30 s epochs."""
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = ErrorParser(
         prog="neuroatlas hypnogram",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Rebuild hypnograms from the sleep staging probes and compute 34 sleep features "
+            "per recording, such as total sleep time and REM latency. Run it after "
+            "`neuroatlas run sleep_stage`. Without a step, it runs reconstruct and then "
+            "features."),
+        epilog=_EPILOG,
+        formatter_class=LinesFormatter,
     )
+    known = ", ".join(sorted(DATASET_HYPNO_PATHS))
     parser.add_argument("--datasets", nargs="*", default=None, metavar="DATASET",
-                        help="Datasets (default: every one with staging "
-                             f"results: {', '.join(sorted(DATASET_HYPNO_PATHS))}).")
+                        help=f"Datasets to process (default: {known}).")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print what would run and exit.")
+                        help="Print what would run, then exit.")
     sub = parser.add_subparsers(dest="step")
     rec = sub.add_parser("reconstruct",
-                         help="Rebuild hypnograms.json from the sleep staging results.")
+                         help="Rebuild hypnograms.json from the sleep staging results.",
+                         description="Predict every epoch again with the saved sleep staging "
+                                     "probes, and write the predicted and true hypnogram of "
+                                     "each recording to hypnograms.json next to the results.")
     _add_reconstruct_args(rec)
-    rec.add_argument("--datasets", nargs="*", default=None, metavar="DATASET")
-    rec.add_argument("--dry-run", action="store_true")
-    fea = sub.add_parser("features", help="Compute the feature CSVs from hypnograms.json.")
+    rec.add_argument("--datasets", nargs="*", default=None, metavar="DATASET",
+                     help=f"Datasets to process (default: {known}).")
+    rec.add_argument("--dry-run", action="store_true", help="Print what would run, then exit.")
+    fea = sub.add_parser("features", help="Compute the sleep features from hypnograms.json.",
+                         description="Compute 34 sleep features per recording from "
+                                     "hypnograms.json, and write them to "
+                                     "hypnogram_features.csv with a per-feature error "
+                                     "summary.")
     _add_features_args(fea)
-    fea.add_argument("--datasets", nargs="*", default=None, metavar="DATASET")
-    fea.add_argument("--dry-run", action="store_true")
+    fea.add_argument("--datasets", nargs="*", default=None, metavar="DATASET",
+                     help=f"Datasets to process (default: {known}).")
+    fea.add_argument("--dry-run", action="store_true", help="Print what would run, then exit.")
     # so `hypnogram` with no subcommand still accepts either step's flags
     _add_reconstruct_args(parser)
     _add_features_args(parser)

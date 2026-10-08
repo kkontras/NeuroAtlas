@@ -408,6 +408,8 @@ def _nemar_state(slug: str, acq: Dict[str, Any], st: DatasetStatus) -> None:
 def _prepared_hit(slug: str, explicit: Optional[str]) -> Tuple[Optional[Path], List[Path]]:
     """(the prepared file a reader would open, or None; every candidate)."""
     from neuroatlas.extensions.datasets.dataio.bci_paths import (
+        COGNITIVE_PICKLES,
+        CONFOUND_CONTROLLED,
         PREPROCESSED_SEARCH_PATHS,
         first_existing,
     )
@@ -417,9 +419,14 @@ def _prepared_hit(slug: str, explicit: Optional[str]) -> Tuple[Optional[Path], L
         return (Path(hit) if hit else None), [Path(explicit)]
     from neuroatlas.entrypoints._common import expand_dataset_paths
 
-    # a candidate may be a glob (the authors' pickle, whichever model's)
+    # A candidate may be a glob (the authors' pickle, whichever model's). A
+    # cognitive cohort has two pickles, the confound-filtered one (what the
+    # benchmark's default reads) first; either one is the data.
+    search = [*(PREPROCESSED_SEARCH_PATHS[slug + CONFOUND_CONTROLLED]
+                if slug in COGNITIVE_PICKLES else []),
+              *PREPROCESSED_SEARCH_PATHS.get(slug, [])]
     candidates = [Path(p) for p in expand_dataset_paths(
-        {f"p{i}": p for i, p in enumerate(PREPROCESSED_SEARCH_PATHS.get(slug, []))}).values()]
+        {f"p{i}": p for i, p in enumerate(search)}).values()]
     hit = first_existing(str(p) for p in candidates)
     return (Path(hit) if hit else None), candidates
 
@@ -465,7 +472,10 @@ def _prepared_status(slug: str, st: DatasetStatus, acq: Dict[str, Any],
     return st
 
 
-def status(slug: str) -> DatasetStatus:
+def status(slug: str, *, raw_only: bool = False) -> DatasetStatus:
+    """What `data status` says about *slug*. A cohort read from a file `data
+    prepare` builds reports that file (prepared / not prepared, and then its
+    raw data in the notes); *raw_only* reports the raw data alone."""
     acq = acquisition(slug)
     kind = acq.get("kind") or "manual"
     handler = HANDLERS.get(kind, "manual")
@@ -501,6 +511,20 @@ def status(slug: str) -> DatasetStatus:
         return st
     if acq.get("prepared_only"):
         _prepared_status(slug, st, acq, needs_build=False)
+        return st
+    if needs_build and not pipeline["preprocessor"].get("optional") and not raw_only:
+        # read from the file `data prepare` builds from the raw data;
+        # `preprocessed_path` points at one built elsewhere
+        _prepared_status(slug, st, acq, needs_build=True)
+        st.path_key = "preprocessed_path"
+        if st.state == "not prepared":
+            raw = status(slug, raw_only=True)
+            if raw.found:
+                st.notes += _note_lines(f"raw data {raw.state}", f"neuroatlas data prepare {slug}")
+            else:
+                st.notes += _note_lines(
+                    "its raw data is not here either",
+                    f"neuroatlas data download {slug}, then neuroatlas data prepare {slug}")
         return st
 
     key, path, unresolved = raw_location(slug)
@@ -700,6 +724,12 @@ def plan_download(slug: str, *, mirror: str = "physionet",
                                       (NO_FOLDER, f"neuroatlas config set {slug}.data_root DIR")))
         return plan
     plan.dest = path
+    pipeline = _manifest(slug).get("pipeline") or {}
+    block = pipeline.get("preprocessor")
+    if (isinstance(block, dict) and not block.get("optional")
+            and pipeline.get("required", True) is not False):
+        plan.after = [f"note: {slug} is read from a prepared file, built from the "
+                      f"download\nfix: neuroatlas data prepare {slug}"]
 
     if handler == "physionet" and acq.get("ref") and acq.get("version"):
         # The version folder's contents go straight into the dataset's folder
@@ -739,7 +769,9 @@ def plan_download(slug: str, *, mirror: str = "physionet",
     if handler == "url" and acq.get("files"):
         for item in acq["files"]:
             url = item["url"] if isinstance(item, dict) else str(item)
-            target = path / url.rstrip("/").rsplit("/", 1)[-1]
+            # `name`: the file's own name, where the URL does not end in it
+            name = item.get("name") if isinstance(item, dict) else None
+            target = path / (name or url.rstrip("/").rsplit("/", 1)[-1])
             plan.fetches.append(Fetch(url, target, md5=(item.get("md5") if isinstance(item, dict) else None)))
             if target.suffix == ".zip":
                 plan.unpack.append(target)
@@ -1136,6 +1168,16 @@ def _unpack(archive: Path, echo, keep: bool) -> None:
     if not keep:
         archive.unlink()
         echo(f"  deleted {archive.name} (pass --keep-archive to keep it)")
+    # an archive of archives (ArithmeticTask: Experiment 1.zip, Experiment 2.zip):
+    # each inner one into a folder of its name
+    for member in members:
+        inner = target / member.filename
+        if not member.is_dir() and inner.suffix == ".zip" and inner.is_file():
+            folder = inner.parent / inner.stem
+            folder.mkdir(parents=True, exist_ok=True)
+            moved = folder / inner.name
+            inner.replace(moved)
+            _unpack(moved, echo, keep)
 
 
 @contextlib.contextmanager
@@ -1237,6 +1279,10 @@ class _ToolOutput:
     #: An nsrr line for a file its --file pattern leaves out (``--first``):
     #: one per other file of the folder, so not shown.
     _NOT_TAKEN = re.compile(r"^(?:\x1b\[[0-9;]*m)?\s*skipped(?:\x1b\[[0-9;]*m)?\s")
+    #: An nsrr line for a file sleepdata.org did not serve; its reason is the
+    #: next line ("Token Not Authorized to Access Specified File"). The tool
+    #: still exits 0.
+    _FAILED = re.compile(r"^(?:\x1b\[[0-9;]*m)?\s*failed(?:\x1b\[[0-9;]*m)?\s+(\S+)")
 
     def __init__(self, path: str, *, wget: bool, item=None, echo=None, written=None,
                  drop_not_taken: bool = False):
@@ -1252,6 +1298,9 @@ class _ToolOutput:
         self.had = 0                      # of which there before (a resumed file)
         self.listing = False              # the file in transfer is a directory listing
         self.tail: List[str] = []
+        self.failed: List[str] = []       # nsrr: the files it did not get
+        self.reasons: List[str] = []      # and why, as it says
+        self._reason_next = False
         self._lock = threading.Lock()
 
     def poll(self, final: bool = False):
@@ -1286,6 +1335,12 @@ class _ToolOutput:
         if not self.wget:
             if self.drop_not_taken and self._NOT_TAKEN.match(line):
                 return
+            failed = self._FAILED.match(line)
+            if failed:
+                self.failed.append(failed.group(1))
+            elif self._reason_next and line.strip() not in self.reasons:
+                self.reasons.append(line.strip())
+            self._reason_next = bool(failed)
             self.tail = (self.tail + [line])[-20:]
             if self.echo is not None:
                 self.echo(f"  {line.rstrip()}")
@@ -1338,6 +1393,34 @@ class _ToolOutput:
             self.item.count("skipped")
 
 
+@contextlib.contextmanager
+def _token_on_stdin(token: Optional[str]):
+    """The ``subprocess.run`` arguments that answer the tool's token prompt.
+
+    The nsrr tool reads the token with echo off, which needs a terminal: on a
+    pipe it stops with ``Errno::ENOTTY``. Where the platform has
+    pseudo-terminals the token goes in through one of ours (the terminal's
+    echo comes back to us, never into the tool's output); elsewhere through a
+    pipe.
+    """
+    if not token:
+        yield {}
+        return
+    try:
+        import pty
+
+        master, slave = pty.openpty()
+    except (ImportError, OSError):
+        yield {"input": token + "\n", "text": True}
+        return
+    try:
+        os.write(master, (token + "\n").encode())
+        yield {"stdin": slave}
+    finally:
+        os.close(slave)
+        os.close(master)
+
+
 def _run_tool(argv: List[str], plan: DownloadPlan, token: Optional[str], echo,
               cwd: Optional[Path] = None) -> int:
     """Run wget or nsrr with their output read as it comes (:class:`_ToolOutput`):
@@ -1364,9 +1447,9 @@ def _run_tool(argv: List[str], plan: DownloadPlan, token: Optional[str], echo,
     try:
         # The token goes to the tool's own prompt on stdin: never argv (visible
         # in `ps`), never the environment, never printed.
-        done = subprocess.run(argv, cwd=cwd if cwd is not None else plan.cwd,
-                              input=(token + "\n") if token else None, text=True,
-                              stdout=fd, stderr=subprocess.STDOUT, **extra)
+        with _token_on_stdin(token) as stdin:
+            done = subprocess.run(argv, cwd=cwd if cwd is not None else plan.cwd,
+                                  stdout=fd, stderr=subprocess.STDOUT, **stdin, **extra)
     finally:
         os.close(fd)
         item.watch(None)
@@ -1386,6 +1469,17 @@ def _run_tool(argv: List[str], plan: DownloadPlan, token: Optional[str], echo,
         echo(_msg.format("error", f"{plan.slug}: `{argv[0]}` {how}; running the same download "
                                   f"again resumes it{detail}",
                          f"neuroatlas data download {plan.slug}"))
+        return 1
+    if output.failed:
+        # the nsrr tool exits 0 with files it did not get
+        n = len(output.failed)
+        names = ", ".join(output.failed[:3]) + (", ..." if n > 3 else "")
+        why = f" ({'; '.join(output.reasons)})" if output.reasons else ""
+        refused = any("not authorized" in r.lower() for r in output.reasons)
+        fix = (f"request access to {plan.ref or plan.slug} at sleepdata.org, then the same "
+               f"download" if refused else f"neuroatlas data download {plan.slug}")
+        echo(_msg.format("error", f"{plan.slug}: sleepdata.org did not serve "
+                                  f"{_msg.plural(n, 'file')}{why}: {names}", fix))
         return 1
     return 0
 

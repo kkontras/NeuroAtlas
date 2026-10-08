@@ -88,17 +88,24 @@ def _resolve_prepared(path: str) -> str:
 
 
 #: When a folder holds the same pickle prepared for several models, the one
-#: read is the first of these (the smallest first; each carries the same
-#: signal), then any other in name order.
+#: read is the first of these (the smallest first), then any other in name
+#: order.
 PREFERRED_VARIANTS = ("steegformer", "labram", "bendr")
+
+#: In the name of a cognitive cohort's confound-filtered pickle
+#: (``EEGMat_preprocessed_trackD_steegformer.pkl``: 4-40 Hz), which a glob for
+#: the other pickles (``EEGMat_preprocessed_*.pkl``) does not match.
+CONFOUND_FILTERED_TAG = "_trackD_"
 
 
 def matching_files(candidate: str) -> List[str]:
     """The files a candidate names: itself when it is a file, or, for a glob
     (``EEGMat_preprocessed_*.pkl``), its matches in :data:`PREFERRED_VARIANTS`
-    order."""
+    order. A glob matches a confound-filtered pickle only when it names
+    :data:`CONFOUND_FILTERED_TAG` itself."""
     if not any(c in candidate for c in "*?["):
         return [candidate] if _os.path.isfile(candidate) else []
+    confound = CONFOUND_FILTERED_TAG in _Path(candidate).name
 
     def rank(path: str):
         stem = _Path(path).stem
@@ -107,7 +114,8 @@ def matching_files(candidate: str) -> List[str]:
                 return (i, path)
         return (len(PREFERRED_VARIANTS), path)
 
-    return sorted((p for p in _glob.glob(candidate) if _os.path.isfile(p)), key=rank)
+    return sorted((p for p in _glob.glob(candidate) if _os.path.isfile(p)
+                   and (confound or CONFOUND_FILTERED_TAG not in _Path(p).name)), key=rank)
 
 
 def first_existing(candidates: Iterable[str]) -> Optional[str]:
@@ -168,27 +176,37 @@ class _FirstPaths:
         return [self[k] for k in self._search]
 
 
+#: The cognitive/affective cohorts: slug -> (prepared folder, file stem).
+#: Each has two pickles, which `data prepare` builds from the raw data
+#: (preprocessors/preprocess_cognitive.py), named after a model format
+#: (PREFERRED_VARIANTS picks one when there are several):
+#: ``<stem>_preprocessed_<format>.pkl``, no filtering (the format's own
+#: band), and ``<stem>_preprocessed_trackD_<format>.pkl``, confound
+#: filtering (4-40 Hz, App. D.6). The reader takes the second under
+#: ``confound_control``.
+COGNITIVE_PICKLES: Dict[str, Tuple[str, str]] = {
+    "eegmat": ("EEGMat", "EEGMat"),
+    "arithmetic_task": ("ArithmeticTask", "ArithmeticTask"),
+    "dreamer_valence": ("DREAMER", "DREAMER_valence"),
+    "dreamer_arousal": ("DREAMER", "DREAMER_arousal"),
+}
+
+
+def _cognitive_paths(slug: str, confound_control: bool) -> List[str]:
+    """The search list of one cognitive cohort's pickle: the folder `data
+    prepare` writes (``<cache root>/prepared/<slug>``), the dataset's folder
+    under the data root, then the prepared folder of the cohort's name."""
+    folder, stem = COGNITIVE_PICKLES[slug]
+    name = f"{stem}_preprocessed{CONFOUND_FILTERED_TAG if confound_control else '_'}*.pkl"
+    return [str(_DATA_DIR / slug / name), "${EEG_DATA_ROOT}/" + slug + "/" + name,
+            str(_DATA_DIR / folder / name)]
+
+
 PREPROCESSED_SEARCH_PATHS: Dict[str, List[str]] = _SearchPaths({
-    # Cognitive/affective cohorts: the pickle the authors provide,
-    # <Dataset>_preprocessed_<variant>.pkl, in the dataset's folder under the
-    # data root (then under the prepared folder). Any variant carries the same
-    # signal; PREFERRED_VARIANTS picks one when there are several.
-    "eegmat": [
-        "${EEG_DATA_ROOT}/eegmat/EEGMat_preprocessed_*.pkl",
-        str(_DATA_DIR / "EEGMat" / "EEGMat_preprocessed_*.pkl"),
-    ],
-    "arithmetic_task": [
-        "${EEG_DATA_ROOT}/arithmetic_task/ArithmeticTask_preprocessed_*.pkl",
-        str(_DATA_DIR / "ArithmeticTask" / "ArithmeticTask_preprocessed_*.pkl"),
-    ],
-    "dreamer_valence": [
-        "${EEG_DATA_ROOT}/dreamer_valence/DREAMER_valence_preprocessed_*.pkl",
-        str(_DATA_DIR / "DREAMER" / "DREAMER_valence_preprocessed_*.pkl"),
-    ],
-    "dreamer_arousal": [
-        "${EEG_DATA_ROOT}/dreamer_arousal/DREAMER_arousal_preprocessed_*.pkl",
-        str(_DATA_DIR / "DREAMER" / "DREAMER_arousal_preprocessed_*.pkl"),
-    ],
+    # Cognitive/affective cohorts: the pickle the authors provide (see
+    # COGNITIVE_PICKLES); <slug>_confound_controlled is the confound-filtered one.
+    **{slug: _cognitive_paths(slug, False) for slug in COGNITIVE_PICKLES},
+    **{slug + CONFOUND_CONTROLLED: _cognitive_paths(slug, True) for slug in COGNITIVE_PICKLES},
     # PhysionetMI: repo-local .pkl exists → try it first
     "physionet_mi": [
         str(_DATA_DIR / "PhysionetMI" / "physionetMI_preprocessed.pkl"),

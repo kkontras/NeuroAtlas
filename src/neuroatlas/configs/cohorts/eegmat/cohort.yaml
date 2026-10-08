@@ -21,21 +21,14 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  # The benchmark reads the authors' preprocessed file, not the raw EDFs
-  # PhysioNet serves (ref/version/upstream: where the recordings come from).
-  kind: internal
+  # PhysioNet's EDFs; `neuroatlas data prepare eegmat` builds the files the
+  # reader reads from them.
+  kind: physionet
   ref: eegmat
   version: 1.0.0
-  upstream: https://physionet.org/content/eegmat/1.0.0/
   size_gb: 0.18                             # "Total uncompressed size: 175.1 MB"
-  dest: ${EEG_DATA_ROOT}/eegmat             # where `data download` puts the raw EDFs
+  dest: ${EEG_DATA_ROOT}/eegmat
   expect: {glob: "Subject*.edf", count: 72} # RECORDS: 36 subjects x (rest, task)
-  prepared_only: >
-    bci_cognitive reads EEGMat_preprocessed_*.pkl (4 s windows at 128 Hz), the
-    file the published embeddings were extracted from; the authors provide it
-    on request.
-    fix: ask the authors for EEGMat_preprocessed_*.pkl, then
-    neuroatlas config set eegmat.preprocessed_path FILE
 
 signal:
   notch_freq: 50.0
@@ -59,12 +52,34 @@ splits:
   grouping: patient
   n_folds: 5
 
+pipeline:
+  # `neuroatlas data prepare eegmat` builds the two files the reader reads
+  # (no filtering, confound filtering) from the raw data, into
+  # <cache root>/prepared/eegmat/.
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_cognitive
+    args:
+      slug: --dataset
+      raw: --raw-dir
+      out: --output
+
 runtime_defaults:
   batch_size: 64
   preprocessed_path: null              # `config set eegmat.preprocessed_path FILE`
   fold: 0
   n_folds: 5
   num_workers: 0
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_cognitive benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      reads EEGMat_preprocessed_trackD_*.pkl, the file filtered 4-40 Hz, instead of EEGMat_preprocessed_*.pkl. A file whose recorded
+      band is the other one is refused. The two are cached separately.
+    implemented_by: extensions/datasets/adapters/cognitive.py
 
 spec:
   datamodule: neuroatlas.extensions.datasets.adapters.cognitive.EEGMatBenchmarkDataModule

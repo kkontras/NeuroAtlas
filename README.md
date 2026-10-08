@@ -132,10 +132,10 @@ above). Run `neuroatlas data status` to see which datasets you have and how to g
 
 | Access | Datasets |
 |---|---|
-| Open, downloaded with `neuroatlas data download` | Sleep-EDF Expanded, HMC, UCDDB, DOD, Siena, CHB-MIT, Helsinki Neonatal, Bonn, 14 MOABB BCI datasets |
+| Open, downloaded with `neuroatlas data download` | Sleep-EDF Expanded, HMC, UCDDB, DOD, Siena, CHB-MIT, Helsinki Neonatal, Bonn, EEGMat, ArithmeticTask, 14 MOABB BCI datasets |
 | [NSRR](https://sleepdata.org) account, then `neuroatlas config token nsrr` | CFS, HomePAP, MESA, MrOS, SHHS, STAGES, WSC |
-| Request from the data owners | DCSM, ISRUC, MASS, PhysioNet 2026, NMT, EPILEPSIAE, TUSZ, TUAB |
-| Available from the authors | SeizeIT1, SeizeIT2, and the preprocessed DREAMER, EEGMat and ArithmeticTask files |
+| Request from the data owners | DCSM, ISRUC, MASS, PhysioNet 2026, NMT, EPILEPSIAE, TUSZ, TUAB, DREAMER |
+| Available from the authors | SeizeIT1, SeizeIT2 |
 
 If you already have a dataset, point to it with `neuroatlas config set <dataset>.data_root DIR`.
 To test the setup before a large download, `neuroatlas data download <dataset> --first 5`

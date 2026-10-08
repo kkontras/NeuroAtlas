@@ -24,6 +24,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _INDENT = "  "
 
+#: The -m / --models help of embed and probe.
+MODELS_HELP = ("Checkpoint ids, families, groups or an alias such as all_fm, separated by "
+               "commas (default: all).")
+
+
 
 def _wrap(items: Sequence[str], width: int = 76, indent: str = _INDENT) -> List[str]:
     if not items:
@@ -148,7 +153,7 @@ def dataset_options(spec) -> Dict[str, List[str]]:
 
     # Never advertise a key the datamodule does not take.  Several datasets
     # declare label modes that their loader selects internally rather than via
-    # a ``label_mode`` argument (shhs, sleep_edf, parkinson), and TUAB's
+    # a ``label_mode`` argument (sleep_edf, parkinson), and TUAB's
     # adapter exposes ``montage_filter`` rather than ``montage`` — offering
     # those would send users straight into the ``unexpected keyword argument``
     # failure this help exists to prevent.
@@ -212,7 +217,7 @@ def dataset_section(slug: str) -> List[str]:
 
     also = list((labels.get("also_implemented") or []))
     if also:
-        lines += [f"{_INDENT * 2}also in the reader, not used by any benchmark:"] \
+        lines += [f"{_INDENT * 2}also available, not used by any benchmark:"] \
             + _wrap(also, indent=_INDENT * 3)
 
     splits = manifest.get("splits") or {}
@@ -251,10 +256,10 @@ def dataset_section(slug: str) -> List[str]:
     pairs = [(key, default) for key, default in pairs if key not in _HIDDEN_KEYS]
     options = dataset_options(spec)
     if note:
-        lines += ["", f"  --set keys accepted by {slug} (the dataset's defaults):"]
+        lines += ["", f"  --set keys accepted by {slug}, with the dataset's defaults:"]
     else:
-        lines += ["", f"  --set keys accepted by {slug} (default value; the allowed values "
-                      "where there is a fixed set):"]
+        lines += ["", f"  --set keys accepted by {slug}, with their defaults and allowed "
+                      "values:"]
     width = max((len(k) for k, _ in pairs), default=10)
     pad = _INDENT * 2
     for key, default in pairs:
@@ -320,7 +325,7 @@ def overview_section(*, show_models: bool = True) -> List[str]:
         lines += _wrap(sorted(s.slug for s in task_specs()))
         presets = available_tasks()
         if presets:
-            lines += [f"{_INDENT}task presets:"]
+            lines += [f"{_INDENT}with the settings of a benchmark:"]
             lines += _wrap(presets, indent=_INDENT * 2)
     except Exception:
         pass
@@ -334,7 +339,7 @@ def overview_section(*, show_models: bool = True) -> List[str]:
         except Exception:
             pass
 
-    lines += ["", "for one dataset's --set keys and label modes, add --dataset DATASET --help:",
+    lines += ["", "for the --set keys and label modes of one dataset, add --dataset NAME:",
               f"{_INDENT}neuroatlas embed --dataset hmc --help"]
     return lines
 
@@ -345,5 +350,5 @@ def build_epilog(argv: Optional[Sequence[str]], *, show_models: bool = True) -> 
     try:
         lines = dataset_section(slug) if slug else overview_section(show_models=show_models)
     except Exception as exc:                      # help must never crash the CLI
-        lines = [f"(could not build the dynamic help: {exc})"]
+        lines = [f"(could not list the datasets: {exc})"]
     return "\n".join(lines)

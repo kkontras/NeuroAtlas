@@ -729,6 +729,26 @@ def _split_by_protocol(full_payload, *, protocol, dataset_name, checkpoint_id,
     return splits, split_meta
 
 
+def _with_ages(datamodule, payload):
+    """*payload* with its participants' ages, for a datamodule that joins them
+    to the cached embeddings at probe time (``with_ages``: the PhysioEx sleep
+    cohorts, from their NSRR tables); otherwise as it is (the ages are in the
+    cache)."""
+    join = getattr(datamodule, "with_ages", None)
+    return join(payload) if callable(join) else payload
+
+
+def _concat_payloads(payloads):
+    """One payload of the rows of *payloads*, in order."""
+    from neuroatlas.benchmarking_helpers import EmbeddingPayload
+
+    return EmbeddingPayload(
+        features=np.concatenate([np.asarray(p.features) for p in payloads], axis=0),
+        labels=np.concatenate([np.asarray(p.labels, dtype=np.float64) for p in payloads]),
+        metadata=[row for p in payloads for row in p.metadata],
+    )
+
+
 def _require_ages(
     payloads: Dict[str, Any],
     *,
@@ -906,17 +926,13 @@ def evaluate_brain_age(
     protocol = _cohort_protocol(task_config, dataset_name)
     split_protocol_meta: Optional[Dict[str, Any]] = None
     use_global = datamodule.supports_global_embedding_cache()
-    if protocol is not None and not use_global:
-        raise ValueError(
-            f"brain_age: {dataset_name} has a published split protocol, which re-splits "
-            f"the cohort's full embedding cache, but its datamodule does not serve one."
-        )
     if use_global:
         full_payload, full_paths = _extract_or_load_embeddings(
             cache_root, dataset_name, "all", checkpoint_spec, backbone,
             datamodule.full_embedding_dataloader(), datamodule,
             cache_purpose="global_embeddings",
         )
+        full_payload = _with_ages(datamodule, full_payload)
         cache_paths.update({f"global_{k}": v for k, v in full_paths.items()})
         if protocol is not None:
             split_payloads, split_protocol_meta = _split_by_protocol(
@@ -943,6 +959,22 @@ def evaluate_brain_age(
         cache_paths.update({f"train_{k}": v for k, v in train_paths.items()})
         cache_paths.update({f"val_{k}": v for k, v in val_paths.items()})
         cache_paths.update({f"test_{k}": v for k, v in test_paths.items()})
+        train_payload, val_payload, test_payload = (
+            _with_ages(datamodule, p) for p in (train_payload, val_payload, test_payload))
+        if protocol is not None:
+            # Embeddings cached per fold and split (the PhysioEx sleep cohorts):
+            # the fold's train, validation and test splits hold every subject
+            # between them, so together they are the cohort the protocol splits.
+            split_payloads, split_protocol_meta = _split_by_protocol(
+                _concat_payloads([train_payload, val_payload, test_payload]),
+                protocol=protocol, dataset_name=dataset_name,
+                checkpoint_id=checkpoint_spec.identifier, datamodule=datamodule,
+                cache_paths=cache_paths,
+            )
+            train_payload = split_payloads["train"]
+            val_payload = split_payloads["val"]
+            test_payload = split_payloads["test"]
+            holdout_payload = split_payloads.get("holdout")
 
     # Refuse to probe an empty or malformed payload. Without this the failure
     # surfaces much later as "axis 1 is out of bounds for array of dimension 1"

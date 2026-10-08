@@ -13,7 +13,6 @@ from neuroatlas.extensions.datasets.physioex.datasets.wsc import WSCDataset
 from neuroatlas.extensions.datasets.physioex.datasets.mass import MASSDataset
 from neuroatlas.extensions.datasets.physioex.datasets.alzheimers import AlzheimersDataset
 from neuroatlas.extensions.datasets.physioex.datasets.parkinsons import ParkinsonsDataset
-from neuroatlas.extensions.datasets.physioex.datasets.shhs import SHHSDataset
 from neuroatlas.extensions.datasets.physioex.datasets.stages import STAGESDataset
 
 REGISTRY = {
@@ -27,7 +26,6 @@ REGISTRY = {
     "mass": MASSDataset,
     "alzheimers": AlzheimersDataset,
     "parkinsons": ParkinsonsDataset,
-    "shhs": SHHSDataset,
     "stages": STAGESDataset,
 }
 
@@ -53,7 +51,6 @@ __all__ = [
     "MASSDataset",
     "AlzheimersDataset",
     "ParkinsonsDataset",
-    "SHHSDataset",
     "STAGESDataset",
     "REGISTRY",
     "get_dataset",

@@ -63,6 +63,18 @@ pipeline:
   # dataio/bci.py:_BROAD_MI_SPECS.)
   preprocessor: null
 
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_ssvep benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      high-passes each trial at 1 Hz with no low-pass, so the stimulus
+      harmonics stay in; the trial window is unchanged. Off uses this
+      reader's SSVEP band, 1-50 Hz. The two are cached separately.
+    implemented_by: extensions/datasets/dataio/moabb_loader.py:resolve_confound_control
+
 provenance:
   added: "2026-09-23"
   migrated_from:

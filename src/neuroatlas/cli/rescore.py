@@ -23,17 +23,22 @@ _STATUS = {"same": "rescored, same", "changed": "rescored, changed",
 
 
 def build_parser() -> Parser:
-    p = Parser(prog="neuroatlas rescore", description=__doc__)
-    p.add_argument("benchmark")
+    from neuroatlas.cli.check import BENCHMARK_HELP
+
+    p = Parser(prog="neuroatlas rescore",
+               description="Recompute the metrics of every result from the test predictions "
+                           "its probes saved, and rewrite results.json. Nothing is fitted "
+                           "again. Use it when a metric was fixed or added after a run.")
+    p.add_argument("benchmark", help=BENCHMARK_HELP)
     p.add_argument("--dataset", default=None, metavar="NAMES",
-                   help="Only these datasets, comma-separated (default: every dataset that "
-                        "has results).")
+                   help="Only these datasets, separated by commas (default: every dataset "
+                        "with results).")
     p.add_argument("-m", "--models", default=None,
-                   help=MODELS_HELP + " Default: every checkpoint that has results.")
+                   help=MODELS_HELP + " Default: every checkpoint with results.")
     p.add_argument("--variant", default=None,
-                   help="Only this variant's results (default: every variant).")
+                   help="Only this variant (default: every variant).")
     p.add_argument("--output-root", type=Path, default=None, metavar="DIR",
-                   help="The results root (default: the configured output root).")
+                   help="Results folder (default: the output_root setting).")
     add_format_arg(p)
     return p
 

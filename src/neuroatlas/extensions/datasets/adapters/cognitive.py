@@ -5,6 +5,9 @@ the preprocessed pickles its own ``preprocess_*.py`` wrote -- the same files
 the published embeddings and probes were built from -- so there is no download
 path and no MOABB fallback: if the pickle is absent the run stops and says so.
 
+Each cohort has two pickles (``bci_paths.COGNITIVE_PICKLES``): no filtering,
+and confound filtering (4-40 Hz), read with ``confound_control``.
+
 One class per cohort because ``spec.datamodule`` names a class, but they differ
 only in which ``DATASET_CONFIGS`` key they read. DREAMER is two cohorts, valence
 and arousal, split that way in the pickles, the embeddings and the probes.
@@ -18,10 +21,12 @@ import numpy as np
 
 from neuroatlas.extensions.datasets.dataio.bci import (
     DATASET_CONFIGS,
+    _resolve_preprocessed_path,
     get_subject_split,
     load_preprocessed_dataset,
     resolve_n_folds,
 )
+from neuroatlas.extensions.datasets.dataio.bci_paths import CONFOUND_CONTROLLED
 
 from neuroatlas.extensions.models.backbones._preproc import BCI_DOMAIN
 
@@ -31,25 +36,73 @@ from .cho2017 import _PreprocessedDataset, _collate
 
 
 
-def _no_preprocessed_file(slug: str, preprocessed_path: Optional[str]) -> str:
+def _no_preprocessed_file(slug: str, preprocessed_path: Optional[str],
+                          confound_control: bool = False) -> str:
     """The error for a bci_cognitive dataset whose preprocessed file is not
-    here: the file it reads (``EEGMat_preprocessed_*.pkl``), where it was
-    looked for, and how to get it."""
+    here: the file it reads (``EEGMat_preprocessed_*.pkl``, or under confound
+    filtering ``EEGMat_preprocessed_trackD_*.pkl``), where it was looked for,
+    and how to get it."""
     import os
-    import re
 
-    from neuroatlas.extensions.datasets.dataio.bci_paths import PREPROCESSED_SEARCH_PATHS
+    from neuroatlas.extensions.datasets.dataio.bci_paths import (
+        CONFOUND_CONTROLLED,
+        PREPROCESSED_SEARCH_PATHS,
+    )
 
-    candidates = list(PREPROCESSED_SEARCH_PATHS.get(slug, []))
-    name = (re.sub(r"_preprocessed_[^_/]+\.pkl$", "_preprocessed_*.pkl",
-                   os.path.basename(candidates[0])) if candidates
-            else "its preprocessed file")
+    key = slug + CONFOUND_CONTROLLED if confound_control else slug
+    candidates = list(PREPROCESSED_SEARCH_PATHS.get(key, []))
+    name = os.path.basename(candidates[0]) if candidates else "its preprocessed file"
     where = preprocessed_path or (os.path.dirname(candidates[0]) if candidates else None)
     head = (f"{slug}: no file at {preprocessed_path}" if preprocessed_path
             else f"{slug}: {name} is not in {where}")
     return (f"{head} (the authors provide it on request)\n"
             f"fix: ask the authors for {name}, then neuroatlas config set "
             f"{slug}.preprocessed_path FILE")
+
+
+#: The band of a confound-filtered pickle (App. D.6: cognitive 4-40 Hz).
+CONFOUND_BAND = (4.0, 40.0)
+
+
+def _file_band(mat):
+    """``(fmin, fmax)`` the pickle was filtered with, from its own
+    ``preprocessing_meta``; None when the file does not record it."""
+    meta = mat.get("preprocessing_meta") if isinstance(mat, dict) else None
+    try:
+        return float(meta["fmin"]), float(meta["fmax"])
+    except (TypeError, KeyError, ValueError):
+        return None
+
+
+def _wrong_file(slug: str, path: Optional[str], band, confound_control: bool) -> Optional[str]:
+    """The error when the pickle found is the other filtering's (by the band
+    it records, else by its name), or None."""
+    import os
+
+    from neuroatlas.extensions.datasets.dataio.bci_paths import CONFOUND_FILTERED_TAG
+
+    if band is None and path is None:
+        return None
+    confound_file = (band == CONFOUND_BAND if band is not None
+                     else CONFOUND_FILTERED_TAG in os.path.basename(path))
+    if confound_file == bool(confound_control):
+        return None
+    from neuroatlas.extensions.datasets.dataio.bci_paths import COGNITIVE_PICKLES
+
+    stem = COGNITIVE_PICKLES.get(slug, ("", slug))[1]
+    where = path or "the file read"
+    if confound_control:
+        return (f"{slug}: {where} is the no-filtering file"
+                + (f" ({band[0]:g}-{band[1]:g} Hz)" if band else "")
+                + f", and confound filtering reads the 4-40 Hz one, "
+                  f"{stem}_preprocessed_trackD_*.pkl\n"
+                  f"fix: neuroatlas config set {slug}.preprocessed_path FILE\n"
+                  f"fix: neuroatlas run bci_cognitive --dataset {slug} --variant no_filtering")
+    return (f"{slug}: {where} is the confound-filtered file (4-40 Hz), and no filtering "
+            f"reads {stem}_preprocessed_*.pkl\n"
+            f"fix: neuroatlas config set {slug}.preprocessed_path FILE\n"
+            f"fix: neuroatlas run bci_cognitive --dataset {slug}")
+
 
 class _LoaderAdapter:
     """Emit the standard batch for one cohort, with *its* rate and channels.
@@ -126,6 +179,7 @@ class _PickleCohortDataModule(BenchmarkDataModule):
         subject_ids: Optional[Sequence[int]] = None,
         preprocessed_path: Optional[str] = None,
         channel_specs: Optional[Sequence[str]] = None,
+        confound_control: bool = False,
     ) -> None:
         cfg = DATASET_CONFIGS[self.SLUG]
         available = list(cfg.channels)
@@ -154,13 +208,23 @@ class _PickleCohortDataModule(BenchmarkDataModule):
             "channels": channels,
             "source": "preprocessed",
         }
+        if confound_control:
+            # Only when on: the cache context of a no-filtering run stays
+            # what it always was, so its embeddings are found again.
+            meta["confound_control"] = True
         super().__init__(name=self.SLUG, metadata=meta)
 
-        mat = load_preprocessed_dataset(self.SLUG, preprocessed_path=preprocessed_path)
+        key = self.SLUG + CONFOUND_CONTROLLED if confound_control else self.SLUG
+        mat = load_preprocessed_dataset(key, preprocessed_path=preprocessed_path)
         if mat is None:
             # read only from the authors' preprocessed file (as `data status`
             # says); nothing downloads it
-            raise FileNotFoundError(_no_preprocessed_file(self.SLUG, preprocessed_path))
+            raise FileNotFoundError(_no_preprocessed_file(self.SLUG, preprocessed_path,
+                                                          confound_control))
+        path = _resolve_preprocessed_path(key, preprocessed_path)
+        wrong = _wrong_file(self.SLUG, path, _file_band(mat), confound_control)
+        if wrong:
+            raise ValueError(wrong)
 
         names = np.asarray(mat["subject_name"]).squeeze()
         index = {int(np.asarray(names[i]).flat[0]): i for i in range(names.shape[0])}

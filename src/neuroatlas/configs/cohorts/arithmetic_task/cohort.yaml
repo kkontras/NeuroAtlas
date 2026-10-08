@@ -21,12 +21,17 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  kind: internal
-  prepared_only: >
-    bci_cognitive reads ArithmeticTask_preprocessed_*.pkl (1 s windows at
-    128 Hz), the authors' own recordings; the authors provide it on request.
-    fix: ask the authors for ArithmeticTask_preprocessed_*.pkl, then
-    neuroatlas config set arithmetic_task.preprocessed_path FILE
+  # The OSF release (CC0 1.0): one zip holding Experiment 1.zip and
+  # Experiment 2.zip, flat EDFs (S01R.edf, S2A.edf); `data download` unpacks
+  # both. `neuroatlas data prepare arithmetic_task` builds the files the
+  # reader reads from them.
+  kind: url
+  upstream: https://osf.io/gh6q3/
+  files:
+    - {url: "https://osf.io/download/guzqm/", name: "Raw EEG data.zip", md5: 52e43bc036d795486683282a4351a8f6}
+  size_gb: 0.71                             # 713,601,804 bytes (OSF, 2026-10-08)
+  dest: ${EEG_DATA_ROOT}/arithmetic_task
+  expect: {glob: "*.edf", count: 159}       # Experiment 1: 21 x 3, Experiment 2: 32 x 3
 
 signal:
   notch_freq: 50.0
@@ -39,10 +44,10 @@ labels:
       note: >
         rest=0, arithmetic=1, meditation/breathing=2, per
         the upstream preprocessing. Experiment 1 recorded meditation, experiment
-        2 breathing; both map to 2. The script declares 52 subjects but the
-        pickles hold 45 -- experiment 2's S02-S09 are absent, skipped because
-        their directory or EDF is missing from the raw tree. 45 is what the
-        published embeddings and probes were built from.
+        2 breathing; both map to 2. The release holds 53 subjects; the files
+        hold 45, the cohort's list: experiment 1's S01-S21 and experiment 2's
+        S10-S33, the subjects the published embeddings and probes were built
+        from.
 
 splits:
   derivation: >
@@ -54,12 +59,34 @@ splits:
   grouping: patient
   n_folds: 5
 
+pipeline:
+  # `neuroatlas data prepare arithmetic_task` builds the two files the reader reads
+  # (no filtering, confound filtering) from the raw data, into
+  # <cache root>/prepared/arithmetic_task/.
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_cognitive
+    args:
+      slug: --dataset
+      raw: --raw-dir
+      out: --output
+
 runtime_defaults:
   batch_size: 64
   preprocessed_path: null              # `config set arithmetic_task.preprocessed_path FILE`
   fold: 0
   n_folds: 5
   num_workers: 0
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_cognitive benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      reads ArithmeticTask_preprocessed_trackD_*.pkl, the file filtered 4-40 Hz, instead of ArithmeticTask_preprocessed_*.pkl. A file whose recorded
+      band is the other one is refused. The two are cached separately.
+    implemented_by: extensions/datasets/adapters/cognitive.py
 
 spec:
   datamodule: neuroatlas.extensions.datasets.adapters.cognitive.ArithmeticTaskBenchmarkDataModule

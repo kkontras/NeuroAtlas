@@ -16,7 +16,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,24 @@ class MOABBDatasetConfig:
     exclude_subjects: tuple = ()
 
 
-#: passband held to the motor rhythms when confound control is on
+#: passband held to the motor rhythms under confound filtering
 MI_MOTOR_BAND = (4.0, 40.0)
 
-#: seconds dropped from the head of each trial when confound control is on
+#: seconds dropped from the head of a motor-imagery trial under confound filtering
 CONFOUND_CONTROL_TMIN = 1.0
+
+#: Confound filtering, per paradigm (paper App. D.6): ``(fmin, fmax)`` and
+#: the seconds dropped from the head of each trial. ``fmin`` None keeps the
+#: reader's own high-pass; ``fmax`` None is no low-pass.
+#:   mi     4-40 Hz, the trial from 1 s after the cue (the cue's evoked
+#:          response and the eye movement towards it fall outside)
+#:   p300   0.5-40 Hz band-pass, the trial unchanged
+#:   ssvep  high-pass only, so the stimulus harmonics stay in
+CONFOUND_FILTERING: Dict[str, Tuple[Tuple[Optional[float], Optional[float]], float]] = {
+    "mi": (MI_MOTOR_BAND, CONFOUND_CONTROL_TMIN),
+    "p300": ((0.5, 40.0), 0.0),
+    "ssvep": ((None, None), 0.0),
+}
 
 #: The paper's motor-imagery trial: the first 4 s after the cue. Every MI
 #: config the published BCI embeddings were preprocessed with
@@ -143,30 +156,34 @@ def loso_fold_count(slug: str) -> int:
 
 
 def resolve_confound_control(cfg, enabled: bool):
-    """Return ``(fmin, fmax, trial_start_offset_samples)`` for this trial.
+    """Return ``(fmin, fmax, trial_start_offset_samples)`` for this trial;
+    ``fmax`` None is no low-pass.
 
-    A motor-imagery trial opens with a visual cue, so its first second carries
-    the evoked response and the eye movement towards it -- a probe can ride
-    that instead of the imagery. With *enabled*, the passband is held to the
-    motor rhythms and the window starts :data:`CONFOUND_CONTROL_TMIN` in;
-    without it, the cohort's own passband and the whole trial are used. The
-    difference between the two is how much of a score came from the cue.
+    *enabled* is the paper's confound filtering (App. D.6), which differs by
+    paradigm (:data:`CONFOUND_FILTERING`). A motor-imagery trial opens with a
+    visual cue, so its first second carries the evoked response and the eye
+    movement towards it -- a probe can ride that instead of the imagery: the
+    passband is held to the motor rhythms and the window starts
+    :data:`CONFOUND_CONTROL_TMIN` in. For ERP and SSVEP the cue-locked
+    response is the signal, so the trial is kept whole and only the band
+    changes: 0.5-40 Hz for ERP, a high-pass alone for SSVEP. Without
+    *enabled* ("no filtering"), the cohort's own passband and the whole trial.
 
-    Motor imagery only. For a P300, ERP or SSVEP cohort the cue-locked
-    response *is* the signal, so dropping the first second would remove what
-    is being measured -- that is an error, not a quieter result.
+    The paper defines confound filtering for these three paradigms only; for
+    another (c-VEP, resting state) it is an error, not a guess.
     """
     if not enabled:
         return cfg.fmin, cfg.fmax, 0
-    if cfg.paradigm != "mi":
+    rule = CONFOUND_FILTERING.get(cfg.paradigm)
+    if rule is None:
         raise ValueError(
-            f"confound_control is defined for motor imagery, but {cfg.slug!r} is "
-            f"a {cfg.paradigm!r} paradigm. There the cue-locked response is the "
-            "signal, not a confound, so dropping the first second would remove "
-            "what is being measured."
-        )
-    fmin, fmax = MI_MOTOR_BAND
-    return fmin, fmax, int(round(CONFOUND_CONTROL_TMIN * cfg.resample_sfreq))
+            f"{cfg.slug}: confound filtering is defined for motor-imagery, ERP and "
+            f"SSVEP cohorts, and {cfg.slug} is a {cfg.paradigm} cohort\n"
+            f"fix: neuroatlas embed --dataset {cfg.slug} --set confound_control=false")
+    (fmin, fmax), tmin = rule
+    if fmin is None:
+        fmin = cfg.fmin
+    return fmin, fmax, int(round(tmin * cfg.resample_sfreq))
 
 
 # ---------------------------------------------------------------------------
@@ -522,11 +539,14 @@ def load_and_preprocess_moabb(
     Pipeline:
       1. Load raw data via braindecode ``MOABBDataset``
       2. Keep the EEG channels; scale V → µV
-      3. Bandpass filter  (paradigm-specific defaults)
+      3. Band-pass filter: the paradigm's own band, or under confound
+         filtering the paper's per paradigm (:func:`resolve_confound_control`;
+         SSVEP: a high-pass alone)
       4. Optional common average reference
       5. Resample to target sampling rate
       6. Window from event annotations: the paper's trial window
-         (:func:`trial_window`), plus confound control's 1 s offset
+         (:func:`trial_window`), plus confound filtering's 1 s offset for
+         motor imagery
 
     Returns
     -------

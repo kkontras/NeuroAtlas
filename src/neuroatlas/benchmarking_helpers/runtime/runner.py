@@ -1029,6 +1029,10 @@ class BenchmarkRunner:
             result.metadata.get("fold", ""),
             aggregation,
             mode,
+            # A BCI fold with and without confound filtering are two results:
+            # the default's folder holds both when the default changed from
+            # one to the other, and neither replaces the other.
+            bool(result.metadata.get("confound_control")),
         )
 
     @staticmethod

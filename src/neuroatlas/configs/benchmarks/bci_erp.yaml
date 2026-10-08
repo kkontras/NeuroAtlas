@@ -6,8 +6,8 @@ question: >
   Is an EEG segment the response to a target stimulus (P300, N170)? Leave-one-subject-out.
 paper: App. C.4
 # no task: each cohort's own (linear_probe); trial windows come from its manifest
-embed: --pooling mean
-probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+embed: --set confound_control=true --pooling mean
+probe: --set confound_control=true --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
 datasets: [bi2013a, bi2014a, bnci2014_008, epflp300, erpcore2021_n170]
 single: bi2013a
 # Model families this benchmark does not evaluate: `-m all`, a group or an
@@ -38,21 +38,38 @@ metrics:
   note: >
     The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
     number (App. C.4, Eq. 4), which puts chance at 0.5 for every C.
-# The variants carry the paper's names (App. D.8): "mean-pool" (the default)
-# and "token flattening"; `--variant` also accepts the `aliases`.
+# The variants carry the paper's names (App. D.6, D.8): "confound filtering"
+# (the default) or "no filtering", crossed with "mean-pool" or "token
+# flattening". `--variant` also accepts the `aliases`. A result is read as
+# the variant whose settings it was made with (confound_control and pooling
+# in its metadata), whichever folder it is in.
 default_variant:
   description: >
-    mean-pool: each trial's patch tokens averaged into one vector, with this
-    reader's own band (no confound filtering here)
-  paper: the mean-pool results of App. D.8 (Fig. 26)
+    confound filtering, mean-pool: each trial band-passed 0.5-40 Hz, its
+    window the cohort's own; a trial's patch tokens are averaged into one
+    vector
+  paper: Fig. 26b and Table 13 (confound filtering, mean pool)
 variants:
   token_flattening:
+    description: >
+      confound filtering, token flattening: as the default, but a trial's patch
+      tokens are concatenated in token order into one vector (tokens x
+      dimension) instead of averaged
+    paper: Fig. 23 (ERP), the confound-filtering bars; Fig. 5b and Table 12
+    embed: --set confound_control=true --pooling per_patch
+    probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering:
+    description: >
+      no filtering, mean-pool: each trial band-passed 1-30 Hz, its window the
+      cohort's own
+    paper: App. D.8, mean pool without confound filtering
+    embed: --set confound_control=false --pooling mean
+    probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+  no_filtering_token_flattening:
     aliases: [per_patch]
     description: >
-      token flattening: a trial's patch tokens are concatenated in token order
-      into one vector (tokens x dimension) instead of averaged
-    paper: >
-      Fig. 23 (ERP), the no-filtering bars (per-patch embeddings); the band
-      here is this reader's, not each model's own
-    embed: --pooling per_patch
-    probe: --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
+      no filtering, token flattening: the no-filtering trial, its patch tokens
+      concatenated in token order into one vector
+    paper: Fig. 23 (ERP), the no-filtering bars
+    embed: --set confound_control=false --pooling per_patch
+    probe: --set confound_control=false --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000

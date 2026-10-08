@@ -20,8 +20,13 @@ _FORWARD = re.compile(r"^\(([\d, ]*)\) (finite|constant|(\d+) non-finite)$")
 _DOWNLOAD_FIX = re.compile(r"^\s*fix: neuroatlas models download (\S+)$")
 
 #: The `--dataset` help of check, run and submit: the flag's values in words.
-DATASET_HELP = ("single: the benchmark's quick dataset (`neuroatlas list benchmarks` names "
-                "it); full: all its datasets; or dataset names, comma-separated.")
+DATASET_HELP = ("Datasets to use. Give single for the benchmark's quick dataset, full for "
+                "all its datasets, or dataset names separated by commas")
+#: The help of the benchmark positional.
+BENCHMARK_HELP = "Benchmark name, as listed by `neuroatlas list benchmarks`."
+#: The --variant help of the commands that run a benchmark.
+VARIANT_HELP = ("Benchmark variant (default: default). `neuroatlas show BENCHMARK` lists "
+                "the variants.")
 
 #: The values of the table's columns that need saying (`check` prints the
 #: ones its table shows).
@@ -38,21 +43,21 @@ LEGEND = {
 
 
 def build_parser() -> Parser:
-    p = Parser(prog="neuroatlas check", description=__doc__)
-    p.add_argument("benchmark")
+    p = Parser(prog="neuroatlas check",
+               description="Run one batch of real data through each pair of dataset and "
+                           "checkpoint, then stop. Use it before a long run to catch missing "
+                           "data, missing weights and channel problems. It exits with status "
+                           "1 if a pair fails or if no pair could be checked.")
+    p.add_argument("benchmark", help=BENCHMARK_HELP)
     p.add_argument("-m", "--models", required=True, help=MODELS_HELP)
     p.add_argument("--dataset", default="single", metavar="single|full|NAMES",
-                   help=f"Which datasets (default: single). {DATASET_HELP}")
-    p.add_argument("--variant", default="default",
-                   help="A benchmark variant (default: default; `neuroatlas show <benchmark>` "
-                        "lists them).")
+                   help=f"{DATASET_HELP} (default: single).")
+    p.add_argument("--variant", default="default", help=VARIANT_HELP)
     p.add_argument("--num-workers", type=int, default=None, metavar="N",
-                   help="Data-loader workers for the one batch (default 0: read in-process, "
-                        "the fastest way to get a single batch).")
+                   help="Data loader workers (default: 0). 0 reads in the main process, "
+                        "which is fastest for a single batch.")
     p.add_argument("--strict", action="store_true",
-                   help="Exit 1 if any pair was skipped (data or weights missing) or invalid "
-                        "(no channel map entry), not only if one failed or none could be "
-                        "checked.")
+                   help="Also exit with status 1 if a pair was skipped or invalid.")
     add_format_arg(p)
     return p
 

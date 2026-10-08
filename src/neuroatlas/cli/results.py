@@ -58,26 +58,24 @@ def title_lines(bench, variant: Optional[str] = None, *, chance_column: bool = F
 
 
 def build_results_parser() -> Parser:
+    from neuroatlas.cli.check import BENCHMARK_HELP
+
     p = Parser(
         prog="neuroatlas results",
-        description="One row per (dataset, variant, checkpoint): the headline metric's mean and "
-                    "spread over the folds that succeeded, how many of the protocol's folds "
-                    "that is (LOSO: one fold per subject), the chance level where it differs "
-                    "per row (AUPRC: the test prevalence; BCI: 1/C) and the secondary "
-                    "metrics. The title says what the headline is computed over, what a fold "
-                    "is and what ± is over. A variant's results (run --variant) are their "
-                    "own rows, never merged with the default's.")
-    p.add_argument("benchmark")
+        description="Summarise the results of a benchmark, with one row per dataset, variant "
+                    "and checkpoint. Each row shows the mean and spread of the headline metric "
+                    "over the folds, the number of folds, the chance level and the other "
+                    "metrics.")
+    p.add_argument("benchmark", help=BENCHMARK_HELP)
     p.add_argument("paths", nargs="*",
-                   help="results.json files, globs or folders. Default: every results.json "
-                        "under <output root>/<benchmark>/.")
+                   help="results.json files, globs or folders to read (default: every "
+                        "results.json under `<output root>/<benchmark>/`).")
     p.add_argument("--variant", default=None,
-                   help="Only this variant's results (default: every variant; `neuroatlas "
-                        "show <benchmark>` lists them).")
+                   help="Only show this variant (default: every variant).")
     p.add_argument("--output-root", type=Path, default=None, metavar="DIR",
-                   help="The results root to read (default: the configured output root).")
+                   help="Results folder to read (default: the output_root setting).")
     p.add_argument("-v", "--verbose", action="store_true",
-                   help="Show why failed folds failed: the message each one recorded.")
+                   help="Show the error message of each failed fold.")
     add_format_arg(p)
     return p
 

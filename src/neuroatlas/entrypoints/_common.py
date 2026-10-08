@@ -13,23 +13,24 @@ def add_parallel_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--extract-only",
         action="store_true",
-        help="Extract embeddings to the cache and exit (no probe fitting).",
+        help="Only extract the embeddings to the cache, without fitting probes.",
     )
     parser.add_argument(
         "--embed-chunk",
         default=None,
-        help="Subject chunk for parallel extraction, e.g. '0/4' (chunk 0 of 4 total).",
+        help="Extract only chunk K of N of the subjects, as in 0/4.",
     )
     parser.add_argument(
         "--task",
         default=None,
         choices=["linear_probe", "native_head_eval", "attention_probe", "lstm_probe"],
-        help="Override the evaluation task (default: auto-detect from checkpoint).",
+        help="Evaluation task (default: chosen from the checkpoint).",
     )
     parser.add_argument(
         "--tune-c",
         default=None,
-        help="Comma-separated C values for LR regularization tuning (e.g. 0.001,0.01,0.1,1,10,100).",
+        help="C values to try for the logistic regression, separated by commas, as in "
+             "0.001,0.01,0.1,1,10,100.",
     )
 
 

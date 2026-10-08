@@ -21,16 +21,17 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  # The benchmark reads the authors' preprocessed file, not DREAMER.mat
-  # (upstream: where the recordings come from).
-  kind: internal
+  # DREAMER.mat, one file for valence and arousal; Zenodo grants access to it
+  # on request. `neuroatlas data prepare dreamer_arousal` builds the files
+  # the reader reads from it.
+  kind: manual
   upstream: https://zenodo.org/records/546113
-  prepared_only: >
-    bci_cognitive reads DREAMER_arousal_preprocessed_*.pkl (4 s windows at
-    128 Hz), the file the published embeddings were extracted from; the
-    authors provide it on request.
-    fix: ask the authors for DREAMER_arousal_preprocessed_*.pkl, then
-    neuroatlas config set dreamer_arousal.preprocessed_path FILE
+  note: >
+    Request access on the Zenodo record; the reader expects DREAMER.mat in
+    the dataset's folder (dreamer_valence and dreamer_arousal read the same
+    file: a copy or a link in each folder).
+  dest: ${EEG_DATA_ROOT}/dreamer_arousal
+  expect: {glob: "DREAMER.mat", count: 1}
 
 signal:
   notch_freq: 50.0
@@ -54,12 +55,34 @@ splits:
   grouping: patient
   n_folds: 5
 
+pipeline:
+  # `neuroatlas data prepare dreamer_arousal` builds the two files the reader reads
+  # (no filtering, confound filtering) from the raw data, into
+  # <cache root>/prepared/dreamer_arousal/.
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_cognitive
+    args:
+      slug: --dataset
+      raw: --raw-dir
+      out: --output
+
 runtime_defaults:
   batch_size: 64
   preprocessed_path: null              # `config set dreamer_arousal.preprocessed_path FILE`
   fold: 0
   n_folds: 5
   num_workers: 0
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_cognitive benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      reads DREAMER_arousal_preprocessed_trackD_*.pkl, the file filtered 4-40 Hz, instead of DREAMER_arousal_preprocessed_*.pkl. A file whose recorded
+      band is the other one is refused. The two are cached separately.
+    implemented_by: extensions/datasets/adapters/cognitive.py
 
 spec:
   datamodule: neuroatlas.extensions.datasets.adapters.cognitive.DreamerArousalBenchmarkDataModule
