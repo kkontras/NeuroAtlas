@@ -94,11 +94,21 @@ def resolve_num_workers(flag: Optional[int], dataset_config: Dict[str, Any]) -> 
 
     if flag is not None:
         if int(flag) < 0:
-            raise SystemExit(f"--num-workers must be 0 or more, got {flag}")
+            raise usage_error(f"--num-workers must be 0 or more, got {flag}",
+                              "neuroatlas embed --num-workers 0 (read in this process)")
         return int(flag)
     if dataset_config.get("num_workers") is not None:
         return int(dataset_config["num_workers"])
     return default_num_workers()
+
+
+def usage_error(text: str, fix: str) -> "SystemExit":
+    """A usage error from a verb: ``error:`` and ``fix:`` on stderr, exit 2
+    -- run through `neuroatlas` or as ``python -m``."""
+    from neuroatlas.cli import _msg
+
+    _msg.error(text, fix)
+    return SystemExit(2)
 
 
 def _parse_csv(value: str) -> List[str]:
@@ -137,7 +147,8 @@ def _parse_set(pairs: List[str]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for pair in pairs or []:
         if "=" not in pair:
-            raise SystemExit(f"--set expects key=value, got {pair!r}")
+            raise usage_error(f"--set expects key=value, got {pair!r}",
+                              f"neuroatlas embed --set KEY=VALUE (e.g. --set window_s=10)")
         key, _, value = pair.partition("=")
         out[key.strip()] = _coerce(value)
     return out
@@ -148,7 +159,9 @@ def _parse_checkpoints(pairs: List[str]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for pair in pairs or []:
         if "=" not in pair:
-            raise SystemExit(f"--checkpoint expects model=path, got {pair!r}")
+            raise usage_error(f"--checkpoint expects ID=PATH, got {pair!r}",
+                              f"neuroatlas embed --checkpoint ID=PATH (e.g. "
+                              f"--checkpoint biot_pretrained=/my/weights.ckpt)")
         model, _, path = pair.partition("=")
         out[model.strip()] = {"checkpoint_path": path.strip(), "status": "ready"}
     return out
@@ -157,39 +170,46 @@ def _parse_checkpoints(pairs: List[str]) -> Dict[str, Dict[str, Any]]:
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     parser = ErrorParser(
         prog="neuroatlas embed",
-        description="Extract frozen-backbone embeddings for any registered dataset.",
+        description="Extract frozen-backbone embeddings for any dataset `neuroatlas list "
+                    "datasets --all` shows.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=True),
     )
-    parser.add_argument("--dataset", help="DatasetSpec slug (see --list-datasets).")
+    parser.add_argument("--dataset", help="A dataset name (see --list-datasets).")
     parser.add_argument("-m", "--models", default=None,
                         help="An alias (all_fm, all_ts, all_supervised, all_random), a "
                              "group, a family or checkpoint ids, comma-separated; `all` "
-                             "(the default) is every checkpoint in the registry. See "
-                             "`neuroatlas list aliases`.")
+                             "(the default) is every checkpoint (`neuroatlas list models`). "
+                             "See `neuroatlas list aliases`.")
     parser.add_argument("--set", dest="overrides", action="append", metavar="KEY=VALUE",
-                        help="Dataset config override, repeatable. Merged on top of "
-                             "DatasetSpec.config_defaults (e.g. --set num_folds=10).")
-    parser.add_argument("--checkpoint", dest="checkpoints", action="append", metavar="MODEL=PATH",
-                        help="Override a model's checkpoint path, repeatable.")
-    parser.add_argument("--folds", default=None,
+                        help="Change one of the dataset's settings, repeatable: it goes on "
+                             "top of the dataset's defaults (e.g. --set window_s=10; "
+                             "`neuroatlas embed --dataset DATASET --help` lists them).")
+    parser.add_argument("--checkpoint", dest="checkpoints", action="append", metavar="ID=PATH",
+                        help="Read a checkpoint's weights from PATH instead, repeatable.")
+    parser.add_argument("--folds", default=None, metavar="FOLDS",
                         help="Comma-separated fold indices. Default: the dataset's configured "
-                             "fold only (--set fold=K; usually 0). Most datasets keep one "
-                             "cache that serves every fold, so one pass is enough. Those that "
-                             "cache per fold and split -- HMC, MESA, STAGES and HomePAP (the "
-                             "PhysioEx-format sleep cohorts), SHHS, the four bci_cognitive "
-                             "cohorts, TUAB's H5 fast path, CHB-MIT's HDF5 backend, any run "
-                             "with a stride other than the window -- need every fold the "
-                             "probe will read (`neuroatlas run` passes them).")
-    parser.add_argument("--data-root", default=None, help="Override the dataset's data root.")
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--num-workers", type=int, default=None)
-    parser.add_argument("--cache-root", default=None,
-                        help="Embedding cache root. Default: the cache_root setting "
-                             "($EEG_CACHE_ROOT), else $NEUROATLAS_HOME/artifacts/embedding_cache.")
-    parser.add_argument("--output-root", default=None,
-                        help="Run directory. Extraction writes no results here, but the "
-                             "runner creates it (default: artifacts/embeddings/<dataset>).")
+                             "fold only (--set fold=K; usually 0). Most datasets save one set "
+                             "of embeddings that serves every fold, so one pass is enough. A "
+                             "few save them per fold (HMC, MESA, STAGES, HomePAP, SHHS, the "
+                             "four bci_cognitive datasets, TUAB and CHB-MIT when read from an "
+                             "HDF5 file, and any run with a stride other than the window): "
+                             "those need every fold the probe will read (`neuroatlas run` "
+                             "passes them).")
+    parser.add_argument("--data-root", default=None, metavar="DIR",
+                        help="Read the dataset from DIR instead of its configured folder.")
+    parser.add_argument("--batch-size", type=int, default=None, metavar="N",
+                        help="Windows per batch (default: the dataset's own).")
+    parser.add_argument("--num-workers", type=int, default=None, metavar="N",
+                        help="Data-loading worker processes (default: the dataset's own, "
+                             "else the CPUs this job may use minus one, at most 16; 0 reads "
+                             "in this process).")
+    parser.add_argument("--cache-root", default=None, metavar="DIR",
+                        help="Where the embeddings are written. Default: the cache_root "
+                             "setting ($EEG_CACHE_ROOT), else "
+                             "$NEUROATLAS_HOME/artifacts/embedding_cache.")
+    # extraction writes nothing there: kept for command lines that pass it
+    parser.add_argument("--output-root", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--limit-batches", type=int, default=None, metavar="N",
                         help="Stop each extraction after N batches: a smoke test. Writes to "
                              "a cache of its own, <cache root>/_limited, so a later full "
@@ -198,21 +218,20 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
                         help="Extract subject chunk K of N for parallel jobs, e.g. '0/4'. "
                              "Chunks are merged automatically on the first read, so no "
                              "separate merge step is needed.")
-    parser.add_argument("--expected-epoch-seconds", type=float, default=None,
-                        help="Override each selected checkpoint's expected epoch length. "
-                             "This is the model-to-data contract: a backbone trained on "
-                             "30 s epochs fed 10 s windows will extract, and be wrong. "
-                             "Every epilepsy launcher sets it, which is why it is here "
-                             "and not in --set (it belongs to the checkpoint, not the "
-                             "dataset).")
+    parser.add_argument("--expected-epoch-seconds", type=float, default=None, metavar="S",
+                        help="The window length, in seconds, each selected checkpoint is "
+                             "told it receives (the epilepsy benchmark passes 10). Without "
+                             "it, each checkpoint expects its own window length.")
     # No --device: the per-dataset extractors had one, but nothing in the
     # unified runner reads such a key, so the flag would be accepted and
     # silently ignored. Device selection is `cuda` when available else `cpu`;
     # pin a GPU with CUDA_VISIBLE_DEVICES, which the schedulers already set.
     parser.add_argument("--no-recording-norm", action="store_true",
-                        help="Disable per-recording normalization (BIOT q95, REVE z-score).")
+                        help="An ablation: no per-recording normalisation (BIOT's 95th "
+                             "percentile, REVE's z-score). Not the benchmark's protocol.")
     parser.add_argument("--no-amplitude-scale", action="store_true",
-                        help="Disable fixed amplitude scaling (EEGPT x1000, LaBraM /100, etc.).")
+                        help="An ablation: no fixed amplitude scaling (EEGPT x1000, LaBraM "
+                             "/100, ...). Not the benchmark's protocol.")
     parser.add_argument("--pooling", choices=["mean", "per_patch"], default="mean",
                         help="What a backbone hands back for each window (the "
                              "window itself is set by --set window_s/stride_s). "
@@ -220,16 +239,14 @@ def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
                              "window's patch tokens. per_patch: that window's "
                              "tokens kept separate. Cached separately, so both "
                              "can coexist.")
-    parser.add_argument("--seed", type=int, default=42, help="Global random seed.")
+    parser.add_argument("--seed", type=int, default=42, metavar="N",
+                        help="Global random seed.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the resolved config as JSON and exit without extracting. "
-                             "Used by the config-parity tests.")
+                        help="Print the resolved settings as JSON and exit without extracting.")
     parser.add_argument("--list-datasets", action="store_true",
-                        help="List registered dataset slugs and exit.")
+                        help="List every dataset name and exit.")
     parser.add_argument("--paper-only", action="store_true",
-                        help="With --list-datasets, show only the cohorts the paper "
-                             "reports (excludes the ~150 additionally-loadable MOABB "
-                             "datasets).")
+                        help="With --list-datasets, only the datasets the paper evaluates.")
     return parser
 
 
@@ -248,10 +265,10 @@ def _list_datasets(*, paper_only: bool = False) -> None:
         rows.append((spec.slug, manifest.get("domain", "-"),
                      "paper" if in_paper else "", spec.description))
     width = max((len(r[0]) for r in rows), default=20)
+    print(f"{'dataset':<{width}}  {'domain':<10} {'paper':<6} about")
     for slug, domain, flag, description in rows:
-        print(f"{slug:<{width}}  {domain:<10} {flag:<6} {description}")
-    print(f"\n{len(rows)} datasets"
-          f"{' in the paper' if paper_only else ' registered'}")
+        print(f"{slug:<{width}}  {domain:<10} {'yes' if flag else '':<6} {description}")
+    print(f"\n{len(rows)} datasets" + (" in the paper" if paper_only else ""))
 
 
 def _resolve_dataset(slug: str):
@@ -279,7 +296,7 @@ def _resolve_dataset(slug: str):
         near = near or difflib.get_close_matches(slug, slugs, n=5, cutoff=0.6)
         if near and "--dataset" not in message:
             message += " (did you mean " + ", ".join(near) + "?)"
-        raise SystemExit(f"error: {message}\nfix: neuroatlas embed --list-datasets names them all")
+        raise usage_error(message, "neuroatlas list datasets --all (names every one)")
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, Any]:
@@ -408,7 +425,8 @@ def main(argv: List[str] | None = None) -> None:
 
     from neuroatlas.entrypoints._common import report_results
 
-    if report_results("embed", results, f"cache: {benchmark['cache_root']}"):
+    if report_results("embed", results, f"embeddings in {benchmark['cache_root']}",
+                      extraction=True):
         sys.exit(1)
 
 

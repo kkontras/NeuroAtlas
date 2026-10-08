@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-DATA_ROOT = Path("${EEG_DATA_ROOT}/Epillepsie")
+DATA_ROOT = Path("${EEG_DATA_ROOT}/epilepsiae")
 ANNOTATION_DIR = DATA_ROOT / "Annotation"
 
 VARIANTS = ("surf30", "surfPA", "surfCO")

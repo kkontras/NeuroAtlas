@@ -51,10 +51,23 @@ def peek_dataset(argv: Optional[Sequence[str]]) -> Optional[str]:
 def _datamodule_class(spec) -> Optional[type]:
     """Resolve the datamodule class behind a spec's factory.
 
-    The factories are ``def _create_x(**config): from .adapters.x import C;
-    return C(**config)`` — the import is deliberately lazy, so the class is
-    found by reading that import rather than by calling the factory.
+    A dataset declared by its manifest names its class there
+    (``spec.datamodule``, a dotted path). The other factories are ``def
+    _create_x(**config): from .adapters.x import C; return C(**config)`` --
+    the import is deliberately lazy, so the class is found by reading that
+    import rather than by calling the factory.
     """
+    import importlib
+
+    dotted = ((spec.manifest or {}).get("spec") or {}).get("datamodule")
+    if dotted:
+        module_path, _, attr = str(dotted).rpartition(".")
+        try:
+            candidate = getattr(importlib.import_module(module_path), attr, None)
+        except Exception:
+            candidate = None
+        if isinstance(candidate, type):
+            return candidate
     try:
         source = textwrap.dedent(inspect.getsource(spec.datamodule_cls))
         tree = ast.parse(source)
@@ -69,8 +82,6 @@ def _datamodule_class(spec) -> Optional[type]:
         package = module_name.rsplit(".", 1)[0] if module_name else ""
         dotted = ("." * node.level) + (node.module or "")
         try:
-            import importlib
-
             mod = importlib.import_module(dotted, package=package) if node.level \
                 else importlib.import_module(node.module)
             candidate = getattr(mod, target, None)
@@ -86,15 +97,15 @@ def dataset_set_keys(spec) -> Tuple[List[Tuple[str, Any]], Optional[str]]:
 
     Union of the manifest's ``runtime_defaults`` and the datamodule's
     ``__init__`` signature; the signature is authoritative because it is what
-    raises on an unknown key.  Returns ``(pairs, note)`` where *note* explains
-    any shortfall.
+    raises on an unknown key.  Returns ``(pairs, note)``: *note* is set when
+    the list is the dataset's defaults only (its class takes any key, or is
+    not found), and says so in the header the help prints.
     """
     defaults: Dict[str, Any] = dict(spec.config_defaults)
     cls = _datamodule_class(spec)
     note = None
     if cls is None:
-        note = ("could not introspect the datamodule; showing the manifest's "
-                "runtime_defaults only")
+        note = "defaults"
         keys = sorted(defaults)
     else:
         try:
@@ -105,7 +116,7 @@ def dataset_set_keys(spec) -> Tuple[List[Tuple[str, Any]], Optional[str]]:
                     if name != "self" and p.kind not in
                     (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
         if not accepted:
-            note = "datamodule takes **kwargs; showing the manifest's defaults"
+            note = "defaults"
             keys = sorted(defaults)
         else:
             keys = sorted(set(accepted) | set(defaults))
@@ -145,6 +156,10 @@ def dataset_options(spec) -> Dict[str, List[str]]:
     return {key: values for key, values in out.items() if key in accepted}
 
 
+#: Keys the help does not list: settings with one value the user never
+#: chooses (the PhysioEx readers' preprocessing pipeline name).
+_HIDDEN_KEYS = frozenset({"pipeline_name"})
+
 def _format_default(value: Any) -> str:
     if value is None:
         return ""
@@ -162,21 +177,21 @@ def dataset_section(slug: str) -> List[str]:
         from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
 
         near = [s.slug for s in dataset_specs() if slug.lower() in s.slug.lower()][:8]
-        lines = [f"dataset {slug!r} is not registered."]
+        lines = [f"no dataset named {slug!r}."]
         if near:
             lines += ["", "did you mean:"] + _wrap(near)
-        lines += ["", "run with --list-datasets to see them all."]
+        lines += ["", "`neuroatlas list datasets --all` names them all."]
         return lines
 
     manifest = spec.manifest or {}
     lines = [f"dataset: {slug}"]
     if manifest.get("name"):
-        lines.append(f"{_INDENT}{manifest['name']}"
-                     f"  [{manifest.get('domain', '?')}"
-                     f"{', in the paper' if manifest.get('paper_dataset') else ''}]")
+        tags = [t for t in (manifest.get("domain"),
+                            "in the paper" if manifest.get("paper_dataset") else None) if t]
+        lines.append(f"{_INDENT}{manifest['name']}" + (f"  [{', '.join(tags)}]" if tags else ""))
     acq = manifest.get("acquisition") or {}
     if acq.get("kind"):
-        lines.append(f"{_INDENT}source: {acq.get('kind', '?')}"
+        lines.append(f"{_INDENT}source: {acq['kind']}"
                      f"{' ' + str(acq.get('ref')) if acq.get('ref') else ''}")
     lines.append(f"{_INDENT}default task: {spec.default_task}")
 
@@ -197,26 +212,25 @@ def dataset_section(slug: str) -> List[str]:
 
     also = list((labels.get("also_implemented") or []))
     if also:
-        lines += [f"{_INDENT * 2}also implemented but not used by any shipped "
-                  f"config — see the manifest:"] + _wrap(also, indent=_INDENT * 3)
+        lines += [f"{_INDENT * 2}also in the reader, not used by any benchmark:"] \
+            + _wrap(also, indent=_INDENT * 3)
 
     splits = manifest.get("splits") or {}
     if splits.get("n_folds"):
-        source = ("frozen in " + str(splits["manifest"])) if splits.get("manifest") \
-            else "derived at load time (no fold file)"
-        lines += ["", f"  splits: {splits['n_folds']} folds, grouped by "
-                      f"{splits.get('grouping', '?')}; {source}"]
-        if splits.get("derivation"):
-            lines += textwrap.wrap(" ".join(str(splits["derivation"]).split()),
-                                   width=88, initial_indent=_INDENT * 2,
-                                   subsequent_indent=_INDENT * 2)
+        by = f" by {splits['grouping']}" if splits.get("grouping") else ""
+        # (how the folds were made is in the dataset's manifest, for whoever
+        # maintains them; the help says only what a user relies on)
+        source = ("fixed by a fold file that ships with neuroatlas"
+                  if splits.get("manifest") else "drawn from the data when it is read")
+        lines += ["", f"  splits: {splits['n_folds']} folds{by}, {source}"]
 
     backends = manifest.get("backends") or {}
     if backends:
         lines += ["", "  backends (--set backend=...):"]
         for name, block in backends.items():
             block = block or {}
-            lines.append(f"{_INDENT * 2}{name:<6} reads {block.get('reads', '?')}")
+            reads = f" reads {block['reads']}" if block.get("reads") else ""
+            lines.append(f"{_INDENT * 2}{name:<6}{reads}".rstrip())
             # The --set table below is the DEFAULT backend's. Say which keys
             # each other backend adds and which it refuses, or a user reads the
             # table as if it applied to all of them.
@@ -233,11 +247,14 @@ def dataset_section(slug: str) -> List[str]:
                 lines.append(f"{_INDENT * 3}ignores: {', '.join(gone)}")
 
     pairs, note = dataset_set_keys(spec)
+    # settings the user does not choose between (an internal pipeline name)
+    pairs = [(key, default) for key, default in pairs if key not in _HIDDEN_KEYS]
     options = dataset_options(spec)
-    lines += ["", f"  --set keys accepted by {slug}"
-                  "  (default, then the allowed values where the code enforces a set):"]
     if note:
-        lines.append(f"{_INDENT * 2}note: {note}")
+        lines += ["", f"  --set keys accepted by {slug} (the dataset's defaults):"]
+    else:
+        lines += ["", f"  --set keys accepted by {slug} (default value; the allowed values "
+                      "where there is a fixed set):"]
     width = max((len(k) for k, _ in pairs), default=10)
     pad = _INDENT * 2
     for key, default in pairs:
@@ -261,30 +278,39 @@ def dataset_section(slug: str) -> List[str]:
 
 
 def overview_section(*, show_models: bool = True) -> List[str]:
-    """The bare ``--help`` block: datasets by domain, tasks, models."""
+    """The bare ``--help`` block: the paper's datasets by domain, the others,
+    and -- for the commands that take them (``show_models``: embed and
+    probe) -- the tasks, presets and models."""
     from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
 
     specs = list(dataset_specs())
     by_domain: Dict[str, List[str]] = {}
+    others: List[str] = []
     generated = 0
     for spec in specs:
         manifest = spec.manifest or {}
         domain = manifest.get("domain")
         if not domain:
             generated += 1
-            continue
-        by_domain.setdefault(domain, []).append(spec.slug)
+        elif manifest.get("paper_dataset"):
+            by_domain.setdefault(domain, []).append(spec.slug)
+        else:
+            others.append(spec.slug)
 
-    lines = ["datasets (--dataset):"]
+    n_paper = sum(len(v) for v in by_domain.values())
+    lines = [f"the paper's datasets (--dataset), {n_paper}:"]
     for domain in sorted(by_domain):
         slugs = sorted(by_domain[domain])
         lines.append(f"{_INDENT}{domain} ({len(slugs)}):")
         lines += _wrap(slugs, indent=_INDENT * 2)
-    if generated:
-        lines.append(f"{_INDENT}additionally loadable, not in the paper: "
-                     f"{generated} MOABB datasets")
-    lines.append(f"{_INDENT}--list-datasets shows all {len(specs)}; "
-                 "--list-datasets --paper-only shows the paper's cohorts")
+    if others or generated:
+        also = sorted(others) + ([f"{generated} MOABB datasets"] if generated else [])
+        text = ", ".join(also[:-1]) + (" and " if len(also) > 1 else "") + also[-1]
+        lines += textwrap.wrap(f"also readable, not in the paper: {text}", width=78,
+                               initial_indent=_INDENT, subsequent_indent=_INDENT * 2)
+    lines.append(f"{_INDENT}`neuroatlas list datasets --all` lists all {len(specs)}")
+    if not show_models:
+        return lines
 
     try:
         from neuroatlas.entrypoints.probe import available_tasks
@@ -294,7 +320,7 @@ def overview_section(*, show_models: bool = True) -> List[str]:
         lines += _wrap(sorted(s.slug for s in task_specs()))
         presets = available_tasks()
         if presets:
-            lines += [f"{_INDENT}presets in src/neuroatlas/configs/tasks/:"]
+            lines += [f"{_INDENT}task presets:"]
             lines += _wrap(presets, indent=_INDENT * 2)
     except Exception:
         pass
@@ -308,8 +334,8 @@ def overview_section(*, show_models: bool = True) -> List[str]:
         except Exception:
             pass
 
-    lines += ["", "for one dataset's --set keys and label modes:",
-              f"{_INDENT}... --dataset <slug> --help"]
+    lines += ["", "for one dataset's --set keys and label modes, add --dataset DATASET --help:",
+              f"{_INDENT}neuroatlas embed --dataset hmc --help"]
     return lines
 
 

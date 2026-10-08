@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
-from tqdm.auto import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--data-root",
-                   default="${EEG_DATA_ROOT}/Epillepsie",
+                   default="${EEG_DATA_ROOT}/epilepsiae",
                    help="Root of the raw EPILEPSIAE corpus.")
     p.add_argument("--cache-root", required=True,
                    help="Output directory. One subdir per (subject_id, rec_id).")
@@ -200,7 +199,7 @@ def main(argv: List[str] | None = None) -> int:
         patients = _shard_patients(patients, args.num_shards, args.shard_index)
 
     if not patients:
-        logger.warning("No patients to preprocess.")
+        logger.warning("epilepsiae: no patient to prepare in this shard")
         return 0
 
     # Instantiate the on-the-fly Dataset purely to reuse its block loader
@@ -220,13 +219,20 @@ def main(argv: List[str] | None = None) -> int:
         target_fs=args.target_fs,
     )
 
+    from neuroatlas import progress
+
     built = skipped = 0
-    for rec in tqdm(ds._recordings, desc="preprocess epilepsiae"):
+    # on the live line of `neuroatlas data prepare` (nothing when run on its own)
+    item = progress.current().phase("preparing recordings", total=len(ds._recordings),
+                                    unit="recordings")
+    for rec in ds._recordings:
         if _preprocess_recording(rec, ds, cache_root, args.force):
             built += 1
         else:
             skipped += 1
-    logger.info("Done. built=%d skipped=%d total=%d", built, skipped, built + skipped)
+        item.update(advance=1)
+    logger.info("epilepsiae: %d recordings prepared, %d already there (%d in all)",
+                built, skipped, built + skipped)
     return 0
 
 

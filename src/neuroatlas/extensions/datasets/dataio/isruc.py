@@ -64,7 +64,7 @@ ISRUC_STAGES_MAP: Dict[int, int] = {0: 0, 1: 1, 2: 2, 3: 3, 5: 4}
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/isruc"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/isruc"
 
 ISRUC_NATIVE_EPOCH = 30
 ISRUC_SUBGROUPS: Tuple[str, str, str] = ("I", "II", "III")

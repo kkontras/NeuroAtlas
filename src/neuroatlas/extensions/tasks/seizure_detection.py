@@ -27,6 +27,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
+from neuroatlas import progress
 from neuroatlas.benchmarking_helpers import (
     BenchmarkFailure,
     BenchmarkResult,
@@ -51,6 +52,18 @@ def _filter_unlabeled(features: np.ndarray, labels: np.ndarray, metadata: list):
     return features[mask], labels[mask], [metadata[i] for i in range(len(metadata)) if mask[i]]
 
 
+def _one_class_text(split: str, fold, labels) -> str:
+    """Why a fold cannot be scored: its *split* has no labelled window, or
+    windows of one class only."""
+    which = f"fold {fold}'s {split} split" if fold is not None else f"the {split} split"
+    labels = np.asarray(labels)
+    if not len(labels):
+        return f"{which} has no labelled windows, so seizure detection cannot be scored"
+    missing = "no seizure" if int(labels[0]) == 0 else "no seizure-free window"
+    return (f"{which} has windows of one class only ({len(labels):,} windows, {missing}): "
+            f"AUROC and AUPRC are undefined")
+
+
 def _filter_nonfinite(features: np.ndarray, labels: np.ndarray, metadata: list, split_name: str):
     """Drop rows whose feature vector contains NaN or Inf.
 
@@ -62,9 +75,11 @@ def _filter_nonfinite(features: np.ndarray, labels: np.ndarray, metadata: list, 
     finite_mask = np.isfinite(features).all(axis=1)
     n_dropped = int((~finite_mask).sum())
     if n_dropped > 0:
+        from neuroatlas.benchmarking_helpers.runtime.pair import where
+
         logger.warning(
-            "dropped %d non-finite feature rows from %s (kept %d)",
-            n_dropped, split_name, int(finite_mask.sum()),
+            "%s: %s of %s %s windows have non-finite embeddings and are left out of the probe",
+            where("seizure detection"), f"{n_dropped:,}", f"{len(features):,}", split_name,
         )
     return (
         features[finite_mask],
@@ -349,8 +364,11 @@ def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         # Every `neuroatlas run epilepsy` hands the probe command's default
         # here, and keeping the protocol's value is what should happen: detail
         # for -v and the --log file, not a warning on every run.
-        logger.info("max_iter %s is the probe command's default; seizure detection keeps "
-                    "its protocol's %s (--max-iter N changes it)", max_iter, PAPER_MAX_ITER)
+        from neuroatlas import quiet
+
+        # said once per command (the settings are resolved more than once)
+        quiet.warn_once(logger, "seizure max_iter", "seizure detection uses the protocol's "
+                        "max_iter %s", PAPER_MAX_ITER, level=logging.INFO)
         notes.append(f"max_iter {max_iter} is the probe command's default; seizure detection "
                      f"keeps its protocol's {PAPER_MAX_ITER} (--max-iter N changes it)")
         max_iter = PAPER_MAX_ITER
@@ -359,9 +377,13 @@ def probe_settings(probe_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if max_iter < 1:
         raise ProbeSettingsError(f"--max-iter must be 1 or more, got {max_iter}")
 
+    # the probe command's defaults, replaced by the protocol's: detail for -v
+    # and --log (a `neuroatlas run` passes the protocol's values itself)
     for note in notes:
         if not note.startswith("max_iter"):
-            logger.warning(note)
+            from neuroatlas import quiet
+
+            quiet.warn_once(logger, f"seizure note: {note}", "%s", note, level=logging.INFO)
     return {"c_values": c_values, "class_weight": class_weight,
             "selection_metric": metric, "max_iter": max_iter, "notes": notes}
 
@@ -423,6 +445,8 @@ def _global_payload(cache_root, dataset_name, checkpoint_spec, backbone, datamod
         cache_root, dataset_name, checkpoint_spec, "all", datamodule, purpose="global_embeddings",
     )
     if cache_exists(global_dir):
+        if load:
+            progress.current().phase("reading the embeddings")
         return (load_embedding_payload(global_dir, mmap_mode="r") if load else None,
                 {"cache_dir": str(global_dir), "cache_hit": True})
     if embed_chunk is not None:
@@ -654,12 +678,16 @@ def evaluate_seizure_detection(
         cache_paths.update({f"global_{k}": v for k, v in full_paths.items()})
         if extract_only or full_payload is None:
             return _extract_only(dataset_name, checkpoint_spec, datamodule, backbone, cache_paths)
+        progress.current().phase("cutting this fold's split")
         splits = datamodule.split_global_embedding_payload(full_payload)
         train_payload, val_payload, test_payload = splits["train"], splits["val"], splits["test"]
     else:
         if embed_chunk is not None:
-            logger.warning("%s has no global embedding cache: --embed-chunk is ignored",
-                           dataset_name)
+            from neuroatlas import quiet
+
+            quiet.warn_once(logger, f"embed-chunk:{dataset_name}",
+                            "%s has no global embedding cache: --embed-chunk is ignored",
+                            dataset_name)
         payloads = {}
         for split in ("train", "val", "test"):
             payloads[split], paths = _split_payload(
@@ -692,11 +720,12 @@ def evaluate_seizure_detection(
 
     # Drop rows with non-finite features (rare backbone numerical blowups).
     train_x, train_y, train_meta = _filter_nonfinite(train_x, train_y, train_meta, "train")
-    val_x, val_y, val_meta = _filter_nonfinite(val_x, val_y, val_meta, "val")
+    val_x, val_y, val_meta = _filter_nonfinite(val_x, val_y, val_meta, "validation")
     test_x, test_y, test_meta = _filter_nonfinite(test_x, test_y, test_meta, "test")
 
     # Check we have labeled data
-    for split_name, y_arr in [("train", train_y), ("val", val_y), ("test", test_y)]:
+    fold = (getattr(datamodule, "metadata", None) or {}).get("fold")
+    for split_name, y_arr in [("train", train_y), ("validation", val_y), ("test", test_y)]:
         if len(y_arr) == 0 or len(np.unique(y_arr)) < 2:
             return BenchmarkResult(
                 checkpoint_id=checkpoint_spec.identifier,
@@ -704,9 +733,10 @@ def evaluate_seizure_detection(
                 evaluation_mode="seizure_detection_eval",
                 failure=BenchmarkFailure(
                     code="NO_LABELED_DATA",
-                    message=f"Insufficient labeled data in {split_name} split "
-                            f"(n={len(y_arr)}, unique={len(np.unique(y_arr)) if len(y_arr) else 0}).",
+                    message=_one_class_text(split_name, fold, y_arr),
                 ),
+                metadata={"task_name": "seizure_detection",
+                          **({"fold": fold} if fold is not None else {})},
             )
 
     # Extract per-window recording_ids from metadata for per-recording event grouping
@@ -779,6 +809,7 @@ def evaluate_seizure_detection(
                 "n_val": probe_result["n_val"],
             },
             score={"seconds_per_window": seconds, "event_not_applicable": reason}))
+    progress.current().phase("scoring")
     metrics, _saved, path = preds.finalize(record, probe_dir, score)
     if path is not None:
         cache_paths["predictions"] = str(path)
@@ -816,9 +847,9 @@ TASK_SPECS = [
     TaskSpec(
         slug="seizure_detection",
         description=(
-            "Seizure detection evaluation: extract embeddings, fit balanced "
-            "LogisticRegression with C-grid on dev AUPRC, report the event-level "
-            "Sens@FA AUC, AUROC/AUPRC/F1/sensitivity-at-FPR and event-overlap metrics."
+            "Seizure detection (App. C.1): a class-balanced logistic regression per "
+            "window, C chosen on validation AUPRC; scored by event-level Sens@FA AUC, "
+            "AUROC and AUPRC."
         ),
         evaluator=evaluate_seizure_detection,
         score=score,

@@ -31,12 +31,17 @@ def _create_tusz_datamodule(**config):
     name = config.pop("backend", "hdf5")
     if name not in backends:
         raise ValueError(
-            f"Unknown TUSZ backend {name!r}. Expected one of "
-            f"{', '.join(sorted(backends))} — see src/neuroatlas/configs/cohorts/tusz/cohort.yaml."
+            f"tusz has no backend {name!r}; its backends: {', '.join(sorted(backends))}"
         )
     for key in backends[name].get("unsupported") or ():
         config.pop(key, None)
-    config = {**(backends[name].get("defaults") or {}), **config}
+    # The backend's own defaults (the EDF backend's raw_root) are written
+    # against ${EEG_DATA_ROOT} like every other default, and are expanded the
+    # same way; what the caller passed is expanded already.
+    from neuroatlas.entrypoints._common import expand_dataset_paths
+
+    defaults = expand_dataset_paths(dict(backends[name].get("defaults") or {}))
+    config = {**defaults, **config}
 
     if name == "edf":
         from .adapters.tusz_edf import TUSZEDFDirectDataModule

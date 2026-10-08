@@ -14,9 +14,9 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  PhysioNet Challenge 2026 PSG adapter — sleep staging, arousals,
-  respiratory events, limb movements, and cognitive impairment
-  classification from 3 US sites (622 recordings, training set).
+  George B. Moody PhysioNet Challenge 2026 PSG (training set: 622 recordings
+  from 3 US sites): sleep stages, microarousals, respiratory events, limb
+  movements and cognitive impairment.
 
 cohort:
   centre: PhysioNet Challenge 2026
@@ -70,7 +70,7 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/raw/physionetchallenge2026data/training_set"
+  data_root: "${EEG_DATA_ROOT}/physionet2026"
   label_mode: sleep_stage
   num_folds: 5
   signal_kind: raw

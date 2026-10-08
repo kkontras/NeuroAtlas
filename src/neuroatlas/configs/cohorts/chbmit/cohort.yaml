@@ -29,7 +29,7 @@ cohort:
                                             # intended single source once
                                             # pipelines/_make_pipeline stops
                                             # hardcoding 50 Hz.
-  n_subjects: 23                            # description + configs/dataset_paths_sofia.yaml:58
+  n_subjects: 23                            # description
   hours: 982                                # description
   seizures: 198                             # description
   population: paediatric
@@ -101,7 +101,7 @@ pipeline:
 
 runtime_defaults:                           # -> DatasetSpec.config_defaults, unchanged
   backend: bids
-  bids_root: ${EEG_DATA_ROOT}/chbmit/BIDS_CHB-MIT
+  bids_root: ${EEG_DATA_ROOT}/chbmit
   cache_root: ${EEG_CACHE_ROOT}/prepared/chbmit
   fold: 0
   n_folds: 5
@@ -153,12 +153,5 @@ provenance:
     - src/neuroatlas/entrypoints/embed_chbmit_siena.py        # seizure-type rule, BIDS root
     - src/neuroatlas/entrypoints/cache_recording_stats_simple.py  # stats strategy
     - src/neuroatlas/configs/folds/chbmit.json                                  # -> folds.json
-    - configs/dataset_paths_sofia.yaml                           # n_subjects
     - the download script (no longer shipped)                            # acquisition
     - the download script (no longer shipped)                          # cache layout
-  known_issues:
-    - "No channel map: src/neuroatlas/configs/channel_maps/chbmit.yaml does not exist, unlike
-       siena/tuab/tusz. Vocabulary-strict wrappers therefore receive the raw
-       bipolar labels."
-    - "Window size disagrees between embed_chbmit_siena.py (30 s) and
-       embed_chbmit_siena_sharded.py (2 s / 1 s) — audit OQ-11.4."

@@ -14,7 +14,8 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Danish Center for Sleep Medicine (DCSM) benchmark adapter.
+  DCSM Sleep Staging Dataset (Danish Center for Sleep Medicine): clinical
+  PSG scored for sleep stages.
 
 cohort:
   centre: "Danish Center for Sleep Medicine, Denmark"
@@ -55,7 +56,7 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/raw/dcsm/data/sleep/DCSM"
+  data_root: "${EEG_DATA_ROOT}/dcsm"
   num_folds: 5
   signal_kind: raw
 

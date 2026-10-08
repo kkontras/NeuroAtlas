@@ -139,7 +139,7 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
             get_moabb_subjects,
             load_and_preprocess_moabb,
         )
-        from neuroatlas.extensions.datasets.dataio.bci import get_subject_split
+        from neuroatlas.extensions.datasets.dataio.bci import get_subject_split, resolve_n_folds
 
         cfg = MOABB_DATASETS[slug]
         subjects = list(subject_ids) if subject_ids is not None else get_moabb_subjects(cfg)
@@ -157,7 +157,10 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
             "channel_policy": ["eeg"],
             "signal_kind": "raw",
             "fold": fold,
-            "n_folds": n_folds,
+            # "loso" as the fold count it means (one per subject), which the
+            # results read as the protocol's folds (a 1-fold --debug run reads
+            # "LOSO 1/9"); not part of the global cache key (cache_context)
+            "n_folds": resolve_n_folds(n_folds, len(subjects)) if isinstance(n_folds, str) else n_folds,
             "n_channels": cfg.n_channels,
             "sfreq": cfg.resample_sfreq,
             "sampling_rate": float(cfg.resample_sfreq),
@@ -260,9 +263,13 @@ class MOABBBenchmarkDataModule(BenchmarkDataModule):
         for split, members in self._split_subjects.items():
             keep = np.flatnonzero(np.isin(subject, members))
             if keep.size == 0:
+                who = ", ".join(str(m) for m in members)
                 raise ValueError(
-                    f"{self._slug}: no embedding rows for the {split} subjects {members} "
-                    f"(fold {self.metadata.get('fold')}, n_folds {self.metadata.get('n_folds')})."
+                    f"the embeddings hold no trials of "
+                    f"subject{'s' if len(members) > 1 else ''} {who}, the "
+                    f"{ {'val': 'validation'}.get(split, split)} "
+                    f"subject{'s' if len(members) > 1 else ''} of fold "
+                    f"{self.metadata.get('fold')}."
                 )
             out[split] = EmbeddingPayload(
                 features=payload.features[keep],

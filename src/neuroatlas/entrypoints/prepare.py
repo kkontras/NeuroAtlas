@@ -1,13 +1,16 @@
-"""Build a dataset's cache — the optional step between `data download` and `run`.
+"""Build a dataset's prepared file: an optional step between `data download` and `run`.
 
-Most cohorts do not need this.  Every sleep and brain-age dataset reads its
-raw corpus directly, and so do the epilepsy ones: `chbmit` and `siena` read
+No dataset of the paper needs it. Every sleep and brain-age dataset reads its
+raw data directly, and so do the epilepsy ones: `chbmit` and `siena` read
 BIDS, `sz1`, `sz2` and `tusz` read EDF, `tuab` reads EDF, `bonn` reads its
-plain-text clips.  For those, a prebuilt cache is a speed optimisation for
-large sweeps and nothing else -- `embed` works without it.
-
-The exception is BCI, where MOABB has to download and epoch the corpus before
-anything can read it.  There, `prepare` is required.
+plain-text clips. For five of them (bonn, epilepsiae, sz1, tuab, tusz) a
+prepared file is a speed-up for large sweeps and nothing else -- `embed`
+works without it. The BCI datasets load through MOABB's own reader; the
+pickle the five motor-imagery builders write (bnci2014_001, bnci2014_004,
+bnci2015_001, shin2017a, weibo2014) is not read by `run` (``required: false``
+in their manifests; :func:`neuroatlas.catalog.prepare_required`). The four
+bci_cognitive datasets read a prepared file nothing here builds: it comes
+from the authors.
 
 It dispatches on ``pipeline.preprocessor`` in the dataset manifest, which
 records the builder module and which of its flags take the raw corpus and the
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,6 +45,8 @@ from neuroatlas.entrypoints._common import (
     expand_dataset_paths,
     parse_embed_chunk,
 )
+
+logger = logging.getLogger(__name__)
 
 # Keys a manifest may use for the raw corpus, most specific first.
 _RAW_KEYS = ("raw_dir", "raw_root", "bids_root", "data_root")
@@ -66,9 +72,9 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     block = builder_for(slug)
     if block is None:
         raise SystemExit(
-            f"error: {slug} has no build step: `neuroatlas run <benchmark> --dataset {slug}` "
-            f"reads its raw data directly\n"
-            f"fix: neuroatlas data status {slug} says whether that is here"
+            f"error: {slug} has no build step: `neuroatlas run {_benchmark_of(slug)} "
+            f"--dataset {slug}` reads its data as it is\n"
+            f"fix: neuroatlas data status {slug} (whether that is here)"
         )
     args = block.get("args") or {}
     spec = _spec(slug)
@@ -92,9 +98,11 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     if "raw" in args:
         raw = next((defaults[k] for k in _RAW_KEYS if defaults.get(k)), None)
         if not raw:
+            # the key its manifest names for the raw data (set, but empty)
+            key = next((k for k in _RAW_KEYS if k in defaults), _RAW_KEYS[0])
             raise SystemExit(
-                f"error: {slug}: no raw data path in its manifest "
-                f"(looked for {', '.join(_RAW_KEYS)})\nfix: --set raw_root=DIR"
+                f"error: {slug}: no raw data folder is set for it\n"
+                f"fix: neuroatlas config set {slug}.{key} DIR"
             )
         argv += [args["raw"], str(raw)]
     out = dest or next((defaults[k] for k in _OUT_KEYS if defaults.get(k)), None)
@@ -118,8 +126,8 @@ def build_argv(slug: str, overrides: Dict[str, Any],
         shard_args = block.get("shard")
         if not shard_args:
             raise SystemExit(
-                f"error: {slug}'s builder does not support sharding "
-                f"(no pipeline.preprocessor.shard in its manifest)"
+                f"error: {slug} cannot be built in shards\n"
+                f"fix: neuroatlas data prepare {slug} (without --shard)"
             )
         index, count = shard
         argv += [shard_args["index"], str(index), shard_args["count"], str(count)]
@@ -133,31 +141,67 @@ def build_argv(slug: str, overrides: Dict[str, Any],
     return argv
 
 
+def _benchmark_of(slug: str) -> str:
+    """A benchmark that runs *slug* (the first, when several do), for a hint."""
+    try:
+        from neuroatlas import catalog
+
+        # a benchmark of its own (not one derived from another's results)
+        names = [n for n in catalog.benchmarks_using(slug) if not catalog.load(n).derived_from]
+    except Exception:
+        names = []
+    return names[0] if names else "BENCHMARK"
+
+
+def _flag_value(argv: List[str], flag: Optional[str]) -> Optional[str]:
+    """The value after *flag* in a builder's arguments."""
+    if flag and flag in argv:
+        i = argv.index(flag)
+        return argv[i + 1] if i + 1 < len(argv) else None
+    return None
+
+
+def describe(slug: str, builder_argv: List[str]) -> str:
+    """What a build does, in words: ``bonn's prepared file at /x.h5 from /raw``."""
+    args = (builder_for(slug) or {}).get("args") or {}
+    raw = _flag_value(builder_argv, args.get("raw"))
+    out = _flag_value(builder_argv, args.get("out"))
+    source = raw or ("its MOABB data" if "slug" in args else None)
+    text = f"{slug}'s prepared file"
+    if out:
+        text += f" at {out}"
+    if source:
+        text += f" from {source}"
+    return text
+
+
 def build_parser(argv: Optional[List[str]] = None) -> argparse.ArgumentParser:
     from neuroatlas.entrypoints import _help
 
     parser = ErrorParser(
         prog="neuroatlas prepare",
-        description="Build a dataset's optional cache: a fast path for a few "
-                    "epilepsy cohorts, or dataio/bci.py's pickle for five MOABB "
-                    "motor-imagery ones, which `embed` does not read.",
+        description="Build a faster-to-read copy of bonn, epilepsiae, sz1, tuab or tusz "
+                    "(optional: every benchmark runs without it). `neuroatlas data "
+                    "prepare` is the same, and refuses until the raw data is there; it "
+                    "writes under <cache root>/prepared.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help.build_epilog(argv, show_models=False),
     )
-    parser.add_argument("--dataset", help="DatasetSpec slug.")
+    parser.add_argument("--dataset", help="A dataset name, as `neuroatlas list datasets` "
+                                           "shows it.")
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="KEY=VALUE",
                         help="Override a dataset config key, e.g. --set raw_root=/data.")
     parser.add_argument("--dest", default=None,
-                        help="Where the cache is written. Default: the manifest's "
-                             "cache_root.")
+                        help="Where the prepared file is written. Default: under "
+                             "<cache root>/prepared.")
     parser.add_argument("--shard", default=None, metavar="K/N",
                         help="Build shard K of N, for scheduler fan-out.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the builder command and exit.")
+                        help="Say what would be built, and from where, and exit.")
     parser.add_argument("--list", action="store_true",
-                        help="Show which datasets have a build step and whether "
-                             "it is required.")
+                        help="Show which datasets have a build step (every one is "
+                             "optional).")
     return parser
 
 
@@ -184,21 +228,19 @@ def main(argv: Optional[List[str]] = None) -> None:
             block = builder_for(spec.slug)
             rows.append((spec.slug, manifest.get("domain"), block, prepare_required(spec.slug)))
         needed = [r for r in rows if r[2] and r[3]]
-        optional = [r for r in rows if r[2] and not r[3]]
-        print(f"{len(needed)} datasets REQUIRE a build step.")
-        print(f"{len(optional)} have an OPTIONAL build step: the epilepsy fast-path "
-              f"caches, and the BCI pickles of dataio/bci.py, which `embed` does not "
-              f"read. They run from their raw data without it.")
-        print(f"{len(rows) - len(needed) - len(optional)} need nothing.\n")
-        print(f"{'dataset':28s} {'domain':10s} {'build step':11s} builder")
-        print("-" * 84)
-        for slug, domain, block, required in rows:
-            if block is None:
-                kind, module = "none", "-"
-            else:
-                kind = "required" if required else "optional"
-                module = str(block.get("module", "?")).rsplit(".", 1)[-1]
-            print(f"{slug:28s} {str(domain):10s} {kind:11s} {module}")
+        # the motor-imagery builders write a file no benchmark reads: not
+        # offered (`data prepare <it>` still builds it)
+        built = [r for r in rows if r[2] and (r[3] or r[1] != "bci")]
+        print(f"{'dataset':20s} {'domain':10s} build step")
+        for slug, domain, block, required in built:
+            what = ("required: `run` reads the prepared file" if required else
+                    "optional: a faster-to-read copy")
+            print(f"{slug:20s} {str(domain):10s} {what}")
+        print(f"\n{len(built)} of the paper's {len(rows)} datasets have a build step"
+              + (f", {len(needed)} of them required" if needed else
+                 "; none is required: every dataset runs without it (the four "
+                 "bci_cognitive datasets read preprocessed files from the authors)")
+              + ". `neuroatlas data prepare DATASET` builds one.")
         return
 
     if not args.dataset:
@@ -210,10 +252,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     block = builder_for(args.dataset)
     module = block["module"]
 
-    print(f"$ python -m {module} " + " ".join(builder_argv), flush=True)
+    what = describe(args.dataset, builder_argv)
+    # the builder's own command line, for -v
+    logger.debug("builder: python -m %s %s", module, " ".join(builder_argv))
     if args.dry_run:
+        print(f"would build {what}", flush=True)
         return
-    importlib.import_module(module).main(builder_argv)
+    from neuroatlas import progress
+
+    progress.say(f"building {what}")
+    # A builder that reports only to the log (per recording, at INFO) would
+    # leave the screen still for hours: a live line with its time meanwhile
+    # (what a builder prints clears it first and stays on screen).
+    with progress.Progress(f"{args.dataset}", verb="building its prepared file") as item:
+        importlib.import_module(module).main(builder_argv)
+    progress.say(f"{args.dataset}: ok ({progress.duration(item.seconds)})")
 
 
 if __name__ == "__main__":

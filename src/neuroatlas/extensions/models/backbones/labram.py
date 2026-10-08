@@ -42,8 +42,10 @@ from typing import Any, Dict, List, Set
 import numpy as np
 import torch
 
+from neuroatlas import quiet
+
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     StageTimer,
     assert_batch_homogeneity,
     assert_finite,
@@ -409,9 +411,9 @@ class LabramBackbone(BenchmarkBackbone):
         meta = batch.get("meta") or [{}]
         assert_batch_homogeneity(meta, where="labram:input")
 
-        # ESAT-8 adaptive epoch_seconds
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -434,7 +436,7 @@ class LabramBackbone(BenchmarkBackbone):
             float(meta_sfreq) if meta_sfreq is not None else T / epoch_sec
         )
         with StageTimer("labram", "resample_cpu"):
-            _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+            _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
             x, resample_method = resample_poly_with_fallback(
                 x, src_sfreq_f, _PRETRAIN_SFREQ, backend=_backend
             )
@@ -453,12 +455,11 @@ class LabramBackbone(BenchmarkBackbone):
             if overrides["apply_amplitude_scale"]:
                 x = x / _SCALE_DIVISOR
             else:
-                logger.warning(
-                    "[backbone=labram] apply_amplitude_scale=False — LaBraM "
-                    "is scale-dependent (/%g); embeddings will be "
-                    "off-distribution.",
-                    _SCALE_DIVISOR,
-                )
+                quiet.warn_once(
+                    logger, "labram scale off",
+                    "LaBraM: apply_amplitude_scale=False, so its input is not divided by %g "
+                    "as it expects; the embeddings are off its training distribution "
+                    "(an ablation)", _SCALE_DIVISOR)
             x = x.to(self.device)
         with StageTimer("labram", "finite_assert"):
             assert_finite(x, "labram:output")
@@ -531,7 +532,7 @@ class LabramBackbone(BenchmarkBackbone):
         assert_batch_homogeneity(meta, where="labram:input")
 
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(meta[0].get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -550,7 +551,7 @@ class LabramBackbone(BenchmarkBackbone):
         src_sfreq_f = (
             float(meta_sfreq) if meta_sfreq is not None else T / epoch_sec
         )
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         with StageTimer("labram", "resample_cpu"):
             x, _ = resample_poly_with_fallback(x, src_sfreq_f, _PRETRAIN_SFREQ, backend=_backend)
         x = snap_to_epoch_length(x, _PRETRAIN_SFREQ, meta)

@@ -14,7 +14,7 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Sleep Heart Health Study benchmark adapter.
+  Sleep Heart Health Study: at-home PSG scored for sleep stages.
 
 cohort:
   centre: "Sleep Heart Health Study (NSRR), USA"
@@ -22,14 +22,13 @@ cohort:
   powerline_hz: 60
 
 acquisition:
-  kind: nsrr
-  ref: shhs
-  unusable_download: >
-    the SHHS reader reads the CoRe-Sleep preprocessed SHHS, not the raw EDFs
-    NSRR serves (about 50 GB that would sit unused), and no script in this
-    repository builds it.
-    fix: ask the authors for the preprocessed copy, then
-    neuroatlas config set shhs.data_root DIR
+  # The benchmark reads the authors' preprocessed copy, not the raw EDFs NSRR
+  # serves (https://sleepdata.org/datasets/shhs).
+  kind: internal
+  note: >
+    sleep_stage reads the authors' preprocessed SHHS (the CoRe-Sleep
+    preprocessing), not the raw EDFs NSRR serves; the authors provide it on
+    request.
 
 signal:
   notch_freq: null
@@ -54,7 +53,7 @@ splits:
 
 runtime_defaults:
   batch_size: 2
-  data_root: "${EEG_DATA_ROOT}/SHHS/no_backup"
+  data_root: "${EEG_DATA_ROOT}/shhs"
   signal_kind: stft
 
 
@@ -87,11 +86,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- which SHHS folds the paper's foundation-model
-       staging numbers used is not established. This reader runs one fixed
-       split (SleepTransformer's data_split_eval.mat, as before the
-       restructure); the pre-restructure combined probes
-       (artifacts/probes_combined_perC/shhs_combined) used five folds from
-       configs/folds/shhs_combined.json over 8,444 recordings, which this
-       reader does not read (it indexes the CoRe-Sleep patient .mat lists)."

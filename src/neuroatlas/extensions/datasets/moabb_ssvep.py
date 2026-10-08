@@ -70,7 +70,7 @@ def _attach_manifest(spec):
 _GENERATED_SPECS = [
     DatasetSpec(
         slug=slug,
-        description=f"MOABB {moabb_name} SSVEP benchmark ({desc}).",
+        description=f"MOABB {moabb_name}: SSVEP recordings ({desc}).",
         datamodule_cls=_make_factory(slug),
         config_defaults=dict(_CONFIG_DEFAULTS),
         metadata_keys=(

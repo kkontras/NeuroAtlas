@@ -42,16 +42,7 @@ per_model:
   moment:
     C3A2: C3A2
     C4A1: C4A1
-  timemoe:
-    C3A2: C3A2
-    C4A1: C4A1
   moirai:
-    C3A2: C3A2
-    C4A1: C4A1
-  lagllama:
-    C3A2: C3A2
-    C4A1: C4A1
-  timesfm:
     C3A2: C3A2
     C4A1: C4A1
   core_sleep:
@@ -75,10 +66,7 @@ notes:
   sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
   chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
   sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
   sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
-  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

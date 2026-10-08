@@ -32,11 +32,14 @@ class BandpassFilter(PreprocessingStep):
     def compile(self, fs_in: float) -> CompiledStep:
         nyq = 0.5 * fs_in
         if not (0 < self.low < nyq and self.low < self.high < nyq):
-            logger.warning(
-                f"BandpassFilter(low={self.low}, high={self.high}) skipped: "
-                f"band out of range for fs={fs_in} (Nyquist={nyq}). "
-                f"Signal passed through."
-            )
+            # compiled once per recording: said once per run, then in the log
+            from neuroatlas import quiet
+
+            quiet.warn_once(
+                logger, f"bandpass skipped:{self.low}:{self.high}:{fs_in}",
+                f"band-pass filter {self.low:g}-{self.high:g} Hz not applied to recordings "
+                f"sampled at {fs_in:g} Hz (the band is not below their Nyquist frequency, "
+                f"{nyq:g} Hz): their signal is passed through unfiltered")
             return CompiledStep(
                 apply=lambda x: np.asarray(x, dtype=np.float32),
                 fs_out=fs_in,

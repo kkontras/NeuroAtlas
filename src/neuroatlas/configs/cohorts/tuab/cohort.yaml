@@ -14,11 +14,10 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  TUH EEG Abnormal Corpus v3.0.1 — binary normal/abnormal classification
-  from 19-channel unipolar EEG @ 256 Hz. Default backend reads raw EDFs
-  lazily; an HDF5 cache is supported as an opt-in fast path. Supports the
-  official train/eval split (with subject-disjoint val carve-out) and
-  subject-stratified k-fold.
+  TUH EEG Abnormal Corpus v3.0.1: binary normal/abnormal classification from
+  19-channel unipolar EEG at 256 Hz, read from the raw EDFs (a prepared HDF5
+  cache is optional). The official train/eval split with a subject-disjoint
+  validation set, or subject-stratified k-fold.
 
 cohort:
   centre: "Temple University Hospital, USA"
@@ -87,7 +86,7 @@ runtime_defaults:
   n_folds: 5
   normalize: none
   num_workers: 4
-  raw_root: "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_abnormal/v3.0.1/edf"
+  raw_root: "${EEG_DATA_ROOT}/tuab"
   seed: 42
   split_mode: official
   stride_s: null
@@ -127,11 +126,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- the paper's text and its TUAB numbers
-       disagree. App. D.1.3 says the official train/eval split with the train
-       subjects stratified into 5 folds, which is what split_mode=official
-       (the default) does. The published numbers (e.g. REVE AUROC 0.898) came
-       from the paper's epilepsy probe, which ran 5-fold CV over all 2,993
-       sessions grouped by session file (3c6721c configs/folds/tuab.json), so
-       a patient's sessions could sit in train and test."

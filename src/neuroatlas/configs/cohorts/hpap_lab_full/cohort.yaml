@@ -14,10 +14,9 @@ domain: sleep
 paper_dataset: true          # App. B.2, one of the 15 sleep cohorts; paper [70,101]
 
 description: >
-  HomePAP: a multi-centre trial comparing home versus laboratory management
-  of obstructive sleep apnea. This spec is the laboratory arm recorded with
-  the full PSG montage -- the subset the paper evaluates -- not the
-  home-recorded or split-night arms, which carry fewer channels.
+  HomePAP, a multi-centre trial of home versus laboratory management of
+  obstructive sleep apnea: the laboratory arm recorded with the full PSG
+  montage, the subset the paper evaluates.
 
 cohort:
   centre: "Multi-centre (NSRR homepap), USA"
@@ -27,6 +26,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: homepap
+  folders: [polysomnography/edfs/lab/full, polysomnography/annotations-events-nsrr/lab/full, datasets]
 
 signal:
   notch_freq: 60.0
@@ -66,7 +66,7 @@ pipeline:
 runtime_defaults:
   # The lab/full arm only. The sibling `hpap` root covers home/ + lab/
   # together and is a different cohort, so it is deliberately not used here.
-  data_root: "${EEG_DATA_ROOT}/data/Guido/homepap/polysomnography/edfs/lab"
+  data_root: "${EEG_DATA_ROOT}/hpap_lab_full"
   batch_size: 8
   num_workers: 0
   fold: 0
@@ -87,15 +87,3 @@ spec:
 
 provenance:
   last_verified: null
-  known_issues:
-    - "Never loaded. HomePAP's corpus is not on the machine this was written
-       on; data_root comes from configs/dataset_paths_sofia.yaml and the
-       channel handling from adapters/hpap_lab_full.py, neither checked."
-    - "The manifest ids are recording ids (homepap-lab-full-1600003), so
-       `grouping: patient` holds only if HomePAP has one lab-full recording
-       per subject. Unverified -- if it does not, the folds are
-       recording-level and could leak a subject across splits."
-    - "App. B.3 uses this cohort for brain age, but the loader carries no
-       demographics, so there is no `age` label mode here and brain age
-       cannot run on it. Adding it means joining the NSRR
-       homepap-baseline-dataset-*.csv on subject id -- the same work SHHS needs."

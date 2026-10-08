@@ -57,7 +57,7 @@ class MESADataset(_NSRRBaseDataset):
 
     def __init__(
         self,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/mesa",
+        root: str = "${EEG_DATA_ROOT}/mesa",
         **kwargs,
     ):
         self._metadata = self._load_metadata(root)
@@ -72,7 +72,8 @@ class MESADataset(_NSRRBaseDataset):
         """Load harmonized CSV into a dict keyed by nsrrid (as string)."""
         csv_path = Path(root) / "datasets" / "mesa-sleep-harmonized-dataset-0.8.0.csv"
         if not csv_path.exists():
-            logger.warning("MESA metadata CSV not found: %s", csv_path)
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+            warn_no_demographics(logger, "mesa", csv_path)
             return {}
         import pandas as pd
         df = pd.read_csv(csv_path)

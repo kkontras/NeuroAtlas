@@ -102,8 +102,11 @@ fields:
                                   record's API publishes."}
       version:  {type: str, doc: "Release to fetch, for kinds whose URLs carry one
                                   (physionet: files/<ref>/<version>/)."}
-      subdir:   {type: str, doc: "Where, inside what `data download` fetches, the
-                                  reader's path points (hmc reads recordings/)."}
+      folders:  {type: list, doc: "nsrr: the folders of the NSRR dataset its reader
+                                  reads, relative to the dataset's folder
+                                  (polysomnography/edfs, datasets, ...): `data
+                                  download` fetches only these, into the dataset's
+                                  folder. Without it, the whole dataset."}
       dest:     {type: str, doc: "Where `data download` puts the raw corpus when the
                                   reader itself reads no raw path (eegmat reads a
                                   prepared pickle)."}

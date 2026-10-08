@@ -36,3 +36,16 @@ def binary_labels_from_fraction_seconds(
         if float(frac) * float(eps) > threshold_seconds:
             labels[i] = 1
     return labels
+
+
+def benchmark_datasets(benchmark: str, fallback: str) -> str:
+    """The datasets a benchmark runs on, in words (``mass and physionet2026``)."""
+    try:
+        from neuroatlas import catalog
+
+        slugs = [entry.slug for entry in catalog.load(benchmark).suite("full")]
+    except Exception:
+        return fallback
+    if not slugs:
+        return fallback
+    return slugs[0] if len(slugs) == 1 else f"{', '.join(slugs[:-1])} and {slugs[-1]}"

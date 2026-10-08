@@ -23,11 +23,11 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-# Datasets whose embeddings must exactly reproduce the ESAT reference caches.
-# Guards in individual wrappers use this set to activate ESAT-specific
-# preprocessing (snap_to_epoch_length, strip_zero_channels, adaptive
-# epoch_seconds) without affecting other datasets.
-_ESAT_DATASETS = frozenset({
+# Sleep datasets whose embeddings reproduce the paper's reference embeddings exactly.
+# Guards in individual wrappers use this set to apply that preprocessing
+# (snap_to_epoch_length, strip_zero_channels, adaptive epoch_seconds)
+# without affecting other datasets.
+_PAPER_PREPROC_DATASETS = frozenset({
     "dcsm", "dod", "dodh", "dodo", "isruc", "mass",
     "physionet2026", "sleep_edf_expanded", "ucddb", "wsc",
     "mros_raw_brain_age", "cfs_raw_2ch",
@@ -37,6 +37,30 @@ _ESAT_DATASETS = frozenset({
 #: reader, physionet_mi, cho2017, lee2019_mi, hinss2021 and the cognitive
 #: cohorts); :func:`is_bci_batch` reads it.
 BCI_DOMAIN = "bci"
+
+
+def run_names(meta: Optional[Sequence[Mapping[str, Any]]] = None,
+              checkpoint: str = "") -> Tuple[str, str]:
+    """``(dataset, checkpoint)`` a message about this batch names: the run the
+    runner is working on, else the batch's ``meta[0]["dataset"]`` and
+    *checkpoint* (the wrapper's ``spec.identifier``); ``""`` where unknown."""
+    try:
+        from neuroatlas.benchmarking_helpers.runtime.pair import current
+        pair = current()
+    except ImportError:                                  # pragma: no cover
+        pair = None
+    if pair is not None:
+        return pair.dataset, pair.checkpoint
+    dataset = ""
+    if meta:
+        dataset = str((meta[0] or {}).get("dataset") or "")
+    return dataset, str(checkpoint or "")
+
+
+def run_label(meta: Optional[Sequence[Mapping[str, Any]]] = None,
+              checkpoint: str = "") -> str:
+    """``hmc/reve_pretrained`` (or the one name known, or ``""``)."""
+    return "/".join(part for part in run_names(meta, checkpoint) if part)
 
 
 def is_bci_batch(meta: Optional[Sequence[Mapping[str, Any]]]) -> bool:
@@ -196,8 +220,9 @@ def resample_poly_with_fallback(
     except ImportError:
         taF = None
 
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
+    from neuroatlas import quiet
+
+    _log = logging.getLogger(__name__)
 
     if taF is not None and backend != "scipy":
         try:
@@ -207,23 +232,25 @@ def resample_poly_with_fallback(
             # unusable: its C extension is built against a specific CUDA
             # runtime, and when that library is absent the module loads but
             # `resample` is never bound. Resampling is a CPU operation scipy
-            # does perfectly well, so this is a fallback, not a failure --
-            # without it the whole package is unusable on any machine whose
-            # CUDA runtime does not match the torchaudio build.
-            _log.warning(
-                "torchaudio.resample unavailable (%s: %s); using "
-                "scipy.resample_poly on CPU.", type(exc).__name__, exc,
+            # does as well, so the batch is resampled there; it asks nothing
+            # of the user (-v and --log say it, once per command).
+            reason = (str(exc).strip().splitlines() or [""])[0]
+            quiet.warn_once(
+                _log, "resample: torchaudio cannot run",
+                "resampling on the CPU with scipy: torchaudio cannot run here (%s: %s)",
+                type(exc).__name__, reason, level=logging.INFO,
             )
         else:
             # On certain GPUs (RTX 3080 Ti / 5060 Ti / 5070 Ti) the kernel
             # silently returns NaN instead of valid samples even on finite
-            # input. Detect that and fall through to the scipy CPU path.
+            # input. Detect that and resample the batch with scipy on the CPU.
             if torch.isfinite(resampled).all():
                 return resampled, "torchaudio_resample"
-            _log.warning(
-                "torchaudio.resample produced non-finite output (n_nan=%d) on device=%s; "
-                "falling back to scipy.resample_poly on CPU.",
-                int(torch.isnan(resampled).sum()), x.device,
+            quiet.warn_once(
+                _log, f"resample: torchaudio non-finite on {x.device}",
+                "torchaudio gave non-finite samples resampling on %s; such batches are "
+                "resampled on the CPU with scipy",
+                x.device, level=logging.INFO,
             )
 
     from scipy.signal import resample_poly
@@ -232,17 +259,22 @@ def resample_poly_with_fallback(
     resampled = resample_poly(x_np, up=up, down=down, axis=-1).astype(np.float32)
     # Sometimes scipy ALSO produces non-finite values — observed on float16
     # cached data with subtle out-of-range samples that pass the cache
-    # finite-check but trip the FIR convolution. Zero-replace and warn so
-    # training continues; 0.1-0.2% of samples becoming 0 is harmless vs.
-    # crashing the whole 8-hour run.
+    # finite-check but trip the FIR convolution. Those samples are set to 0,
+    # and the command says once, at its end, in how many windows.
     nonfinite_mask = ~np.isfinite(resampled)
     if nonfinite_mask.any():
-        n_bad = int(nonfinite_mask.sum())
-        _log.warning(
-            "scipy.resample_poly emitted %d non-finite samples (%.4f%% of %d); "
-            "replacing with 0 to keep training alive.",
-            n_bad, 100 * n_bad / resampled.size, resampled.size,
+        rows = int(resampled.shape[0]) if resampled.ndim >= 2 else 1
+        bad_rows = int(nonfinite_mask.reshape(rows, -1).any(axis=1).sum())
+        label = run_label()
+        quiet.count(
+            f"resample non-finite:{label}",
+            (f"{label}: " if label else "")
+            + "{hit} window{s} had non-finite samples after resampling; those samples "
+              "are set to 0",
+            hit=bad_rows,
         )
+        _log.debug("resampling: %d non-finite samples set to 0 (%d of %d windows in a batch)",
+                   int(nonfinite_mask.sum()), bad_rows, rows)
         resampled[nonfinite_mask] = 0.0
     return torch.from_numpy(resampled).to(x.device), "resample_poly"
 
@@ -271,32 +303,35 @@ def assert_finite(x: torch.Tensor, where: str) -> None:
         )
 
 
-_LOGGED_NONFINITE_WHERES: set[str] = set()
-
-
-def replace_nonfinite_with_zero(x: torch.Tensor, where: str) -> torch.Tensor:
+def replace_nonfinite_with_zero(x: torch.Tensor, where: str, meta=None,
+                                checkpoint: str = "") -> torch.Tensor:
     """Soft variant of :func:`assert_finite` for backbone *outputs*.
 
     Some TUSZ windows trigger single-window NaN blowups inside the pretrained
     stack (LaBraM/EEGPT/NeuroLM/BIoT have all been seen doing this on <0.01%
     of windows). Hard-raising at the backbone output kills the whole embedding
-    run; instead this helper zeros the NaN/Inf entries and logs the count once
-    per ``where``. The downstream probe's ``_filter_nonfinite`` still drops
-    rows whose feature vector is all-zero-after-substitution, so nothing
-    corrupts the probe — we just don't throw away the good 99.99%.
+    run; instead this helper sets the NaN/Inf entries to 0 and the command
+    says once, at its end, for how many windows of which dataset and
+    checkpoint (*meta*, *checkpoint*: see :func:`run_names`; *where* is
+    the wrapper's own tag, for the log).
     """
     if torch.isfinite(x).all():
         return x
-    n_nan = int(torch.isnan(x).sum())
-    n_inf = int(torch.isinf(x).sum())
-    if where not in _LOGGED_NONFINITE_WHERES:
-        _LOGGED_NONFINITE_WHERES.add(where)
-        import logging as _lg
-        _lg.getLogger(__name__).warning(
-            "%s: non-finite values (n_nan=%d, n_inf=%d, shape=%s); "
-            "zeroed and continuing. Will not re-warn for this site.",
-            where, n_nan, n_inf, tuple(x.shape),
-        )
+    rows = int(x.shape[0]) if x.ndim >= 2 else 1
+    bad_rows = int((~torch.isfinite(x)).reshape(rows, -1).any(dim=1).sum())
+    dataset, ckpt = run_names(meta, checkpoint)
+    from neuroatlas import quiet
+
+    quiet.count(
+        f"nonfinite embeddings:{dataset}/{ckpt}",
+        (f"{dataset}: " if dataset else "") + (ckpt or "the checkpoint")
+        + " gave non-finite embedding values for {hit} window{s}; those values are set to 0",
+        hit=bad_rows,
+    )
+    logging.getLogger(__name__).debug(
+        "%s: non-finite values (n_nan=%d, n_inf=%d, shape=%s) set to 0",
+        where, int(torch.isnan(x).sum()), int(torch.isinf(x).sum()), tuple(x.shape),
+    )
     return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -332,6 +367,7 @@ def assert_amplitude_band(
     hi_uv: float,
     where: str,
     declared_units: "Iterable[str] | None" = None,  # noqa: UP037 — forward ref preserves 3.9 compat
+    who: str = "",
 ) -> None:
     """Raise if the signal is clearly in the wrong unit; tolerate rare artifacts.
 
@@ -348,6 +384,9 @@ def assert_amplitude_band(
     from the dataloader). Surfacing it in the error message lets the reader
     tell "artifact" (declared_units={'uV'}) from "upstream unit bug"
     (declared_units={'mV'}) without having to re-read the EDF.
+
+    ``who`` (``stages/eegpt_pretrained``) names the run in the lines a
+    tolerated batch gives -v and --log, once per command and run.
     """
     abs_x = x.detach().abs()
     # torch.quantile sorts the input and hard-caps at 2**24 (~16.78M) elements;
@@ -363,17 +402,17 @@ def assert_amplitude_band(
     peak = float(abs_x.max())
     # peak == 0 means the entire batch is flat — a genuine silent/dropout
     # window, not a unit mismatch (no V↔µV↔mV conversion produces exact zero
-    # across every sample). Pass through with a one-shot warning so a 5-hour
-    # silent stretch in one recording doesn't kill a multi-day shard.
+    # across every sample). It is embedded as is, and -v / --log say so once,
+    # so a 5-hour silent stretch in one recording doesn't kill a multi-day shard.
     if peak == 0.0:
-        _log_silent_warning(where)
+        _log_flat_batch(where, who, lo_uv, entirely=True)
         return
     # A real unit mismatch (V vs µV vs mV) scales ALL samples uniformly, so
     # if `peak` itself sits inside the valid band, the batch contains genuine
     # in-band signal and the low p99 just reflects mostly-silent windows
-    # (data dropouts in long continuous EEG). Allow with a one-shot warning.
+    # (data dropouts in long continuous EEG). Embedded as is (-v / --log).
     if lo_uv <= peak <= hi_uv and p99 < lo_uv:
-        _log_silent_warning(where)
+        _log_flat_batch(where, who, lo_uv, entirely=False)
         return
     if p99 < lo_uv or p99 > hi_uv:
         units_suffix = ""
@@ -387,35 +426,35 @@ def assert_amplitude_band(
             f"Likely a unit mismatch (V vs µV vs mV).{units_suffix}"
         )
     if peak > hi_uv:
-        _log_artifact_warning(where, peak, hi_uv, p99)
+        _log_spike(where, who, peak, hi_uv)
 
 
-_LOGGED_ARTIFACT_WHERES: set[str] = set()
-_LOGGED_SILENT_WHERES: set[str] = set()
+def _log_spike(where: str, who: str, peak: float, hi_uv: float) -> None:
+    """A batch whose peak is above the band while 99% of it is inside: an
+    artifact, embedded as is. Said once per command and run, at INFO (it asks
+    nothing of the user)."""
+    from neuroatlas import quiet
 
-
-def _log_artifact_warning(where: str, peak: float, hi_uv: float, p99: float) -> None:
-    """Log once per ``where`` so we don't flood logs when many windows clip."""
-    if where in _LOGGED_ARTIFACT_WHERES:
-        return
-    _LOGGED_ARTIFACT_WHERES.add(where)
-    import logging as _lg
-    _lg.getLogger(__name__).warning(
-        "%s: artifact spike peak=%.4g µV > hi=%.4g (p99=%.4g in band); "
-        "tolerated. Will not re-warn for this site.",
-        where, peak, hi_uv, p99,
+    quiet.warn_once(
+        logging.getLogger(__name__), f"amplitude spike:{who or where}",
+        "%s: a batch peaks at %.4g µV, above %.4g µV, while 99%% of its samples are in "
+        "range (an artifact); it is embedded as is",
+        who or where, peak, hi_uv, level=logging.INFO,
     )
 
 
-def _log_silent_warning(where: str) -> None:
-    if where in _LOGGED_SILENT_WHERES:
-        return
-    _LOGGED_SILENT_WHERES.add(where)
-    import logging as _lg
-    _lg.getLogger(__name__).warning(
-        "%s: fully silent batch (peak=0 µV) — embedding zeros; "
-        "treat downstream as data dropout. Will not re-warn for this site.",
-        where,
+def _log_flat_batch(where: str, who: str, lo_uv: float, entirely: bool) -> None:
+    """A batch that is flat (every sample 0) or mostly flat (99% of its
+    samples under the band's floor): data dropout, embedded as is. Said once
+    per command and run, at INFO."""
+    from neuroatlas import quiet
+
+    what = ("is entirely flat (every sample 0 µV)" if entirely
+            else f"is mostly flat (99% of its samples under {lo_uv:g} µV)")
+    quiet.warn_once(
+        logging.getLogger(__name__), f"amplitude flat:{entirely}:{who or where}",
+        "%s: a batch %s; it is embedded as is",
+        who or where, what, level=logging.INFO,
     )
 
 
@@ -653,7 +692,7 @@ def strict_load_with_allowlist(
     }
 
 
-# Backported from Guidos _preproc.py (2026-05-21) for core_sleep wrapper.
+# Used by the core_sleep wrapper.
 def snap_to_epoch_length(
     x: torch.Tensor,
     target_sfreq: float,
@@ -685,7 +724,7 @@ def snap_to_epoch_length(
 
 
 
-# Backported from Guido tree _preproc.py (2026-05-21) for biot wrapper.
+# Used by the biot wrapper.
 def percentile_normalize(
     x: torch.Tensor, q: float = 0.95, eps: float = 1e-8
 ) -> torch.Tensor:
@@ -712,7 +751,7 @@ def percentile_normalize(
 
 
 
-# Backported from Guido tree _preproc.py (2026-05-21) for biot wrapper.
+# Used by the biot wrapper.
 def clip_uv(x: torch.Tensor, clip_uv: float) -> Tuple[torch.Tensor, float]:
     """Clamp ``|x| ≤ clip_uv`` and return ``(x_clipped, fraction_clipped)``.
 
@@ -727,7 +766,7 @@ def clip_uv(x: torch.Tensor, clip_uv: float) -> Tuple[torch.Tensor, float]:
 
 
 
-# Backported from Guido tree _preproc.py (2026-05-21) for biot wrapper.
+# Used by the biot wrapper.
 def zscore_per_recording(
     x: torch.Tensor,
     eps: float = 1e-6,

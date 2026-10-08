@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import json
 import logging
 import os
@@ -49,6 +50,38 @@ class _PrecomputedStubBackbone:
             "PrecomputedStubBackbone.extract_embeddings was called — the "
             "precomputed-embedding hook should have short-circuited the task."
         )
+
+
+class _LazyBackbone:
+    """The checkpoint's backbone, its weights loaded the first time something
+    uses it for more than its metadata: a probe that reads embeddings already
+    extracted never loads them, so it runs where the weights are not (another
+    machine's cache, weights removed after extraction). A probe that has to
+    extract loads them then, and a missing checkpoint fails as it always did."""
+
+    def __init__(self, checkpoint_spec, load) -> None:
+        self._spec = checkpoint_spec
+        self._load = load
+        self._backbone = None
+
+    def loaded(self):
+        if self._backbone is None:
+            self._backbone = self._load(self._spec)
+        return self._backbone
+
+    def metadata(self) -> Dict[str, Any]:
+        if self._backbone is not None:
+            return self._backbone.metadata()
+        # what every backbone reports from its registry entry; the extraction
+        # details (device, rates) belong to the run that made the embeddings
+        spec = self._spec
+        return {"checkpoint_id": spec.identifier, "model_family": spec.model_family,
+                "embedding_key": spec.embedding_key, "embedding_dim": spec.embedding_dim,
+                "wrapper_name": spec.wrapper_name,
+                "backbone_source": "embeddings read from the cache"}
+
+    def __getattr__(self, name):
+        return getattr(self.loaded(), name)
 
 
 def _precomputed_cache_available(datamodule, checkpoint_spec) -> bool:
@@ -132,44 +165,264 @@ class _ChannelMapDataloaderWrapper:
         return len(self._loader)
 
 
-def _Ticker(label: str, every: float = 2.0, *, verb: str = "probing", stream=None,
-            start_line_off_tty: bool = True) -> progress.Progress:
+def _Ticker(label: str, every: float = 1.0, *, verb: str = "probing", stream=None,
+            start_line_off_tty: bool = False) -> progress.Progress:
     """Shows that a run is alive while it works. On a terminal: one line,
-    "<label>: probing (1m 05s)", rewritten every few seconds and cleared when
-    the run ends (its result line follows). Elsewhere (a log, a cluster job):
-    one "<label>: probing" line at the start. (neuroatlas.progress, with the
-    line saying only the verb.)"""
+    "<label>: fitting 33% (1/3 seeds, 0m 05s)", naming the phase the code
+    inside reports (loading the data, reading the embeddings, loading
+    weights, fitting seed by seed, scoring), rewritten every second and
+    cleared when the run ends (its result line follows). Off a terminal
+    nothing, unless *start_line_off_tty*: the result line alone (a
+    leave-one-subject-out probe over many models is thousands of folds)."""
     return progress.Progress(label, verb=verb, every=every, stream=stream,
-                             start_line_off_tty=start_line_off_tty, phases=False)
+                             start_line_off_tty=start_line_off_tty,
+                             screen_only=not start_line_off_tty)
 
 
-# The metric a progress line shows for a fold, first one present.
+# The metric a progress line shows for a fold that belongs to no benchmark
+# (a probe run by hand on another task), first one present.
 _PROGRESS_METRICS = ("event_sens_fa_auc", "auroc", "balanced_accuracy", "mae", "pearson_r")
+
+
+@functools.lru_cache(maxsize=None)
+def _benchmark_headline(dataset: str, task_name: str) -> Optional[Tuple[str, Tuple[str, ...], str]]:
+    """(metric key, where in the fold's metrics, column label) of the
+    benchmark a probe of *dataset* with the registered task *task_name*
+    belongs to: sleep staging's kappa, BCI's balanced accuracy, AUPRC at an
+    event benchmark's threshold. None when no benchmark runs that pair."""
+    try:
+        from neuroatlas import catalog, metrics_info
+        from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
+        from neuroatlas.entrypoints.probe import load_task_preset
+
+        for bench in catalog.catalog().values():
+            if bench.derived_from:
+                continue
+            for entry in bench.datasets:
+                if entry.slug != dataset:
+                    continue
+                # a benchmark that names no task (BCI) runs the dataset's own
+                preset = entry.task or bench.task or load_dataset_spec(dataset).default_task
+                if not preset:
+                    continue
+                if (load_task_preset(preset)["task"].get("name") or preset) == task_name:
+                    m = bench.metrics
+                    return m.headline, tuple(m.at), metrics_info.label(m.headline, bench)
+    except (Exception, SystemExit):     # a catalog or preset that does not load: no headline
+        return None
+    return None
+
+
+def _headline(result) -> Optional[Tuple[str, float]]:
+    """(label, value) a fold's result line shows: the headline of the
+    benchmark the probe belongs to, read as `results` reads it and named by
+    its column there (``kappa``, ``bal_acc``, ``MAE(years)``); else the first
+    of _PROGRESS_METRICS among the result's metrics; for a regression probe
+    (brain age), its headline estimator's test block (``best_test``)."""
+    metrics = result.metrics or {}
+    task_name = (result.metadata or {}).get("task_name")
+    spec = _benchmark_headline(result.dataset_name, task_name) if task_name else None
+    if spec:
+        from neuroatlas import results as res
+
+        key, at, label = spec
+        value = res.metric(metrics, key, at)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value == value:
+            return label, float(value)
+    blocks = [metrics]
+    if _is_regression_result(result) and isinstance(metrics.get("best_test"), dict):
+        blocks.append(metrics["best_test"])
+    from neuroatlas import metrics_info
+
+    for block in blocks:
+        for name in _PROGRESS_METRICS:
+            value = block.get(name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return metrics_info.label(name), float(value)
+    return None
+
+
+#: A run's failure codes that are not failures: the channel map rules the
+#: pair out (``skip``), or has no entry for its family (``invalid``).
+RULED_OUT_CODE = "channel_map_skip"
+INVALID_CODE = "channel_map_invalid"
+#: Failure codes of a run that could not start here: the dataset's data, or
+#: the checkpoint's weights, are not on this machine (``skipped``).
+DATA_MISSING_CODE = "data_missing"
+WEIGHTS_MISSING_CODE = "weights_missing"
+SKIPPED_CODES = (DATA_MISSING_CODE, WEIGHTS_MISSING_CODE)
+
+
+def outcome_word(result) -> str:
+    """``ok``, ``ruled out``, ``invalid`` or ``failed``: what a run's result
+    line and the closing count call it."""
+    if result.ok:
+        return "ok"
+    code = getattr(getattr(result, "failure", None), "code", None)
+    if code == RULED_OUT_CODE:
+        return "ruled out"
+    if code == INVALID_CODE:
+        return "invalid"
+    if code in SKIPPED_CODES:
+        return "skipped"
+    return "failed"
 
 
 def _progress_line(done: int, total: int, result, seconds: float) -> str:
     fold = (result.metadata or {}).get("fold")
     where = f"{result.dataset_name} {result.checkpoint_id}" + ("" if fold is None else f" fold {fold}")
     if not result.ok:
-        what = "failed"
+        what = outcome_word(result)
+        if what != "failed":
+            # decided before any data is read: no time to show
+            return progress.result_line(done, total, where, what, None)
     else:
-        value = next(((m, (result.metrics or {}).get(m)) for m in _PROGRESS_METRICS
-                      if isinstance((result.metrics or {}).get(m), (int, float))), None)
-        # (reused): recomputed from the fold's saved predictions, not fitted
-        what = "ok" + (" (reused)" if (result.metadata or {}).get("reused_predictions") else "") \
+        value = _headline(result)
+        # reused: recomputed from the fold's saved predictions, not fitted
+        what = "ok" + (", reused" if (result.metadata or {}).get("reused_predictions") else "") \
             + (f", {value[0]} {value[1]:.3f}" if value else "")
     return progress.result_line(done, total, where, what, seconds)
 
 
+def _load_weights(checkpoint_spec):
+    """The backbone with its weights, the item's live line saying so. What a
+    model's code prints while it loads (REVE's remote code: "flash_attn not
+    found") becomes log lines (-v, --log), and a hub download inside it
+    shows on the line, not as huggingface_hub's bars."""
+    from neuroatlas import quiet
+    from neuroatlas.extensions.models.backbones._checkpoint_download import hub_progress
+
+    progress.current().phase("loading weights")
+    try:
+        with quiet.printed_to_log(logging.getLogger(__name__)), hub_progress(at_first_byte=True):
+            return load_backbone(checkpoint_spec)
+    except FileNotFoundError as exc:
+        # what `run` and `check` say before they start, naming this checkpoint
+        # and the command that gets its weights
+        from neuroatlas.run import weights_problem_for
+
+        try:
+            problem = weights_problem_for(checkpoint_spec)
+        except Exception:
+            problem = None
+        if problem:
+            raise WeightsMissing(problem) from exc
+        raise
+
+
+def _exception_text(exc: BaseException) -> str:
+    """What a run's failure says: our own errors, written for a user, as
+    they are; anything else with its type where that says something
+    (:func:`neuroatlas.cli._msg.exception_text`)."""
+    from neuroatlas.cli import _msg
+
+    from ..registry.contracts import DatamoduleConfigError
+    from ..registry.discovery import UnknownName
+    from .cache import CacheCorruptError, CacheLockError
+
+    if isinstance(exc, (DatamoduleConfigError, UnknownName, CacheCorruptError, CacheLockError)):
+        return str(exc)
+    return _msg.exception_text(exc)
+
+
+class WeightsMissing(FileNotFoundError):
+    """The checkpoint's weights are not on this machine: its runs are
+    skipped (the message names the command that gets them)."""
+
+
+#: What `data status` says of a dataset that is not here, in a sentence
+#: about its folder (the run that needed it is skipped).
+_DATA_STATES = {
+    "missing": "no {ds} data here: {path} does not exist",
+    "empty": "no {ds} data here: {path} holds no recordings",
+    "partial": "the {ds} data is incomplete: {path} holds {count}",
+    "not prepared": "the file {ds} is read from is not here: it is not in {path}",
+    "not downloaded": "no {ds} data here: it is not in the MOABB data folder {path}",
+    "not configured": "no {ds} data here: no data root is set, so its folder is unknown",
+}
+
+
+from neuroatlas import quiet as _quiet
+
+#: dataset -> data_missing_text, for one command (a status walks the folder)
+_DATA_MISSING: Dict[str, Optional[str]] = _quiet.per_command({})
+
+
+def data_missing_text(dataset_name: str) -> Optional[str]:
+    """When `data status` finds *dataset_name* is not here: what to say and
+    the commands that bring it (``what\nfix: ...``); else None. A run that
+    fails on such a dataset fails for that reason, whatever it raised."""
+    if not _quiet.in_command():
+        return _data_missing_text(dataset_name)
+    if dataset_name not in _DATA_MISSING:
+        _DATA_MISSING[dataset_name] = _data_missing_text(dataset_name)
+    return _DATA_MISSING[dataset_name]
+
+
+def _data_missing_text(dataset_name: str) -> Optional[str]:
+    try:
+        from neuroatlas import data as data_mod
+        from neuroatlas.check import data_fix
+
+        st = data_mod.status(dataset_name)
+    except Exception:       # a status that cannot be taken: say what was raised
+        return None
+    state, _, rest = str(st.state).partition(" (")
+    if st.found or state not in _DATA_STATES:
+        return None
+    what = _DATA_STATES[state].format(ds=dataset_name, path=st.path or "its folder",
+                                      count=rest.rstrip(")") or "part of it")
+    return f"{what}\nfix: {data_fix(dataset_name, st)}"
+
+
+#: An extraction pass that found its embeddings: its result line (with its
+#: time when that was long: the data was read to match them).
+ALREADY_CACHED = "embeddings already in the cache"
+#: A cached extraction's result line shows its time from this many seconds on.
+_CACHED_SHOWN_AFTER = 2.0
+
+
+def _count(n: int, noun: str) -> str:
+    """``1 checkpoint``, ``3 checkpoints``."""
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
 def _embed_outcome(results: List[BenchmarkResult], counts: Dict[str, int]) -> str:
     """What an extraction pass over one (dataset, model) did, for its result
-    line: ``ok, 50,749 windows``, ``cached (already extracted)``, ``failed``."""
-    if not results or any(not r.ok for r in results):
+    line: ``ok, 50,749 windows``, ``already in the cache``, ``ruled out``,
+    ``invalid``, ``failed``."""
+    words = {outcome_word(r) for r in results}
+    for word in ("failed", "skipped", "invalid", "ruled out"):
+        if word in words:
+            return word
+    if not results:
         return "failed"
     if counts.get("extracted"):
         windows = counts.get("windows")
-        return f"ok, {windows:,} windows" if windows else "ok"
-    return "cached (already extracted)"
+        unit = _window_unit(results[0])
+        return f"ok, {windows:,} {unit}" if windows else "ok"
+    return ALREADY_CACHED
+
+
+def _window_unit(result: BenchmarkResult) -> str:
+    """What one embedded window is on this dataset, for the extraction's
+    result line: ``trials`` (a BCI trial), ``epochs (30 s)`` (a sleep
+    epoch), else ``windows (10 s)``."""
+    meta = result.metadata or {}
+    seconds = meta.get("epoch_seconds") or meta.get("window_s")
+    try:
+        domain = (load_dataset_spec(result.dataset_name).manifest or {}).get("domain") or ""
+    except Exception:
+        domain = ""
+    if domain == "bci":
+        return "trials"
+    length = ""
+    try:
+        if seconds:
+            length = f" ({float(seconds):g} s)"
+    except (TypeError, ValueError):
+        length = ""
+    return ("epochs" if domain == "sleep" else "windows") + length
 
 
 def _wrap_datamodule_with_channel_map(datamodule, cmap: ChannelMap, model_family: str):
@@ -194,89 +447,6 @@ def _wrap_datamodule_with_channel_map(datamodule, cmap: ChannelMap, model_family
 
         setattr(datamodule, name, _wrap())
     return datamodule
-
-
-def _metric_scalar(metrics: Dict[str, Any], name: str):
-    value = metrics.get(name)
-    if isinstance(value, dict):
-        return value.get("mean")
-    return value
-
-
-def _format_metric(value, digits: int = 4) -> str:
-    if value is None:
-        return ""
-    return f"{float(value):.{digits}f}"
-
-
-def _format_f1_per_class(metrics: Dict[str, Any], digits: int = 4) -> str:
-    values = metrics.get("f1_per_class")
-    if not values:
-        return ""
-    return "[" + ", ".join(f"{float(v):.{digits}f}" for v in values) + "]"
-
-
-def _select_val_metrics(result: BenchmarkResult) -> Dict[str, Any]:
-    if "best_val" in result.metrics:
-        return result.metrics["best_val"]
-    return result.metrics.get("val", {})
-
-
-def _select_test_metrics(result: BenchmarkResult) -> Dict[str, Any]:
-    if "best_test" in result.metrics:
-        return result.metrics["best_test"]
-    return result.metrics.get("test", result.metrics)
-
-
-def _mean_metric(rows: List[Dict[str, Any]], name: str):
-    values = [_metric_scalar(row, name) for row in rows]
-    values = [float(value) for value in values if value is not None]
-    if not values:
-        return None
-    return float(np.mean(values))
-
-
-def _mean_f1_per_class(rows: List[Dict[str, Any]]):
-    series = [row.get("f1_per_class") for row in rows if row.get("f1_per_class")]
-    if not series:
-        return []
-    min_len = min(len(values) for values in series)
-    arr = np.asarray([values[:min_len] for values in series], dtype=float)
-    return arr.mean(axis=0).tolist()
-
-
-def _std_metric(rows: List[Dict[str, Any]], name: str):
-    values = [_metric_scalar(row, name) for row in rows]
-    values = [float(value) for value in values if value is not None]
-    if len(values) < 2:
-        return None
-    return float(np.std(values, ddof=1))
-
-
-def _std_f1_per_class(rows: List[Dict[str, Any]]):
-    series = [row.get("f1_per_class") for row in rows if row.get("f1_per_class")]
-    if len(series) < 2:
-        return []
-    min_len = min(len(values) for values in series)
-    arr = np.asarray([values[:min_len] for values in series], dtype=float)
-    return arr.std(axis=0, ddof=1).tolist()
-
-
-def _format_mean_std(mean, std, digits: int = 4) -> str:
-    if mean is None:
-        return ""
-    if std is None:
-        return _format_metric(mean, digits)
-    return f"{float(mean):.{digits}f}±{float(std):.{digits}f}"
-
-
-def _format_mean_std_f1_per_class(mean_values, std_values, digits: int = 4) -> str:
-    if not mean_values:
-        return ""
-    if not std_values or len(std_values) != len(mean_values):
-        return "[" + ", ".join(f"{float(v):.{digits}f}" for v in mean_values) + "]"
-    pairs = ", ".join(f"{float(m):.{digits}f}±{float(s):.{digits}f}" for m, s in zip(mean_values, std_values))
-    return "[" + pairs + "]"
 
 
 @contextlib.contextmanager
@@ -408,7 +578,7 @@ class BenchmarkRunner:
         sidecar = probe_dir / preds.RESULT_FILENAME
         try:
             pred = preds.load(path)
-            why = None if sidecar.is_file() else "no result.json beside them (an older version saved them)"
+            why = None if sidecar.is_file() else "they were saved without their result record"
             why = why or preds.reuse_problem(
                 pred, task=task_name, seeds=self._effective_seeds(datamodule),
                 pooling=current_pooling(), checkpoint_path=checkpoint_spec.checkpoint_path,
@@ -418,18 +588,29 @@ class BenchmarkRunner:
                 if (row.dataset_name, row.checkpoint_id) != (dataset_name, checkpoint_spec.identifier):
                     why = "their result.json is another dataset's or model's"
         except Exception as exc:  # unreadable: probe again, and say so
-            why = f"they cannot be read ({type(exc).__name__}: {exc})"
-        if why is not None:
             from neuroatlas.cli import _msg
 
-            _msg.note(f"{where}: saved predictions not reused, probing again: {why}")
+            why = f"they cannot be read ({_msg.first_sentence(_msg.exception_text(exc))})"
+        if why is not None:
+            from neuroatlas import quiet
+
+            pair = f"{dataset_name}/{checkpoint_spec.identifier}"
+            if quiet.once(f"not reused:{pair}"):
+                # once per (dataset, model): its other folds say so in the log
+                from neuroatlas.cli import _msg
+
+                _msg.note(f"{pair}: fitting again, not scoring the saved predictions: {why}")
+            else:
+                logging.getLogger(__name__).info(
+                    "%s: fitting again, not scoring the saved predictions: %s", where, why)
             return None
+        progress.current().phase("scoring the saved predictions")
         row.metrics = preds.scorer(task_name)(pred)
         preds.refresh_metadata(row.metadata, pred)
         row.cache_paths["predictions"] = str(path)
         row.metadata.pop("written_at", None)
         row.metadata["reused_predictions"] = True
-        # the fold's progress line says "ok (reused)"; the file, for -v and --log
+        # the fold's progress line says "ok, reused"; the file, for -v and --log
         logging.getLogger(__name__).info("%s: reused the saved predictions %s", where, path)
         return row
 
@@ -445,9 +626,12 @@ class BenchmarkRunner:
             except OSError as exc:
                 from neuroatlas.cli import _msg
 
-                _msg.warning(f"{result.dataset_name}/{result.checkpoint_id}: could not keep "
-                             f"result.json beside the predictions ({exc}); a later run fits "
-                             f"this fold again")
+                fold = (result.metadata or {}).get("fold")
+                _msg.warning(f"{result.dataset_name}/{result.checkpoint_id}"
+                             + (f" fold {fold}" if fold is not None else "")
+                             + f": could not save this fold's result next to its predictions "
+                             f"({_msg.first_sentence(_msg.exception_text(exc))}); a later run "
+                             f"fits it again")
 
     @staticmethod
     def _pair_config(dataset_config: Dict[str, Any], cmap: Optional[ChannelMap],
@@ -489,7 +673,7 @@ class BenchmarkRunner:
             # detail for -v and the --log file, not for every run's screen
             logging.getLogger(__name__).info(
                 "%s/%s: windows are the dataset's %g s trials; the backbone is told %g s "
-                "instead of its %g s", getattr(datamodule, "name", "?"),
+                "instead of its %g s", getattr(datamodule, "name", None) or "the dataset",
                 checkpoint_spec.identifier, window, window,
                 float(checkpoint_spec.expected_epoch_seconds))
         import dataclasses
@@ -508,8 +692,9 @@ class BenchmarkRunner:
         """
         dataset_spec = load_dataset_spec(dataset_name)
         (self.cache_root / dataset_name).mkdir(parents=True, exist_ok=True)
-        # what an `embed` item's live line says meanwhile (a probe's keeps "probing")
-        progress.current().phase("indexing recordings")
+        # what the item's live line says meanwhile; a reader that can count
+        # names its own phase (BCI: "loading the data 3/9 subjects")
+        progress.current().phase("loading the data")
         datamodule = dataset_spec.create_datamodule(dataset_config, checkpoint=checkpoint_spec)
         checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec, verbose=True)
         if self.embed_chunk is not None:
@@ -555,16 +740,56 @@ class BenchmarkRunner:
         if _precomputed_cache_available(datamodule, checkpoint_spec):
             backbone = _PrecomputedStubBackbone(checkpoint_spec)
         elif load_weights:
-            progress.current().phase("loading weights")
-            backbone = load_backbone(checkpoint_spec)
+            backbone = _load_weights(checkpoint_spec)
         else:
             backbone = None
-        # until the extraction loop counts batches: building its loader, or
-        # finding the cache already there
-        progress.current().phase("preparing the windows")
+        if backbone is not None:
+            # until the task names its own phase (reading the embeddings,
+            # the extraction loop's batches): building its loader
+            progress.current().phase("preparing the windows")
         return datamodule, backbone
 
+    def _extracted_already(self, task_name: str, dataset_name: str, checkpoint_spec,
+                           datamodule) -> bool:
+        """Whether an extraction pass over this pair would only find its
+        global cache (every window, every fold): then it needs no weights.
+        The same test the task makes before it would extract (linear probe,
+        seizure detection); any other task loads them as before."""
+        if self.embed_chunk is not None:
+            return False
+        if task_name == "seizure_detection":
+            from neuroatlas.extensions.tasks.seizure_detection import _uses_global_cache
+
+            if not _uses_global_cache(datamodule):
+                return False
+        elif task_name == "linear_probe":
+            try:
+                if not datamodule.supports_global_embedding_cache():
+                    return False
+            except Exception:
+                return False
+            if getattr(datamodule, "limit_windows_per_split", None) is not None:
+                return False
+        else:
+            return False
+        from neuroatlas.extensions.tasks.linear_probe import _embedding_cache_dir
+
+        try:
+            path = _embedding_cache_dir(self.cache_root, dataset_name, checkpoint_spec, "all",
+                                        datamodule, purpose="global_embeddings")
+        except Exception:
+            return False
+        return cache_exists(Path(path))
+
     def _run_one(self, dataset_name: str, dataset_config: Dict[str, Any], checkpoint_spec) -> BenchmarkResult:
+        # what a message said deep inside the run names it by (pair.where)
+        from .pair import working_on
+
+        with working_on(dataset_name, checkpoint_spec.identifier, dataset_config.get("fold")):
+            return self._run_one_pair(dataset_name, dataset_config, checkpoint_spec)
+
+    def _run_one_pair(self, dataset_name: str, dataset_config: Dict[str, Any],
+                      checkpoint_spec) -> BenchmarkResult:
         dataset_spec = load_dataset_spec(dataset_name)
 
         # Opt-in channel-map layer: if src/neuroatlas/configs/channel_maps/<slug>.yaml
@@ -572,24 +797,31 @@ class BenchmarkRunner:
         channel_map_name = dataset_config.pop("channel_map_name", None) or dataset_name
         cmap = load_channel_map(channel_map_name)
         task_name = self._task_name_for(dataset_spec, checkpoint_spec)
-        if cmap is not None and cmap.is_skip(checkpoint_spec.model_family):
+        family = checkpoint_spec.model_family
+        if cmap is not None and (cmap.is_skip(family) or not cmap.has_entry(family)):
+            # decided before any data is read: the map rules the pair out
+            # (`skip`, with its note as the reason), or has no entry for the
+            # family (`invalid`)
+            state, detail = cmap.state_for(family)
+            if state == "skip":
+                code = RULED_OUT_CODE
+                reason = " ".join(str(detail or "").split()).rstrip(".")
+                message = (f"ruled out: the {dataset_name} channel map excludes the {family} "
+                           f"family" + (f" ({reason[:1].lower() + reason[1:]})" if reason else ""))
+            else:
+                code, message = INVALID_CODE, detail
             return BenchmarkResult(
                 checkpoint_id=checkpoint_spec.identifier,
                 dataset_name=dataset_name,
                 evaluation_mode=checkpoint_spec.evaluation_mode(dataset_name),
                 failure=BenchmarkFailure(
-                    code="channel_map_skip",
-                    message=(
-                        f"({dataset_name!r}, {checkpoint_spec.model_family!r}) "
-                        f"explicitly skipped by src/neuroatlas/configs/channel_maps/"
-                        f"{dataset_name}.yaml; remove from benchmark matrix "
-                        f"or remove the skip marker."
-                    ),
+                    code=code,
+                    message=message,
                     details={
                         "channel_map_path": str(
                             Path("neuroatlas") / "configs" / "channel_maps" / f"{dataset_name}.yaml"
                         ),
-                        "notes": cmap.notes.get(checkpoint_spec.model_family, ""),
+                        "notes": cmap.notes.get(family, ""),
                     },
                 ),
                 metadata={
@@ -605,10 +837,12 @@ class BenchmarkRunner:
         try:
             effective_extract_only = self.extract_only or self.embed_chunk is not None
             reuse = not (self.reprobe or effective_extract_only)
-            # Weights only once the fold is known to need probing: a fold
-            # whose saved predictions are reused never loads its backbone.
+            # Weights only once the pair is known to need them: a fold whose
+            # saved predictions are reused, an extraction that finds its
+            # cache, and a probe (or --reprobe) of embeddings already
+            # extracted never load the backbone.
             datamodule, backbone = self._prepare_pair(
-                dataset_name, dataset_config, checkpoint_spec, cmap, load_weights=not reuse)
+                dataset_name, dataset_config, checkpoint_spec, cmap, load_weights=False)
             # The spec the backbone was built from (results record it).
             checkpoint_spec = self._fit_checkpoint_to_window(datamodule, checkpoint_spec)
             probe_dir = self._probe_dir(dataset_name, checkpoint_spec.identifier, datamodule)
@@ -619,8 +853,16 @@ class BenchmarkRunner:
                     if cmap is not None:
                         saved.metadata.setdefault("channel_map_applied", True)
                     return saved
-                if backbone is None:
-                    backbone = load_backbone(checkpoint_spec)
+            if backbone is None:
+                if effective_extract_only and self._extracted_already(
+                        task_name, dataset_name, checkpoint_spec, datamodule):
+                    backbone = _PrecomputedStubBackbone(checkpoint_spec)
+                elif effective_extract_only:
+                    backbone = _load_weights(checkpoint_spec)
+                else:
+                    # probing: the weights only if the task has to extract
+                    backbone = _LazyBackbone(checkpoint_spec, _load_weights)
+                progress.current().phase("preparing the windows")
             from neuroatlas.extensions.tasks.linear_probe import (
                 require_cached_embeddings,
             )
@@ -651,13 +893,29 @@ class BenchmarkRunner:
                 self._remember(result, probe_dir)
             return result
         except Exception as exc:
+            from neuroatlas import quiet
             from neuroatlas.cli import _msg
 
             # The pair failed and the run goes on: one line now, its first
             # sentence (-v and --log: the whole message; results.json keeps it).
-            _msg.error(f"{dataset_name}/{checkpoint_spec.identifier} "
-                       f"(fold {dataset_config.get('fold', '?')}): "
-                       + _msg.brief(_msg.exception_text(exc)))
+            fold = dataset_config.get("fold")
+            pair = f"{dataset_name}/{checkpoint_spec.identifier}" + (
+                f" fold {fold}" if fold is not None else "")
+            code, message = "runtime_failure", _exception_text(exc)
+            if isinstance(exc, WeightsMissing):
+                code, message = WEIGHTS_MISSING_CODE, str(exc)
+            else:
+                # a dataset that is not here fails every run on it, whatever
+                # the reader raised: say that, once, with what brings it
+                missing = data_missing_text(dataset_name)
+                if missing:
+                    code, message = DATA_MISSING_CODE, missing
+            if code == "runtime_failure" or quiet.once(f"{code}:{dataset_name}"
+                                                       if code == DATA_MISSING_CODE
+                                                       else f"{code}:{pair}"):
+                _msg.error(f"{pair}: " + _msg.brief(message))
+            else:
+                logging.getLogger(__name__).info("%s: %s", pair, message)
             # The traceback is for a bug report: the --log file, or -v on screen.
             logging.getLogger("neuroatlas.traceback").debug(
                 "%s/%s failed", dataset_name, checkpoint_spec.identifier, exc_info=True)
@@ -666,11 +924,13 @@ class BenchmarkRunner:
                 dataset_name=dataset_name,
                 evaluation_mode=checkpoint_spec.evaluation_mode(dataset_name),
                 failure=BenchmarkFailure(
-                    code="runtime_failure",
-                    message=str(exc),
+                    code=code,
+                    message=message if code != "runtime_failure" else str(exc),
                     details={
                         "checkpoint_status": checkpoint_spec.status,
                         "wrapper_name": checkpoint_spec.wrapper_name,
+                        **({"exception": _exception_text(exc)}
+                           if code != "runtime_failure" else {}),
                     },
                 ),
                 metadata={"task_name": task_name, "spec": checkpoint_spec.to_dict(), **dataset_config},
@@ -691,22 +951,24 @@ class BenchmarkRunner:
         total, done = len(runs) * len(specs), 0
         if total:
             datasets = sorted({name for name, _ in runs})
-            print(f"probing {len(specs)} model(s) on {', '.join(datasets)}: {total} run(s), "
-                  f"one line each as it finishes", flush=True)
+            progress.say(f"probing {_count(len(specs), 'checkpoint')} on {', '.join(datasets)}: "
+                         f"{_count(total, 'run')} (checkpoint x fold), one line each as it "
+                         f"finishes")
         for dataset_name, dataset_config in runs:
             for spec in specs:
                 started = time.monotonic()
                 fold = dataset_config.get("fold")
                 label = (f"[{done + 1}/{total}] {dataset_name} {spec.identifier}"
                          + ("" if fold is None else f" fold {fold}"))
+                # a live line through the fold's phases on a terminal; off
+                # one, its result line alone
                 with _Ticker(label):
                     result = self._run_one(dataset_name, dataset_config, spec)
                 results.append(result)
                 # One line per probed fold, whatever the log level: a probe
                 # over many models runs for hours with nothing else to show.
                 done += 1
-                print(_progress_line(done, total, result, time.monotonic() - started),
-                      flush=True)
+                progress.say(_progress_line(done, total, result, time.monotonic() - started))
         self._write_outputs(results)
         return results
 
@@ -727,8 +989,8 @@ class BenchmarkRunner:
         if total:
             chunk = (f", subject chunk {self.embed_chunk[0]}/{self.embed_chunk[1]}"
                      if self.embed_chunk is not None else "")
-            print(f"embedding {len(specs)} model(s) on {', '.join(by_dataset)}: "
-                  f"{total} run(s){chunk}", flush=True)
+            progress.say(f"embedding {_count(len(specs), 'checkpoint')} on {', '.join(by_dataset)}"
+                         f"{chunk}, one line each as it finishes")
         for dataset_name, configs in by_dataset.items():
             for spec in specs:
                 done += 1
@@ -747,8 +1009,12 @@ class BenchmarkRunner:
                             break
                 results.extend(pair_results)
                 outcome = _embed_outcome(pair_results, item.counts)
-                seconds = None if outcome.startswith("cached") else item.seconds
-                print(progress.result_line(done, total, where, outcome, seconds), flush=True)
+                # a cached pair's time only when it was not a moment: loading
+                # a BCI cohort to find its cache takes minutes
+                seconds = item.seconds
+                if outcome == ALREADY_CACHED and seconds <= _CACHED_SHOWN_AFTER:
+                    seconds = None
+                progress.say(progress.result_line(done, total, where, outcome, seconds))
         return results
 
     def _result_key(self, result: BenchmarkResult) -> tuple:
@@ -854,113 +1120,29 @@ class BenchmarkRunner:
             json.dump([result.to_dict() for result in results], handle, indent=2)
         self.write_tables(results)
 
+    #: Tables an earlier version of this runner wrote beside results.json, by
+    #: their first line. `neuroatlas results` summarises results.json; these
+    #: had no column for most benchmarks' headline and their ± was another SD.
+    _OLD_TABLES = {
+        "results.csv": "dataset,task,mode,aggregation,fold,checkpoint_id,evaluation_mode,status,",
+        "results.md": "| Dataset | Task | Mode | Aggregation | Fold | Checkpoint | Eval Mode |",
+        "summary.md": "| Dataset | Task | Mode | Aggregation | Fold | Checkpoint | Eval Mode |",
+    }
+
     def write_tables(self, results: List[BenchmarkResult]) -> None:
-        """results.csv, summary.md and results.md from the rows of results.json
-        (`neuroatlas rescore` rewrites them after changing the metrics)."""
-        csv_rows = [
-            "dataset,task,mode,aggregation,fold,checkpoint_id,evaluation_mode,status,"
-            "val_accuracy,val_macro_f1,val_weighted_f1,val_cohen_kappa,val_f1_per_class,"
-            "test_accuracy,test_macro_f1,test_weighted_f1,test_cohen_kappa,test_f1_per_class"
-        ]
-        for result in results:
-            val_metrics = _select_val_metrics(result)
-            test_metrics = _select_test_metrics(result)
-            csv_rows.append(
-                ",".join([
-                    result.dataset_name,
-                    str(result.metadata.get("task_name", result.evaluation_mode)),
-                    str(result.metadata.get("mode", "")),
-                    str(result.metadata.get("aggregation", "")),
-                    str(result.metadata.get("fold", "")),
-                    result.checkpoint_id,
-                    result.evaluation_mode,
-                    "ok" if result.ok else "failed",
-                    _format_metric(_metric_scalar(val_metrics, "accuracy"), digits=6),
-                    _format_metric(_metric_scalar(val_metrics, "macro_f1"), digits=6),
-                    _format_metric(_metric_scalar(val_metrics, "weighted_f1"), digits=6),
-                    _format_metric(_metric_scalar(val_metrics, "cohen_kappa"), digits=6),
-                    '"' + _format_f1_per_class(val_metrics, digits=6) + '"',
-                    _format_metric(_metric_scalar(test_metrics, "accuracy"), digits=6),
-                    _format_metric(_metric_scalar(test_metrics, "macro_f1"), digits=6),
-                    _format_metric(_metric_scalar(test_metrics, "weighted_f1"), digits=6),
-                    _format_metric(_metric_scalar(test_metrics, "cohen_kappa"), digits=6),
-                    '"' + _format_f1_per_class(test_metrics, digits=6) + '"',
-                ])
-            )
-        (self.output_root / "results.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
-
-        lines = [
-            "| Dataset | Task | Mode | Aggregation | Fold | Checkpoint | Eval Mode | Status | Val Acc | Val Macro-F1 | Val Weighted-F1 | Val Kappa | Val F1/Class | Test Acc | Test Macro-F1 | Test Weighted-F1 | Test Kappa | Test F1/Class |",
-            "|---|---|---|---|---:|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---|",
-        ]
-        for result in results:
-            val_metrics = _select_val_metrics(result)
-            test_metrics = _select_test_metrics(result)
-            lines.append(
-                f"| {result.dataset_name} | {result.metadata.get('task_name', result.evaluation_mode)} | "
-                f"{result.metadata.get('mode', '')} | {result.metadata.get('aggregation', '')} | "
-                f"{result.metadata.get('fold', '')} | {result.checkpoint_id} | {result.evaluation_mode} | "
-                f"{'ok' if result.ok else 'failed'} | "
-                f"{_format_metric(_metric_scalar(val_metrics, 'accuracy'))} | "
-                f"{_format_metric(_metric_scalar(val_metrics, 'macro_f1'))} | "
-                f"{_format_metric(_metric_scalar(val_metrics, 'weighted_f1'))} | "
-                f"{_format_metric(_metric_scalar(val_metrics, 'cohen_kappa'))} | "
-                f"{_format_f1_per_class(val_metrics)} | "
-                f"{_format_metric(_metric_scalar(test_metrics, 'accuracy'))} | "
-                f"{_format_metric(_metric_scalar(test_metrics, 'macro_f1'))} | "
-                f"{_format_metric(_metric_scalar(test_metrics, 'weighted_f1'))} | "
-                f"{_format_metric(_metric_scalar(test_metrics, 'cohen_kappa'))} | "
-                f"{_format_f1_per_class(test_metrics)} |"
-            )
-
-        grouped: Dict[tuple[str, str, str, str, str], List[BenchmarkResult]] = {}
-        for result in results:
-            key = (
-                result.dataset_name,
-                str(result.metadata.get("task_name", result.evaluation_mode)),
-                str(result.metadata.get("mode", "")),
-                str(result.metadata.get("aggregation", "")),
-                result.checkpoint_id,
-            )
-            grouped.setdefault(key, []).append(result)
-
-        if grouped:
-            lines.extend(["", "## Fold Averages (mean±std)", ""])
-            lines.extend([
-                "| Dataset | Task | Mode | Aggregation | Folds | Checkpoint | Eval Mode | Status | Val Acc | Val Macro-F1 | Val Weighted-F1 | Val Kappa | Val F1/Class | Test Acc | Test Macro-F1 | Test Weighted-F1 | Test Kappa | Test F1/Class |",
-                "|---|---|---|---|---:|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---|",
-            ])
-            for (dataset_name, task_name, mode, aggregation, checkpoint_id), group in sorted(grouped.items()):
-                ok_group = [result for result in group if result.ok]
-                evaluation_mode = group[0].evaluation_mode
-                if not ok_group:
-                    lines.append(
-                        f"| {dataset_name} | {task_name} | {mode} | {aggregation} | — | {checkpoint_id} | {evaluation_mode} | failed |  |  |  |  |  |  |  |  |  |  |"
-                    )
-                    continue
-                val_rows = [_select_val_metrics(result) for result in ok_group]
-                test_rows = [_select_test_metrics(result) for result in ok_group]
-                fold_ids = [str(result.metadata.get("fold", "?")) for result in ok_group]
-                avg_val = {m: _mean_metric(val_rows, m) for m in ("accuracy", "macro_f1", "weighted_f1", "cohen_kappa")}
-                std_val = {m: _std_metric(val_rows, m) for m in ("accuracy", "macro_f1", "weighted_f1", "cohen_kappa")}
-                avg_val["f1_per_class"] = _mean_f1_per_class(val_rows)
-                std_val["f1_per_class"] = _std_f1_per_class(val_rows)
-                avg_test = {m: _mean_metric(test_rows, m) for m in ("accuracy", "macro_f1", "weighted_f1", "cohen_kappa")}
-                std_test = {m: _std_metric(test_rows, m) for m in ("accuracy", "macro_f1", "weighted_f1", "cohen_kappa")}
-                avg_test["f1_per_class"] = _mean_f1_per_class(test_rows)
-                std_test["f1_per_class"] = _std_f1_per_class(test_rows)
-                lines.append(
-                    f"| {dataset_name} | {task_name} | {mode} | {aggregation} | {','.join(fold_ids)} | {checkpoint_id} | {evaluation_mode} | ok ({len(ok_group)} folds) | "
-                    f"{_format_mean_std(avg_val['accuracy'], std_val['accuracy'])} | "
-                    f"{_format_mean_std(avg_val['macro_f1'], std_val['macro_f1'])} | "
-                    f"{_format_mean_std(avg_val['weighted_f1'], std_val['weighted_f1'])} | "
-                    f"{_format_mean_std(avg_val['cohen_kappa'], std_val['cohen_kappa'])} | "
-                    f"{_format_mean_std_f1_per_class(avg_val['f1_per_class'], std_val['f1_per_class'])} | "
-                    f"{_format_mean_std(avg_test['accuracy'], std_test['accuracy'])} | "
-                    f"{_format_mean_std(avg_test['macro_f1'], std_test['macro_f1'])} | "
-                    f"{_format_mean_std(avg_test['weighted_f1'], std_test['weighted_f1'])} | "
-                    f"{_format_mean_std(avg_test['cohen_kappa'], std_test['cohen_kappa'])} | "
-                    f"{_format_mean_std_f1_per_class(avg_test['f1_per_class'], std_test['f1_per_class'])} |"
-                )
-        (self.output_root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        (self.output_root / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        """results.json is the folder's one record; `neuroatlas results`
+        summarises it. No table is written beside it, and one this runner
+        once wrote there is removed when results.json is rewritten (it would
+        no longer match it). *results* is not read."""
+        for name, head in self._OLD_TABLES.items():
+            path = self.output_root / name
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    first = handle.readline()
+            except OSError:
+                continue
+            if first.startswith(head):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass

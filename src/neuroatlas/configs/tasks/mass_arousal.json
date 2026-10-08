@@ -1,5 +1,6 @@
 {
-  "_doc": "MASS arousal detection, SS01 only. Was probe_mass_arousal_fm.py.",
+  "about": "Arousal detection on MASS subset SS01, the one with arousal annotations, at the same thresholds as arousal.",
+  "_doc": "MASS arousal detection, SS01 only.",
   "task": {
     "name": "arousal_detection",
     "subset_filter": "SS01",

@@ -14,7 +14,7 @@ domain: sleep
 paper_dataset: false
 
 description: >
-  Sleep-EDF benchmark adapter for NPZ and PhysioEx-derived layouts.
+  Sleep-EDF, read from NPZ or PhysioEx-prepared files.
 
 cohort:
   centre: "Sleep-EDF (PhysioNet), Netherlands"

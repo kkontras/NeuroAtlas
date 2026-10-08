@@ -20,8 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from tqdm.auto import tqdm
 
+from neuroatlas import progress
 from neuroatlas.benchmarking_helpers import BenchmarkResult, EmbeddingPayload, TaskSpec
 from neuroatlas.benchmarking_helpers.runtime.cache import (
     cache_exists,
@@ -131,13 +131,26 @@ def _recording_key(m: dict) -> str:
     return str(m.get("recording_id") or m.get("subject_id", "unknown"))
 
 
-def _drop_nonfinite(feats: np.ndarray, labs: np.ndarray, name: str):
+def _drop_nonfinite(feats: np.ndarray, labs: np.ndarray, name: str, where: str = ""):
+    """Leave out the rows whose embedding is not finite; *where* names the
+    run (``dataset/checkpoint fold k``) in the warning."""
     finite = np.isfinite(feats).all(axis=1)
     n_bad = int((~finite).sum())
     if n_bad:
-        print(f"[attention_probe] dropping {n_bad}/{len(feats)} non-finite {name} rows")
+        logger.warning("%s%s of %s %s windows have non-finite embeddings and are left out "
+                       "of the probe", f"{where}: " if where else "", f"{n_bad:,}",
+                       f"{len(feats):,}", name)
         return feats[finite], labs[finite], finite
     return feats, labs, finite
+
+
+def _run_name(dataset_name: str, checkpoint_spec, datamodule) -> str:
+    """``dataset/checkpoint fold k`` (the fold when the dataset has one)."""
+    from neuroatlas.benchmarking_helpers.runtime.pair import where
+
+    fold = (getattr(datamodule, "metadata", None) or {}).get("fold")
+    ident = getattr(checkpoint_spec, "identifier", checkpoint_spec)
+    return where(f"{dataset_name}/{ident}" + (f" fold {fold}" if fold is not None else ""))
 
 
 def _build_window_index(
@@ -488,12 +501,12 @@ class _TorchAttentionProbe:
                 wait += 1
 
             if epoch % 10 == 0 or improved or wait >= self.patience:
-                print(f"  epoch {epoch:3d}  val_loss={val_loss:.4f}  best={best_val_loss:.4f}  wait={wait}")
+                logger.debug(f"  epoch {epoch:3d}  val_loss={val_loss:.4f}  best={best_val_loss:.4f}  wait={wait}")
 
             if wait >= self.patience:
                 break
 
-        print(f"  stopped at epoch {epoch}, best_val_loss={best_val_loss:.4f}")
+        logger.debug(f"  stopped at epoch {epoch}, best_val_loss={best_val_loss:.4f}")
         if best_state is not None:
             self._model.load_state_dict(best_state)
 
@@ -588,13 +601,16 @@ def _train_attention_probe_windowed(
     estimators: Dict[int, _TorchAttentionProbe] = {}
     test_outputs: List[Dict[str, Any]] = []
 
-    print(
+    logger.debug(
         f"[attention_probe] fitting windowed probe on "
         f"train={len(train_y)} val={len(val_y)} test={len(test_y)} "
         f"with {len(seeds)} seed(s), dim={dim}, window={window_size}"
     )
 
-    for seed in tqdm(seeds, desc="Attention probe seeds", leave=True):
+    # seed by seed on the fold's live line, not a bar
+    item = progress.current()
+    item.phase("fitting", total=len(seeds), unit="seeds")
+    for seed in seeds:
         probe = _TorchAttentionProbe(
             dim=dim, n_classes=n_classes, seed=seed,
             device=device, class_weight=class_weight, **ep_kwargs,
@@ -626,7 +642,8 @@ def _train_attention_probe_windowed(
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
         test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
                              "y_proba": test_proba})
-        print(
+        item.update(advance=1)
+        logger.debug(
             f"[attention_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"
@@ -655,13 +672,16 @@ def _train_attention_probe_variable(
     estimators: Dict[int, _TorchAttentionProbe] = {}
     test_outputs: List[Dict[str, Any]] = []
 
-    print(
+    logger.debug(
         f"[attention_probe] fitting variable-length probe on "
         f"train={len(train_y)} val={len(val_y)} test={len(test_y)} subjects "
         f"with {len(seeds)} seed(s), dim={dim}"
     )
 
-    for seed in tqdm(seeds, desc="Attention probe seeds", leave=True):
+    # seed by seed on the fold's live line, not a bar
+    item = progress.current()
+    item.phase("fitting", total=len(seeds), unit="seeds")
+    for seed in seeds:
         probe = _TorchAttentionProbe(
             dim=dim, n_classes=n_classes, seed=seed,
             device=device, class_weight=class_weight, **ep_kwargs,
@@ -690,7 +710,8 @@ def _train_attention_probe_variable(
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
         test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
                              "y_proba": test_proba})
-        print(
+        item.update(advance=1)
+        logger.debug(
             f"[attention_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"
@@ -704,7 +725,7 @@ def _aggregate_seeds(per_seed, estimators, selection_metric, test_y=None, test_o
                      n_classes=None):
     best_row = max(per_seed, key=lambda r: float(r["val"][selection_metric]))
     best_seed = int(best_row["seed"])
-    print(
+    logger.debug(
         f"[attention_probe] selected best_seed={best_seed} "
         f"best_val_{selection_metric}={float(best_row['val'][selection_metric]):.6f}"
     )
@@ -816,12 +837,13 @@ def evaluate_attention_probe(
             p.labels = np.asarray(p.labels)[mask]
             p.metadata = [m for m, keep in zip(p.metadata, mask) if keep]
 
+    where = _run_name(dataset_name, checkpoint_spec, datamodule)
     train_feats, train_labels, train_finite = _drop_nonfinite(
-        np.asarray(train_p.features), np.asarray(train_p.labels), "train")
+        np.asarray(train_p.features), np.asarray(train_p.labels), "train", where)
     val_feats, val_labels, val_finite = _drop_nonfinite(
-        np.asarray(val_p.features), np.asarray(val_p.labels), "val")
+        np.asarray(val_p.features), np.asarray(val_p.labels), "validation", where)
     test_feats, test_labels, test_finite = _drop_nonfinite(
-        np.asarray(test_p.features), np.asarray(test_p.labels), "test")
+        np.asarray(test_p.features), np.asarray(test_p.labels), "test", where)
 
     train_meta = [m for m, keep in zip(train_p.metadata, train_finite) if keep]
     val_meta = [m for m, keep in zip(val_p.metadata, val_finite) if keep]
@@ -983,7 +1005,8 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="attention_probe",
-        description="Context-window attention probe for per-epoch classification (sleep staging).",
+        description="An attention probe over a window of neighbouring epochs, for "
+                    "per-epoch classification (sleep staging).",
         evaluator=evaluate_attention_probe,
         score=score,
     ),

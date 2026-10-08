@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-import sys
+import logging
 import time
 import traceback
 from typing import Any, Dict, List, Optional
@@ -11,14 +11,21 @@ import torch
 import torch.nn as nn
 from scipy.stats import trim_mean as _scipy_trim_mean
 
+from neuroatlas import progress
 from neuroatlas.benchmarking_helpers import BenchmarkResult, TaskSpec
 from neuroatlas.benchmarking_helpers.probes.metrics import compute_regression_metrics
 from neuroatlas.benchmarking_helpers.probes.probe import train_probe
 from neuroatlas.extensions.tasks.linear_probe import _extract_or_load_embeddings
 
 
+logger = logging.getLogger(__name__)
+
+
 def _log(msg: str) -> None:
-    print(f"[brain_age] {msg}", flush=True)
+    """A detail of the fold (splits, strategies, the alpha sweep): -v and
+    --log. The screen gets the fold's live line and its result line, which
+    carries the headline MAE."""
+    logger.info("[brain_age] %s", msg)
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +98,10 @@ def _train_mlp_probe(
     best_state: Dict[str, Any] = {}
     best_epoch = 0
 
-    from tqdm import tqdm as _tqdm
-    epoch_iter = _tqdm(range(1, n_epochs + 1), desc="MLP epochs", file=sys.stdout,
-                       leave=False, ncols=100, dynamic_ncols=False)
-    for epoch in epoch_iter:
+    # epoch by epoch on the fold's live line (not a bar on stdout)
+    item = progress.current()
+    item.phase("training the MLP probe", total=n_epochs, unit="epochs")
+    for epoch in range(1, n_epochs + 1):
         # --- train ---
         model.train()
         perm = torch.randperm(n_train, device=device)
@@ -125,14 +132,12 @@ def _train_mlp_probe(
             "val_mae": round(val_mae, 4),
         })
 
-        epoch_iter.set_postfix(val_mae=f"{val_mae:.4f}", best=f"{best_val_mae:.4f}")
+        item.update(advance=1)
 
         if val_mae < best_val_mae:
             best_val_mae = val_mae
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
-
-    epoch_iter.close()
 
     # --- evaluate best model ---
     model.load_state_dict(best_state)
@@ -593,12 +598,15 @@ def _run_ridge_alpha_sweep(
     val_predictions: List[np.ndarray] = []
     best_index: Optional[int] = None
 
+    item = progress.current()
+    item.phase("ridge alpha sweep", total=len(alpha_values), unit="alphas")
     for alpha in alpha_values:
         pipe = Pipeline([
             ("scaler", StandardScaler()),
             ("ridge", Ridge(alpha=max(alpha, 1e-10))),
         ])
         pipe.fit(train_x, train_y)
+        item.update(advance=1)
         val_pred = pipe.predict(val_x)
         test_pred = pipe.predict(test_x)
         val_metrics = compute_regression_metrics(val_y, val_pred)
@@ -789,6 +797,15 @@ def _regression_selection_metric(probe_config: Dict[str, Any]) -> str:
 # Main evaluator
 # ---------------------------------------------------------------------------
 
+#: What the fold's live line calls each strategy while it fits.
+_STRATEGY_WORDS = {
+    "ridge_subject": "ridge on subject embeddings",
+    "mlp_subject": "MLP on subject embeddings",
+    "epoch_regression": "ridge on window embeddings",
+    "ridge_subject_nested_cv": "nested-CV ridge on subject embeddings",
+}
+
+
 def _run_isolated(name: str, fn, failures: Dict[str, str]):
     """Run one secondary strategy; a failure is logged and recorded, not raised.
 
@@ -800,7 +817,19 @@ def _run_isolated(name: str, fn, failures: Dict[str, str]):
         return fn()
     except Exception as exc:  # noqa: BLE001 -- recorded in metrics["strategy_failures"]
         failures[name] = f"{type(exc).__name__}: {exc}"
-        _log(f"  {name} FAILED, continuing without it: {type(exc).__name__}: {exc}")
+        # a secondary estimator: the fold goes on and its headline (the
+        # ridge) is unaffected, so nothing to act on: -v and --log, once
+        # per strategy and command (every later fold's at DEBUG)
+        from neuroatlas import quiet
+        from neuroatlas.benchmarking_helpers.runtime.pair import where
+        from neuroatlas.cli._msg import exception_text
+
+        run = where()
+        quiet.warn_once(logger, f"brain_age strategy failed:{name}",
+                        "brain age: the secondary %s estimator could not be fitted%s (%s); "
+                        "the ridge headline is unaffected",
+                        _STRATEGY_WORDS.get(name, name), f" on {run}" if run else "",
+                        exception_text(exc), level=logging.INFO)
         _log("  " + traceback.format_exc().rstrip().replace("\n", "\n[brain_age]   "))
         return None
 
@@ -931,7 +960,7 @@ def evaluate_brain_age(
                 f"{feats.shape} — expected 2-D (n_rows, dim) with at least one "
                 f"row. If this dataset reads a precomputed embedding cache, the "
                 f"cache is probably missing or not yet finalized; check the "
-                f"[precomputed] log line above for the path it looked at."
+                f"warning above for the path it looked at."
             )
 
     # Ages: refuse a cache without any, drop the subjects that have none.
@@ -948,6 +977,7 @@ def evaluate_brain_age(
         )["holdout"]
 
     # --- Subject-level features: aggregate embeddings per subject -----------
+    progress.current().phase("averaging the embeddings per subject")
     _log(f"Splits: train={len(train_payload.labels):,d}  val={len(val_payload.labels):,d}  test={len(test_payload.labels):,d} epochs")
     t0 = time.time()
     train_x, train_y, train_subjects = _aggregate_subjects_regression(train_payload, aggregation)
@@ -968,6 +998,8 @@ def evaluate_brain_age(
     failures: Dict[str, str] = {}
 
     def _strategy(name: str, fn):
+        # the fold's live line: which estimator it fits now
+        progress.current().phase(f"fitting {_STRATEGY_WORDS.get(name, name)}")
         if name == headline:
             return fn()  # no headline, no result: let the fold fail
         return _run_isolated(name, fn, failures)
@@ -1426,7 +1458,7 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="brain_age",
-        description="Aggregate epoch embeddings per subject and train a subject-level age regressor.",
+        description="Brain age: ridge regression of age on each subject's mean embedding.",
         evaluator=evaluate_brain_age,
         score=score,
     )

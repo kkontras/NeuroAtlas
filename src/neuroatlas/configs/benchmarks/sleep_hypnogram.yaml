@@ -12,7 +12,19 @@ datasets: [dcsm, dod, isruc, mass, physionet2026, sleep_edf_expanded, ucddb, wsc
 single: sleep_edf_expanded
 metrics:
   # Pearson r between each feature from the predicted and the true hypnogram,
-  # averaged over the 34 features. Their MAEs are in different units (minutes,
-  # percentages, counts), so no average of those means anything.
+  # averaged over the 34 features whose r is defined (run.py drops a NaN r:
+  # fewer than 2 recordings, or one side constant). Their MAEs are in
+  # different units (minutes, percentages, counts), so no average of those
+  # means anything. One value per (dataset, model): no spread.
   headline: pearson_r
   higher_is_better: true
+  unit: recording
+  describe: >
+    mean, over the hypnogram features, of the Pearson r between each feature
+    from the predicted and from the scored hypnogram, across the test
+    recordings of every fold pooled
+  fold: >
+    one value per row, no ±: every fold's test recordings are pooled. The
+    features column says how many of the 34 features went into the mean; a
+    feature whose r is undefined (fewer than 2 recordings, or constant
+    values) is left out

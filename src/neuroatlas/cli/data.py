@@ -1,13 +1,12 @@
-"""``neuroatlas data`` -- is each dataset here, how to get it, and build its cache.
+"""``neuroatlas data`` -- is each dataset here; download it; build its optional prepared file.
 
     neuroatlas data status   [benchmark|dataset|domain ...]  [-v] [--format F]
-    neuroatlas data download <dataset ...> [--dry-run] [--mirror aws] [--keep-archive]
+    neuroatlas data download <dataset ...> [--dry-run] [--mirror aws] [--keep-archive] [--first N]
     neuroatlas data prepare  <dataset> [--dry-run] [--set KEY=VALUE] [--shard K/N]
 """
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -46,7 +45,8 @@ def expand_targets(targets: List[str]) -> List[str]:
             hint = f" (did you mean {close[0]}?)" if close else ""
             raise catalog.CatalogError(
                 f"{target!r} is not a benchmark, domain or dataset{hint}\n"
-                f"fix: neuroatlas list benchmarks, or neuroatlas list datasets",
+                f"fix: neuroatlas list benchmarks\n"
+                f"fix: neuroatlas list datasets",
                 suggest={target: close[0]} if close else None)
         out.extend(s for s in slugs if s not in out)
     return out
@@ -68,8 +68,8 @@ def _data_rel(path: Optional[Path]) -> str:
 
 
 def _row(st, verbose: bool, machine: bool) -> Dict[str, object]:
-    row: Dict[str, object] = {"dataset": st.slug, "access": st.access, "state": st.state,
-                              "download": st.download,
+    row: Dict[str, object] = {"dataset": st.slug, "access": st.access, "host": st.host,
+                              "state": st.state, "download": st.download,
                               "map": "yes" if st.channel_map else "no"}
     if machine:
         # Machine-readable output: absolute paths, the key that moves the
@@ -78,71 +78,114 @@ def _row(st, verbose: bool, machine: bool) -> Dict[str, object]:
                     "setting": st.setting, "n_files": st.n_files, "expected": st.expected,
                     "found": st.found, "note": "; ".join(st.notes) or None})
     elif verbose:
-        row.update({"path": _data_rel(st.path), "key": st.setting or "-"})
+        row.update({"path": _data_rel(st.path), "setting": st.setting or "-"})
     return row
 
 
+#: The `map` column (-v, and every machine format) explained.
+MAP_LEGEND = ("channel map", "yes: a channel map ships for this dataset (which of its channels "
+                             "each model family gets, or which families it rules out)")
+
+
 def cmd_status(args) -> int:
-    from neuroatlas import config, data
+    from neuroatlas import config, data, progress
 
     slugs = expand_targets(args.targets)
     machine = args.format in ("json", "csv")
     rows, notes, missing, tokenless = [], {}, [], []
+    # the command's live line (stderr, a terminal only): "checking 40% (2/5 datasets)"
+    item = progress.current().phase("checking", total=len(slugs), unit="datasets")
     for slug in slugs:
+        item.update(note=slug)
         st = data.status(slug)
+        item.update(advance=1)
         rows.append(_row(st, args.verbose, machine))
         lines = list(st.notes)
         if args.format == "table" and data.NO_NSRR_TOKEN in lines:
             # one line under the table for all of them, not one per row
             lines.remove(data.NO_NSRR_TOKEN)
             tokenless.append(slug)
-        if lines:
-            notes[len(rows) - 1] = lines
         if not st.found and st.path is not None:
             missing.append(st)
-    columns = ["dataset", "access", "state", "download", "map"]
+            if not any(line.strip().startswith("fix:") for line in lines):
+                # how to get it, under its row (the first remedy; with one
+                # dataset, every one, the setting for a copy elsewhere too)
+                from neuroatlas.check import data_fix
+
+                fixes = _msg.split(_msg.compose("-", data_fix(slug, st)))[2]
+                if slug in tokenless:
+                    # the NSRR token: one note under the table for all of them
+                    fixes = [f for f in fixes if not f.startswith("neuroatlas config token")]
+                lines += [f"  fix: {f}" for f in (fixes if len(slugs) == 1 else fixes[:1])]
+        if lines:
+            notes[len(rows) - 1] = lines
+    # the channel map column only with -v and in the machine formats: it
+    # says nothing a first look needs
+    columns = ["dataset", "host", "state", "download"]
     if machine:
-        columns += ["path", "path_key", "setting", "n_files", "expected", "found", "note"]
+        columns += ["map", "access", "path", "path_key", "setting", "n_files", "expected",
+                    "found", "note"]
     elif args.verbose:
-        columns += ["path", "key"]
+        columns += ["map", "path", "setting"]
     # The renderer turns the notes into the table's indented lines, or into the
     # `note` field of every row in machine formats.
-    render(rows, [c for c in columns if c != "note"], args.format, notes)
+    render(rows, [c for c in columns if c != "note"], args.format, notes,
+           labels={"map": "channel map"})
     if args.format != "table":
         return 0
     counts = Counter(str(r["state"]).split(" (")[0] for r in rows)
     if len(rows) > 1:
         print("\n" + _msg.counts(len(rows), "datasets", counts.most_common()))
-    # Explain only what is not obvious: "found" needs no legend (-v shows all).
-    explain = [s for s in counts if s in data.STATES and (args.verbose or s != "found")]
-    for state in explain:
-        print(f"  {state:<14} {data.STATES[state]}")
+    # Explain only what is not obvious: "found" and "downloadable" need no
+    # legend (-v explains every value shown).
+    states = [(s, data.STATES[s]) for s in counts
+              if s in data.STATES and (args.verbose or s != "found")]
+    words = [(w, data.DOWNLOAD_MEANINGS[w]) for w in dict.fromkeys(r["download"] for r in rows)
+             if w in data.DOWNLOAD_MEANINGS and (args.verbose or w != "downloadable")]
+    explained = states + words + ([MAP_LEGEND] if args.verbose else [])
+    print("\n".join(_msg.legend(explained)))
     root = config.get("data_root")
-    if args.verbose:
-        print("  map: yes      a channel map ships for it (configs/channel_maps/<dataset>.yaml)")
     if missing and not args.verbose:
         # where each was looked for, and the setting that points it at a copy
-        print("\nnot found here (to use your own copy: neuroatlas config set <setting> DIR):")
+        print("\nnot here; where each was looked for, and the setting that points it at a "
+              "copy elsewhere:")
         width = max(len(st.slug) for st in missing)
         places = [_data_rel(st.path) for st in missing]
         wide = max(len(w) for w in places)
         for st, where in zip(missing, places):
-            key = (st.setting or ("$MNE_DATA (export MNE_DATA=DIR moves it)"
-                                  if st.kind == "moabb" else ""))
+            key = st.setting or ("MNE_DATA (an environment variable)"
+                                 if st.kind == "moabb" else "")
             print(f"  {st.slug:<{width}}  {where:<{wide}}  {key}".rstrip())
     shown = [_data_rel(st.path) for st in missing] if not args.verbose else []
     if args.verbose or any(w.startswith("$DATA") for w in shown):
-        print(f"$DATA = {root if root else '(no data root: neuroatlas config init --data-root DIR)'}")
+        print("$DATA = " + (str(root) if root else
+                            "(no data root is set: neuroatlas config set data_root DIR)"))
+    if missing:
+        settable = [st for st in missing if st.setting]
+        moabb = [st for st in missing if st.kind == "moabb" and not st.setting]
+        if len(settable) > 1:
+            # the setting of the first one a folder holds (a preprocessed_path
+            # names a FILE); the table above names each dataset's
+            example = next((st for st in settable if not st.setting.endswith("_path")),
+                           settable[0])
+            what = "FILE" if example.setting.endswith("_path") else "DIR"
+            _msg.note("a dataset you already have elsewhere: point its setting (listed "
+                      "above) at it", f"neuroatlas config set {example.setting} {what}")
+        mne = config.mne_data()
+        if moabb and mne.origin != "env":
+            _msg.note(f"MOABB datasets are read from one folder, {mne.value}",
+                      "export MNE_DATA=DIR (to keep them elsewhere)")
     if tokenless:
-        _msg.note(f"no NSRR token: {', '.join(tokenless)} cannot be downloaded yet",
-                  "neuroatlas config token nsrr")
+        _msg.note(f"no NSRR token: `data download` needs one to fetch "
+                  f"{', '.join(tokenless)}", "neuroatlas config token nsrr")
     return 0
 
 
 def cmd_download(args) -> int:
     from neuroatlas import data
 
-    plans = [data.plan_download(slug, mirror=args.mirror, keep_archive=args.keep_archive)
+    plans = [data.plan_download(slug, mirror=args.mirror, keep_archive=args.keep_archive,
+                                first=getattr(args, "first", None))
              for slug in expand_targets(args.datasets)]
     if not args.dry_run:
         return _download(plans)
@@ -155,12 +198,14 @@ def cmd_download(args) -> int:
             continue
         why = data.refusal(plan)
         for line in data.describe(plan):
-            print(line)
+            data.say(line)             # a `note:` line to stderr, the plan to stdout
         if why:
             _msg.error(f"{slug}: {why}")
             status = max(status, 2)
         else:
-            size = f", about {plan.size_gb:g} GB" if plan.size_gb else ""
+            from neuroatlas import progress
+
+            size = f", about {progress.size(plan.size_gb * 1e9)}" if plan.size_gb else ""
             print(f"{slug}: dry run{size}; nothing was transferred")
     return status
 
@@ -175,7 +220,8 @@ def _download(plans) -> int:
     status = 0
     auto = [p for p in plans if p.handler not in ("manual", "internal")]
     if auto:
-        progress.say(f"downloading {len(auto)} dataset(s): {', '.join(p.slug for p in auto)}")
+        progress.say(f"downloading {_msg.plural(len(auto), 'dataset')}: "
+                     f"{', '.join(p.slug for p in auto)}")
     done = 0
     for plan in plans:
         if plan.handler in ("manual", "internal"):
@@ -207,20 +253,26 @@ def cmd_prepare(args) -> int:
         prepare.main(["--list"])
         return 0
     if not args.dataset:
-        _msg.error("name a dataset", "neuroatlas data prepare --list names those with a "
-                                     "build step")
+        _msg.error("name a dataset", "neuroatlas data prepare --list (the datasets with a "
+                                     "build step)")
         return 2
     slug = expand_targets([args.dataset])
     if len(slug) != 1:
-        _msg.error(f"data prepare takes one dataset; {args.dataset!r} is {len(slug)} of them")
+        _msg.error(f"data prepare takes one dataset; {args.dataset!r} is {len(slug)} of them",
+                   f"neuroatlas data prepare {slug[0]}" if slug else None)
         return 2
     slug = slug[0]
     acq = data.acquisition(slug)
-    if prepare.builder_for(slug) is None:
+    pipeline = (data._manifest(slug).get("pipeline") or {})
+    if prepare.builder_for(slug) is None or pipeline.get("required", True) is False:
         if acq.get("prepared_only"):
-            _msg.error(f"{slug} cannot be prepared here: " + data.manifest_text(acq["prepared_only"]))
+            _, what, fixes = _msg.split(data.manifest_text(acq["prepared_only"]))
+            _msg.error(f"{slug} has no build step: " + " ".join(what),
+                       "\n".join(fixes) or None)
             return 2
-        print(f"nothing to prepare: {slug} reads its raw data directly (no build step)")
+        print(f"nothing to prepare: {slug} is read from its "
+              + ("MOABB download" if acq.get("kind") == "moabb" else "raw data")
+              + " (no build step)")
         return 0
 
     raw = data.status(slug)
@@ -234,14 +286,12 @@ def cmd_prepare(args) -> int:
         # download the corpus itself, as a side effect of `prepare`.
         _msg.error(f"{slug}: no raw data to prepare from ({raw.state}: {_data_rel(raw.path)})",
                    f"neuroatlas data download {slug}"
-                   + (f", or neuroatlas config set {raw.setting} DIR" if raw.setting else ""))
+                   + (f"\nfix: neuroatlas config set {raw.setting} DIR (a copy elsewhere)"
+                      if raw.setting else ""))
         return 2
-    # Quiet MNE's per-file INFO lines (O-8); the builder prints its own
-    # progress. MNE reads the variable when imported, which status() may
-    # already have done, so set the live level too.
-    os.environ.setdefault("MNE_LOGGING_LEVEL", "WARNING")
-    if "mne" in sys.modules:
-        sys.modules["mne"].set_log_level(os.environ["MNE_LOGGING_LEVEL"])
+    # MNE's per-file INFO lines (O-8) are hidden and counted unless -v, for
+    # every command (neuroatlas.quiet.route_libraries); the builder prints its
+    # own progress.
     argv = ["--dataset", slug]
     for pair in args.overrides:
         argv += ["--set", pair]
@@ -252,13 +302,25 @@ def cmd_prepare(args) -> int:
     if args.dry_run:
         argv.append("--dry-run")
         if not raw.found:
-            _msg.warning(f"{slug}: no raw data yet ({raw.state}); the real run refuses",
+            _msg.warning(f"{slug}: its raw data is not here ({raw.state}); `data prepare` "
+                         f"without --dry-run refuses until it is",
                          f"neuroatlas data download {slug}")
     prepare.main(argv)
     if not args.dry_run:
         after = data.status(slug)
         print(f"{slug}: {after.state}" + (f" ({after.path})" if after.path else ""))
     return 0
+
+
+def _positive(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of recordings, at least 1; "
+                                         f"got {text!r}")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -272,10 +334,11 @@ def build_parser() -> argparse.ArgumentParser:
                                     "space- or comma-separated; default all.")
     st.add_argument("targets", nargs="*")
     st.add_argument("-v", "--verbose", action="store_true",
-                    help="Show every path, and the setting that moves it, as columns.")
+                    help="Show every path, the setting that moves it and whether a channel "
+                         "map ships, as columns, and explain every value.")
     add_format_arg(st)
     dl = sub.add_parser("download", help="Fetch a dataset, or print how to.",
-                        description="Fetch datasets into the folder their reader expects "
+                        description="Fetch datasets into the folder each is read from "
                                     "(under the data root; MOABB ones under $MNE_DATA). "
                                     "Credentialed and manual ones print where to get them. "
                                     "Exit 0 done, 1 a transfer failed, 2 refused.")
@@ -288,23 +351,27 @@ def build_parser() -> argparse.ArgumentParser:
                          "open-data copy on AWS (anonymous, usually much faster).")
     dl.add_argument("--keep-archive", action="store_true",
                     help="Keep a downloaded .zip after unpacking it (default: delete it).")
-    pr = sub.add_parser("prepare", help="Build a dataset's optional cache (no benchmark needs one).",
-                        description="Build a dataset's optional prepared file: a speed-up "
-                                    "for a few epilepsy cohorts, or dataio/bci.py's pickle "
-                                    "for five MOABB motor-imagery ones, which `embed` and "
-                                    "`run` do not read. Refuses until the raw data is "
-                                    "there (`data download` first), and writes under "
-                                    "<cache root>/prepared.")
+    dl.add_argument("--first", type=_positive, default=None, metavar="N",
+                    help="Fetch only the first N recordings, with the files they share, "
+                         "for a smoke test: `neuroatlas check` runs on them, `run` needs "
+                         "the whole dataset. PhysioNet, NSRR and file-by-file Zenodo "
+                         "downloads only.")
+    pr = sub.add_parser("prepare", help="Build a faster-to-read copy of an epilepsy dataset "
+                                        "(optional).",
+                        description="Build a faster-to-read copy of bonn, epilepsiae, sz1, "
+                                    "tuab or tusz. It is optional: every benchmark runs "
+                                    "without it. Refuses until the raw data is there (`data "
+                                    "download` first), and writes under <cache root>/prepared.")
     pr.add_argument("dataset", nargs="?")
     pr.add_argument("--set", dest="overrides", action="append", default=[],
                     metavar="KEY=VALUE", help="Override a dataset setting, e.g. raw_root=/data.")
-    pr.add_argument("--dest", default=None,
+    pr.add_argument("--dest", default=None, metavar="PATH",
                     help="Where the prepared file goes. Default: under <cache root>/prepared.")
     pr.add_argument("--shard", default=None, metavar="K/N",
-                    help="Build shard K of N, for scheduler fan-out (epilepsy builders).")
-    pr.add_argument("--dry-run", action="store_true", help="Print the builder command; run nothing.")
+                    help="Build shard K of N, to split one build across cluster jobs.")
+    pr.add_argument("--dry-run", action="store_true", help="Print the build command; run nothing.")
     pr.add_argument("--list", action="store_true",
-                    help="Which datasets have a build step, and whether it is required.")
+                    help="Which datasets have a build step (every one is optional).")
     return parser
 
 

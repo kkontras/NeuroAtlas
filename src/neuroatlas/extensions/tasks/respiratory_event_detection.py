@@ -33,6 +33,7 @@ from neuroatlas.extensions.tasks.linear_probe import (
     _extract_or_load_embeddings,
 )
 from neuroatlas.extensions.tasks._epoch_labels import (
+    benchmark_datasets,
     binary_labels_from_fraction_seconds,
 )
 
@@ -144,7 +145,9 @@ def evaluate_respiratory_event_detection(
             evaluation_mode="respiratory_event_detection",
             failure=BenchmarkFailure(
                 code="missing_labels",
-                message="No respiratory-event fraction fields in metadata.",
+                message=f"no respiratory-event labels in the {dataset_name} epochs "
+                        f"(sleep_respiratory runs on "
+                        f"{benchmark_datasets('sleep_respiratory', 'physionet2026 and ucddb')})",
                 details={"expected_any_of": list(event_fields)},
             ),
         )
@@ -166,7 +169,9 @@ def evaluate_respiratory_event_detection(
         )
         key = f"threshold_{threshold}s"
         if len(np.unique(train_labels)) < 2:
-            return (field, key, {"skipped": True, "reason": f"Only one class at threshold={threshold}s"})
+            return (field, key, {"skipped": True,
+                                 "reason": f"the training epochs hold one class only at more "
+                                           f"than {threshold:g} s of {field}"})
         probe_result = train_probe(
             train_payload.features, train_labels,
             val_payload.features, val_labels,
@@ -177,6 +182,9 @@ def evaluate_respiratory_event_detection(
             hidden_dims=probe_config.get("hidden_dims"),
             selection_metric=selection_metric,
             class_weight=probe_config.get("class_weight"),
+            # --tune-c: the benchmark passes 1.0 (C.2: C = 1 for event
+            # detection); a grid is chosen on validation Cohen's kappa
+            c_values=probe_config.get("c_values"),
         )
         return (field, key, probe_result)
 
@@ -188,7 +196,7 @@ def evaluate_respiratory_event_detection(
         if not any(field in m for m in train_payload.metadata[:10]):
             layout[field] = {
                 "skipped": True,
-                "reason": f"Field {field!r} not present in metadata",
+                "reason": f"the dataset's epochs carry no {field} annotation",
             }
             continue
         for threshold in thresholds:
@@ -278,7 +286,9 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="respiratory_event_detection",
-        description="Per-subtype respiratory-event binary probes with epoch-length-aware seconds thresholds.",
+        description="Event detection per epoch: one binary probe per event type and "
+                    "threshold of scored seconds in the epoch (respiratory events, limb "
+                    "movements).",
         evaluator=evaluate_respiratory_event_detection,
         score=score,
     )

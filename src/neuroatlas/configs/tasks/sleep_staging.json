@@ -1,5 +1,6 @@
 {
-  "_doc": "Sleep staging: five-class per-epoch linear probe (Appendix C.2). The label mode is named here rather than on every command line, because staging is the experiment, not a dataset setting. C=1.0 and an unweighted loss: the paper class-balances only the event and diagnosis probes, not staging.",
+  "about": "Sleep staging (App. C.2): a five-class linear probe per 30 s epoch, unweighted loss, C chosen per fold from 0.001 to 100 on validation Cohen's kappa.",
+  "_doc": "Sleep staging: five-class per-epoch linear probe (Appendix C.2). The label mode is named here rather than on every command line, because staging is the experiment, not a dataset setting. Unweighted loss, and C chosen per fold from the grid below on the validation fold's Cohen's kappa, as the paper says (C.2: the grid 1e-3 to 1e2, Cohen's kappa as selection criterion); selection_metric cohen_kappa picks the seed by the same criterion. The event and diagnosis probes keep C = 1. This block sets the probe's --tune-c, --class-weight and --selection-metric, so the probe refuses a different value for them.",
   "task": {
     "name": "linear_probe"
   },
@@ -9,8 +10,14 @@
   "probe": {
     "type": "linear",
     "c_values": [
-      1.0
+      0.001,
+      0.01,
+      0.1,
+      1.0,
+      10.0,
+      100.0
     ],
-    "class_weight": null
+    "class_weight": null,
+    "selection_metric": "cohen_kappa"
   }
 }

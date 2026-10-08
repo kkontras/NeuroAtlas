@@ -17,7 +17,7 @@ Do not add model-facing benchmark code outside `extensions/models/`.
 
 ## Backbone wrapper contract
 
-Every file under `backbones/` must follow this contract. See `AGENT_GUIDE.md §7.1` for the owner-of-each-concern split, and `AGENT_GUIDE_ONMODELS.md` for the per-model pretraining recipes.
+Every file under `backbones/` follows this contract.
 
 1. **Model-specific transforms only.** Inside `_prepare_input`, do fs resampling, amplitude scaling, amplitude clip (when tied to the scale), channel adapter, and reference change. Do not bandpass / notch filter — that is the dataset preprocessor's job. Do not silently resize the time-window length.
 

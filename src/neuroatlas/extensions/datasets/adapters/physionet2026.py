@@ -189,7 +189,8 @@ class PhysioNet2026BenchmarkDataModule(BenchmarkDataModule):
 
         if signal_kind != "raw":
             raise ValueError(
-                f"PhysioNet2026 currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"physionet2026 reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(

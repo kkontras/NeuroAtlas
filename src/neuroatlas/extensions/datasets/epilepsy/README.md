@@ -27,8 +27,8 @@ applies a 0.5 Hz Butterworth-4 zero-phase highpass and a Q=30 IIR notch
 at `notch_hz`.  Pass `notch_hz=50.0` for EU recordings and `notch_hz=60.0`
 for US recordings; pass `axis=0` for time-first `(T, C)` arrays (TUSZ /
 TUAB readers) and keep the default `axis=1` for channel-first `(C, T)`
-arrays (EPILEPSIAE / CHB-MIT readers).  Backbone wrappers must not
-re-filter per batch — see `AGENT_GUIDE_ONMODELS.md`.
+arrays (EPILEPSIAE / CHB-MIT readers).  Backbone wrappers do not filter
+again per batch.
 
 *CHB-MIT writes the 18-channel bipolar montage as-is (no unipolar step), so its cache has `n_channels=18` rather than 19.  Everything else in the schema matches.*
 
@@ -153,35 +153,40 @@ Each preprocessor adds what it has: `ages`, `genders` / `sexes`, `hospitals`, `v
 
 ## Building caches
 
-Each preprocessor has a CLI entrypoint under `entrypoints`:
+Optional: every epilepsy dataset also runs from its raw data.
+`neuroatlas data prepare <dataset>` builds the cache under
+`<cache root>/prepared/<dataset>`, and `neuroatlas data prepare --list` shows
+which datasets have a build step:
 
 ```bash
-# EPILEPSIAE — one shard, one patient
-python -m neuroatlas.extensions.datasets.preprocessors.preprocess_epilepsiae \
-    --data-root ${EEG_DATA_ROOT}/Epillepsie \
-    --cache-root /anonorg/.../caches/epilepsiae \
-    --shard 0 --num-shards 32
+# one process
+neuroatlas data prepare epilepsiae
 
-# EPILEPSIAE — merge shards into the final cache
-python -m neuroatlas.extensions.datasets.preprocessors.preprocess_epilepsiae \
-    --cache-root /anonorg/.../caches/epilepsiae \
-    --merge
-
-# TUSZ — per-split, sharded
-python -m neuroatlas.extensions.datasets.preprocessors.preprocess_tusz \
-    --raw-root /anonorg/.../TUSZ/v2.0.3/edf --cache-root /anonorg/.../caches/tusz \
-    --split train --shard-index 0 --num-shards 16
-
-# TUSZ — merge shards and then merge splits for k-fold
-python -m neuroatlas.entrypoints.merge_tusz_shards \
-    --cache-root /anonorg/.../caches/tusz --splits train dev eval
-
-# CHB-MIT / Siena — single-process, downloads from Zenodo on demand
-python -m neuroatlas.extensions.datasets.epilepsy.chbmit_preprocessor \
-    --raw-dir /anonorg/.../bids_chbmit --output /anonorg/.../caches/chbmit.h5 --download
+# shard K of N, one per scheduler job
+neuroatlas data prepare epilepsiae --shard 0/32
+neuroatlas data prepare tusz --shard 0/16
 ```
 
-For Condor fan-out the EPILEPSIAE and TUSZ preprocessors both support `--shard-index N --num-shards K`; the corresponding merge command stitches the shards back together.
+EPILEPSIAE shards write one directory per recording into the same cache, so
+nothing is merged. TUSZ shards write `_shardNNN` files per split; join the
+shards of each split, then the splits:
+
+```python
+from neuroatlas.extensions.datasets.epilepsy.tusz import merge_shards, merge_splits
+
+root = "<cache root>/prepared/tusz"
+for split in ("train", "dev", "eval"):
+    merge_shards(root, split)
+merge_splits(root)
+```
+
+CHB-MIT is read from its BIDS release; `chbmit_preprocessor` builds an
+optional HDF5 file from it:
+
+```bash
+python -m neuroatlas.extensions.datasets.epilepsy.chbmit_preprocessor \
+    --raw-dir <data root>/chbmit --output <cache root>/prepared/chbmit/chbmit.h5 --download
+```
 
 ## Adding a new dataset
 
@@ -190,10 +195,12 @@ For Condor fan-out the EPILEPSIAE and TUSZ preprocessors both support `--shard-i
 3. If the source is BIDS, reuse `bids_index.find_bids_root` and `bids_index.parse_bids_events`.
 4. Add a dataio in `extensions/datasets/dataio/<name>.py` (see `tusz.py` / `epilepsiae.py` for the pattern).
 5. Add an adapter in `extensions/datasets/adapters/<name>.py` exposing a `BenchmarkDataModule`.
-6. Register the new dataset in `extensions/datasets/<name>.py` (`DATASET_SPECS`).
+6. Register it with a manifest, `configs/cohorts/<name>/cohort.yaml` (format in
+   `configs/cohorts/_schema.yaml`), whose `spec.datamodule` names the adapter's
+   datamodule.
 
-## Review / tests
+## Checking a new dataset
 
-- The primary test files are the internal test suite, the internal test suite, the internal test suite.
-- the internal test suite and the internal test suite verify that all dataset specs registered here obey the `extensions/__init__.py` contracts (schema tag, expected label modes, etc.).
-- `python -m neuroatlas.entrypoints.validate_repo` does a full import / registration health check.
+`neuroatlas list datasets --all` lists it once its manifest is in place, and
+`neuroatlas embed --dataset <name> --dry-run` prints the settings it resolves
+to without reading any data.

@@ -43,8 +43,10 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 import torch
 
+from neuroatlas import quiet
+
 from ._preproc import (
-    _ESAT_DATASETS,
+    _PAPER_PREPROC_DATASETS,
     assert_batch_homogeneity,
     assert_finite,
     read_sampling_rate,
@@ -352,9 +354,9 @@ class STEEGFormerBackbone(BenchmarkModelWrapper):
             chan_idx = chan_idx[surviving_idx]
             kept_names = surviving_names
 
-        # ESAT-8 adaptive epoch_seconds
+        # Adaptive epoch_seconds: _PAPER_PREPROC_DATASETS take 30 s from the batch meta
         dataset = first_meta.get("dataset", "") if first_meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             epoch_sec = float(first_meta.get("epoch_seconds", 30.0))
         else:
             epoch_sec = self.epoch_seconds
@@ -366,7 +368,7 @@ class STEEGFormerBackbone(BenchmarkModelWrapper):
             if meta_sfreq is not None
             else current_len / epoch_sec
         )
-        _backend = "scipy" if dataset in _ESAT_DATASETS else "auto"
+        _backend = "scipy" if dataset in _PAPER_PREPROC_DATASETS else "auto"
         x, resample_method = resample_poly_with_fallback(
             x, src_sfreq_f, _TARGET_SFREQ, backend=_backend
         )
@@ -407,11 +409,11 @@ class STEEGFormerBackbone(BenchmarkModelWrapper):
                 std = x.std(dim=-1, keepdim=True).clamp_min(_ZSCORE_EPS)
                 x = (x - mean) / std
         else:
-            logger.warning(
-                "[backbone=steegformer] apply_recording_normalization=False — "
-                "STEEGFormer expects per-channel z-scored input; embeddings "
-                "will be off-distribution."
-            )
+            quiet.warn_once(
+                logger, "steegformer normalization off",
+                "STEEGFormer: apply_recording_normalization=False, so its input is not "
+                "z-scored per channel as it expects; the embeddings are off its training "
+                "distribution (an ablation)")
 
         x = x.to(self.device)
         chan_idx = chan_idx.to(self.device)

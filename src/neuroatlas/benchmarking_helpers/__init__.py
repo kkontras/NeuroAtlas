@@ -44,9 +44,6 @@ from .registry.manifest import (
     fold_manifest_path,
     load_manifest,
 )
-from .probes.metrics import compute_classification_metrics, compute_regression_metrics
-from .probes.probe import ProbeResult, train_linear_probe, train_probe
-from .runtime.runner import BenchmarkRunner
 
 __all__ = [
     "BenchmarkBatch",
@@ -95,11 +92,18 @@ __all__ = [
 # design. Resolved on first use instead (PEP 562), so the names stay
 # available and the cost is paid only by a caller that wants one.
 #
-# `.probe` used to be in here too, for a GPU probe class it no longer has.
-# The probes are sklearn-only now, so it is imported eagerly above.
+# The probes and the runner (sklearn, scipy: over a second) are resolved the
+# same way: reading the registry -- `data status`, `list`, `--help` -- needs
+# neither.
 _LAZY = {
     "dataloader_worker_init_fn": "runtime.reproducibility",
     "seed_everything": "runtime.reproducibility",
+    "compute_classification_metrics": "probes.metrics",
+    "compute_regression_metrics": "probes.metrics",
+    "ProbeResult": "probes.probe",
+    "train_linear_probe": "probes.probe",
+    "train_probe": "probes.probe",
+    "BenchmarkRunner": "runtime.runner",
 }
 
 

@@ -325,6 +325,9 @@ class _HubBar:
 
     def __init__(self, item, total=None, initial=0):
         self._item = item
+        if item.phase_text != "downloading":
+            # a download inside loading weights: the line says so from its first file
+            item.phase("downloading", unit="bytes")
         item.add_total(total)                      # a snapshot's files add up
         if initial:
             item.update(advance=int(initial), carried=int(initial))
@@ -339,7 +342,7 @@ class _HubBar:
 
 
 @contextlib.contextmanager
-def hub_progress(*watched):
+def hub_progress(*watched, at_first_byte: bool = False):
     """A Hugging Face download on our line instead of huggingface_hub's bars.
 
     Its bars are switched off, and the byte counts its downloads report
@@ -347,6 +350,10 @@ def hub_progress(*watched):
     live line, with the files' sizes as the total. Where that hook is not
     there (another huggingface_hub version), the bytes arriving under the
     *watched* folders are shown instead.
+
+    ``at_first_byte``: around a step that downloads only when a file is
+    missing (a model's ``from_pretrained`` while its weights load): the line
+    keeps its phase until a download starts.
     """
     item = progress.current()
     if not isinstance(item, progress.Progress):
@@ -365,7 +372,8 @@ def hub_progress(*watched):
             undo.append(enable_progress_bars)
     except Exception:                                  # not installed, or a stand-in
         pass
-    item.phase("downloading", unit="bytes")
+    if not at_first_byte:
+        item.phase("downloading", unit="bytes")
     hooked = False
     try:
         import huggingface_hub.file_download as file_download
@@ -428,11 +436,12 @@ def ensure_checkpoint(checkpoint_path, source_type: str, source_reference: str,
     if downloads_off():
         detail = (f" (missing {', '.join(Path(p).name for p in lacking)})"
                   if path.is_dir() else "")
-        command = (f"neuroatlas models download {identifier}" if identifier
-                   else "neuroatlas models download <checkpoint>")
+        command = (f"neuroatlas models download {identifier}, or add --online" if identifier
+                   else "neuroatlas models status (each checkpoint's weights, and the "
+                        "command that fetches them)")
         raise FileNotFoundError(
-            f"no weights at {path}{detail} (downloads are off)\n"
-            f"fix: {command}, or add --online"
+            f"no weights at {path}{detail}, and this run does not download\n"
+            f"fix: {command}"
         )
 
     logger.info("Checkpoint not found at %s — attempting auto-download (source_type=%s)", path, source_type)
@@ -515,9 +524,11 @@ def resolve_hf_token() -> str | None:
                 logger.info("Using the Hugging Face token from %s", path)
                 return token
 
-    logger.warning(
+    # a log line, not a warning: most weights are not gated, and a gated
+    # download that fails says so with its own fix (download_checkpoint)
+    logger.info(
         "no Hugging Face token (looked at $HF_TOKEN, %s): gated models cannot be "
-        "downloaded\nfix: neuroatlas config token hf",
+        "downloaded; neuroatlas config token hf saves one",
         ", ".join(_HF_TOKEN_SOURCES[1:]),
     )
     return None

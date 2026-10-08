@@ -49,7 +49,7 @@ from neuroatlas.extensions.datasets.dataio._stage_resample import (
 
 LABEL_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
-DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/data/DOD"
+DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/dod"
 DOD_GROUPS: Tuple[str, str] = ("dodh", "dodo")
 DOD_GROUP_TO_OSA_LABEL: Dict[str, int] = {"dodh": 0, "dodo": 1}
 DOD_NATIVE_EPOCH = 30

@@ -240,7 +240,8 @@ class SleepEDFExpandedBenchmarkDataModule(BenchmarkDataModule):
 
         if signal_kind != "raw":
             raise ValueError(
-                f"SleepEDF Expanded currently only supports signal_kind='raw', got {signal_kind!r}."
+                f"sleep_edf_expanded reads only the raw signal (signal_kind=raw), not "
+                f"signal_kind={signal_kind!r}"
             )
         if label_mode not in LABEL_MODES:
             raise ValueError(

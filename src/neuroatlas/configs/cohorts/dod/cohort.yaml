@@ -14,8 +14,9 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Dreem Open Datasets (DODH healthy + DODO obstructive apnea)
-  sleep-staging and OSA-detection adapter.
+  Dreem Open Datasets: PSG of healthy sleepers (DOD-H) and of patients with
+  obstructive sleep apnea (DOD-O), scored for sleep stages; also used for
+  OSA diagnosis.
 
 cohort:
   centre: "Dreem Open Datasets, France"
@@ -59,7 +60,7 @@ runtime_defaults:
   # name; the channels come from the channel map. (As a runtime default it
   # crashed the datamodule.)
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/DOD"
+  data_root: "${EEG_DATA_ROOT}/dod"
   label_mode: sleep_stage
   notch_map:
     dodh: 50.0
@@ -96,9 +97,4 @@ spec:
     - label_mode
 
 provenance:
-  known_issues:
-    - "The multi-scorer evaluation needs the dreem-learning-evaluation
-       scorers, which dod_fm_probe.sh pointed at /tmp/dreem-learning-
-       evaluation/scorers -- a clone someone made by hand, with no default
-       that survives a reboot. Pass --set expert_scorers_root=<path>."
   last_verified: 2026-09-21

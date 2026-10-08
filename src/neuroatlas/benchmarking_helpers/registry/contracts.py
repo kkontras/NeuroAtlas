@@ -264,10 +264,10 @@ class DatasetSpec:
             if signal_kind is not None:
                 runtime.setdefault("signal_kind", signal_kind)
             runtime.setdefault("epoch_seconds", checkpoint.expected_epoch_seconds)
-            # ESAT-8: sleep datasets always use 30 s epochs regardless of
-            # model spec (which may be 10 s or 4 s for the pretrain window).
-            from neuroatlas.extensions.models.backbones._preproc import _ESAT_DATASETS
-            if self.slug in _ESAT_DATASETS:
+            # _PAPER_PREPROC_DATASETS (sleep) always use 30 s epochs, whatever the
+            # checkpoint's own window (10 s or 4 s for some pretraining windows).
+            from neuroatlas.extensions.models.backbones._preproc import _PAPER_PREPROC_DATASETS
+            if self.slug in _PAPER_PREPROC_DATASETS:
                 runtime["epoch_seconds"] = 30.0
             # Resampling is wrapper-side per MODEL_CONTRACTS.md §3.
             # target_sfreq is no longer propagated to datasets.
@@ -360,7 +360,7 @@ def construct_datamodule(cls: type, config: Mapping[str, Any], *, dataset: str) 
             if value != fixed[key]:
                 raise ValueError(
                     f"{dataset}: {key}={value!r} is not available; "
-                    f"{cls.__name__} serves only {key}={fixed[key]!r}."
+                    f"{dataset} serves only {key}={fixed[key]!r}"
                 )
         elif key in ignored:
             if (cls, key) not in _LOGGED_DROPS:
@@ -372,16 +372,45 @@ def construct_datamodule(cls: type, config: Mapping[str, Any], *, dataset: str) 
         else:
             unknown.append(key)
     if unknown:
-        offered = [k for k in unknown if k in RUNNER_OFFERED_KEYS]
-        raise DatamoduleConfigError(
-            f"{dataset}: {cls.__name__} does not take "
-            f"{', '.join(repr(k) for k in unknown)}"
-            + (f" ({', '.join(offered)} offered by the runner)" if offered else "")
-            + f". It takes: {', '.join(sorted(named)) or 'nothing'}"
-            + (f"; fixed: {', '.join(sorted(fixed))}" if fixed else "")
-            + (f"; ignored: {', '.join(sorted(ignored))}" if ignored else "")
-            + ". Other keys come from the dataset's manifest runtime_defaults, "
-            "the task preset, or --set."
-        )
+        # the keys a user sets (the runner's own are set for each checkpoint)
+        takes = sorted(k for k in named if k not in RUNNER_OFFERED_KEYS and k != "self")
+        raise DatamoduleConfigError(unknown_settings_text(dataset, unknown, takes))
     return cls(**kwargs)
+
+
+def unknown_settings_text(dataset: str, unknown: Sequence[str], takes: Sequence[str]) -> str:
+    """``siena takes no setting 'windw_s'; its settings: ...``, and the
+    command to run instead: the user's own with the closest setting, else
+    the dataset's help (which lists them)."""
+    import difflib
+
+    names = ", ".join(repr(k) for k in unknown)
+    text = (f"{dataset} takes no setting{'s' if len(unknown) > 1 else ''} {names}; its "
+            f"settings: {', '.join(takes) or 'none'}")
+    fix = None
+    close = difflib.get_close_matches(str(unknown[0]), list(takes), n=1)
+    if close and len(unknown) == 1:
+        fix = _command_with_setting_renamed(str(unknown[0]), close[0])
+    if fix is None:
+        fix = f"neuroatlas embed --dataset {dataset} --help (its settings)"
+    return f"{text}\nfix: {fix}"
+
+
+def _command_with_setting_renamed(old: str, new: str) -> Optional[str]:
+    """The command being run with ``--set old=V`` written ``--set new=V``, or
+    None when no command line is known or it has no such --set."""
+    try:
+        from neuroatlas import cli
+    except Exception:       # pragma: no cover - the CLI is part of the package
+        return None
+    line = list(getattr(cli, "_COMMAND_LINE", None) or [])
+    for i, token in enumerate(line):
+        for head in (f"{old}=", f"--set={old}="):
+            if token.startswith(head) and (head.startswith("--set=") or
+                                           (i and line[i - 1] == "--set")):
+                line[i] = token.replace(f"{old}=", f"{new}=", 1)
+                import shlex
+
+                return "neuroatlas " + " ".join(shlex.quote(t) for t in line)
+    return None
 

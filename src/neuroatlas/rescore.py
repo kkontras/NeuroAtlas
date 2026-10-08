@@ -6,8 +6,8 @@ row whose fold saved its predictions (``cache_paths.predictions``, see
 :mod:`neuroatlas.predictions`) gets its metrics recomputed by its task's
 ``score`` function, merged into the row as a run merges a new result (a
 metric the task computes is replaced, one it does not is kept), and the file
-is rewritten with the row's metadata kept and ``metadata.rescored_at`` added;
-results.csv and summary.md beside it follow. A row without saved predictions
+is rewritten with the row's metadata kept and ``metadata.rescored_at`` added
+(``neuroatlas results`` reads it). A row without saved predictions
 -- probed before they were kept -- is left as it is and reported with the
 command that probes it again.
 """
@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from neuroatlas.catalog import CatalogError
 
@@ -50,6 +50,8 @@ class Report:
     outcomes: List[Outcome] = field(default_factory=list)
     files_written: List[Path] = field(default_factory=list)
     files_read: List[Path] = field(default_factory=list)
+    # where the headline is in a fold's metrics (the benchmark's metrics.at)
+    at: Tuple[str, ...] = ()
 
     def count(self, status: str) -> int:
         return sum(1 for o in self.outcomes if o.status == status)
@@ -70,7 +72,8 @@ def _wanted_datasets(bench, datasets) -> Optional[set]:
     unknown = [d for d in names if d not in known]
     if unknown:
         raise CatalogError(f"{bench.name} has no dataset {', '.join(unknown)}; "
-                           f"it has {', '.join(sorted(known))}")
+                           f"its datasets: {', '.join(sorted(known))}\n"
+                           f"fix: neuroatlas show {bench.name} (lists them)")
     return set(names)
 
 
@@ -93,18 +96,25 @@ def rescore(benchmark: str, *, datasets=None, models: Optional[str] = None,
     bench = catalog.load(benchmark)
     if bench.derived_from:
         raise CatalogError(
-            f"{bench.name} is computed from {bench.derived_from}'s results, not probed\n"
-            f"fix: neuroatlas rescore {bench.derived_from}, then neuroatlas run {bench.name} "
-            f"rebuilds it")
+            f"{bench.name} is computed from {bench.derived_from}'s results, not probed: "
+            f"rescore {bench.derived_from}, then run {bench.name} again\n"
+            f"fix: neuroatlas rescore {bench.derived_from}\n"
+            f"fix: neuroatlas run {bench.name} -m {models or 'all'}")
     if variant is not None:
-        bench.variant(variant)
+        variant = bench.variant(variant).name       # an earlier name: the variant's
     wanted_ds = _wanted_datasets(bench, datasets)
     wanted_models = set(bench.select_models(models)) if models else None
-    variants = bench.variant_names()
-    report = Report(bench.name, bench.metrics.headline)
+    variants = bench.variant_folders()
+    report = Report(bench.name, bench.metrics.headline, at=bench.metrics.at)
     now = datetime.now(timezone.utc).isoformat()
 
-    for path in res.result_files(bench.name, paths, output_root):
+    files = res.result_files(bench.name, paths, output_root)
+    # the command's live line (stderr, a terminal only): file by file
+    from neuroatlas import progress
+
+    item = progress.current().phase("rescoring", total=len(files), unit="result files")
+    for path in files:
+        item.update(advance=1)
         report.files_read.append(path)
         with results_lock(path.parent):
             try:
@@ -130,10 +140,11 @@ def rescore(benchmark: str, *, datasets=None, models: Optional[str] = None,
                 report.outcomes.append(out)
                 if not row.get("ok", True):
                     out.status = "failed"
-                    out.reason = (row.get("failure") or {}).get("code") or "failed"
+                    out.reason = (f"its probe did not finish (`neuroatlas results {bench.name} "
+                                  f"-v` says why)")
                     continue
                 old = row.get("metrics") or {}
-                out.before = res.metric(old, report.headline)
+                out.before = res.metric(old, report.headline, report.at)
                 saved = (row.get("cache_paths") or {}).get("predictions")
                 if not saved:
                     out.status, out.reason = "skipped", NOT_SAVED
@@ -154,15 +165,17 @@ def rescore(benchmark: str, *, datasets=None, models: Optional[str] = None,
                 row["metrics"] = merged
                 preds.refresh_metadata(meta, pred)
                 meta["rescored_at"] = now
-                out.after = res.metric(merged, report.headline)
+                out.after = res.metric(merged, report.headline, report.at)
                 out.status = "same" if same else "changed"
                 if pred.legacy:
-                    out.reason = ("saved in the seizure probe's first format: the choices "
-                                  "made on validation are kept from results.json")
+                    out.reason = ("these predictions hold the test columns only: the C and "
+                                  "threshold chosen on validation are read from results.json")
                 changed_file = True
             if changed_file:
                 _write_json(path, rows)
                 report.files_written.append(path)
+                # a table an older runner wrote beside results.json: the
+                # runner brings it in line with the rewritten file
                 if (path.parent / "results.csv").exists() or (path.parent / "summary.md").exists():
                     BenchmarkRunner({"benchmark": {"output_root": str(path.parent)}}).write_tables(
                         [BenchmarkResult.from_dict(r) for r in rows

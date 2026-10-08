@@ -161,6 +161,12 @@ class TUSZDataModule(BenchmarkDataModule):
         strict_folds: bool = True,
         **kwargs: Any,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("tusz", type(self),
+                                   normalize=normalize, overlap_threshold=overlap_threshold)
         n_channels = 18 if montage == "bipolar" else 19
         meta: Dict[str, Any] = {
             "canonical_label_space": ["bckg", "seiz"],

@@ -12,10 +12,13 @@ with hardcoded channel lists and preprocessed-file support.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +134,12 @@ def loso_fold_count(slug: str) -> int:
     if bci_cfg is not None and bci_cfg.subjects:
         return len(bci_cfg.subjects)
 
-    raise KeyError(
-        f"n_folds='loso' needs a subject count for {slug!r}, which is neither a "
-        "registered MOABB cohort nor a DATASET_CONFIGS entry with a subject "
-        "list. Give an integer instead."
-    )
+    from neuroatlas.cli import _msg
+
+    raise ValueError(_msg.compose(
+        f"{slug}: n_folds=loso needs the dataset's list of subjects, which it does not "
+        "have; give a number of folds",
+        f"neuroatlas probe --dataset {slug} --set n_folds=5"))
 
 
 def resolve_confound_control(cfg, enabled: bool):
@@ -479,9 +483,9 @@ def no_download_when_offline(slug: str):
         return real_connect(sock, address, *args, **kwargs)
 
     message = (
-        f"{slug}: its MOABB data is not all under $MNE_DATA "
-        f"({os.environ.get('MNE_DATA') or '~/mne_data'}), and downloads are off. "
-        f"Fetch it with `neuroatlas data download {slug}` (or pass --online)."
+        f"{slug}: part of its data is not in $MNE_DATA "
+        f"({os.environ.get('MNE_DATA') or '~/mne_data'}), and downloads are off\n"
+        f"fix: neuroatlas data download {slug}"
     )
     socket.socket.connect = _refuse
     try:
@@ -529,14 +533,24 @@ def load_and_preprocess_moabb(
     braindecode.datasets.BaseConcatDataset
         A windowed dataset ready for iteration.
     """
+    from braindecode.datasets import BaseConcatDataset
     from braindecode.datasets.moabb import MOABBDataset
     from braindecode.preprocessing import Preprocessor, preprocess
     from braindecode.preprocessing.windowers import create_windows_from_events
 
+    from neuroatlas import progress, quiet
+
     subjects = list(subject_ids) if subject_ids else get_moabb_subjects(cfg)
-    with no_download_when_offline(cfg.slug):
-        dataset = MOABBDataset(dataset_name=moabb_dataset_arg(cfg.moabb_name),
-                               subject_ids=subjects)
+    # The cohort as the last call in this command made it: `run` embeds and
+    # then probes, and every model and fold builds its datamodule, each one
+    # loading and filtering the same subjects (minutes on BCI) to the same
+    # windows. Only within one `neuroatlas` command (quiet.per_command).
+    key = (repr(cfg), tuple(subjects), bool(confound_control), os.environ.get("MNE_DATA"))
+    if quiet.in_command() and _LAST_COHORT.get("key") == key:
+        logger.info("%s: the %d subjects loaded earlier in this command are reused",
+                    cfg.slug, len(subjects))
+        return _LAST_COHORT["windows"]
+    _LAST_COHORT.clear()
 
     fmin, fmax, start_offset = resolve_confound_control(cfg, confound_control)
 
@@ -556,8 +570,25 @@ def load_and_preprocess_moabb(
         )
     preprocessors.append(Preprocessor("resample", sfreq=cfg.resample_sfreq))
 
-    preprocess(dataset, preprocessors, n_jobs=n_jobs)
+    # Subject by subject, so the item's live line counts them ("loading the
+    # data 33% (3/9 subjects)"): each recording is read and filtered on its
+    # own either way, so the windows are the ones a single call makes.
+    item = progress.current()
+    item.phase("loading the data", total=len(subjects), unit="subjects")
+    parts = []
+    with no_download_when_offline(cfg.slug):
+        for subject in subjects:
+            part = MOABBDataset(dataset_name=moabb_dataset_arg(cfg.moabb_name),
+                                subject_ids=[subject])
+            preprocess(part, preprocessors, n_jobs=n_jobs)
+            parts.append(part)
+            item.update(advance=1)
+    dataset = BaseConcatDataset([ds for part in parts for ds in part.datasets])
+    # numbered across the cohort, as one MOABBDataset call numbers them
+    for i, ds in enumerate(dataset.datasets):
+        ds.description.name = i
 
+    item.phase("cutting the trials")
     # The paper's trial, not MOABB's: BNCI2014_004's 4.5 s and BNCI2015_001's
     # 5 s trials were cut to the 4 s after the cue. Left at 4.5 s the trial
     # was a whole number of patches for no 1 s-patch model, so LaBraM,
@@ -577,8 +608,20 @@ def load_and_preprocess_moabb(
         mapping=trials,
         preload=True,
     )
-
+    if quiet.in_command():
+        _LAST_COHORT.update(key=key, windows=windows_dataset)
     return windows_dataset
+
+
+def _per_command_store() -> Dict[str, Any]:
+    from neuroatlas import quiet
+
+    return quiet.per_command({})
+
+
+#: The last cohort load_and_preprocess_moabb made in this command: its key
+#: (config, subjects, confound control, MNE_DATA) and windows.
+_LAST_COHORT: Dict[str, Any] = _per_command_store()
 
 
 def _trial_mapping(cfg: MOABBDatasetConfig) -> Optional[Dict[str, int]]:

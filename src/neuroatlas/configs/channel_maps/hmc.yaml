@@ -51,17 +51,7 @@ per_model:
     C4: C4
     O2: O2
     C3: C3
-  timemoe:
-    F4: F4
-    C4: C4
-    O2: O2
-    C3: C3
   moirai:
-    F4: F4
-    C4: C4
-    O2: O2
-    C3: C3
-  lagllama:
     F4: F4
     C4: C4
     O2: O2

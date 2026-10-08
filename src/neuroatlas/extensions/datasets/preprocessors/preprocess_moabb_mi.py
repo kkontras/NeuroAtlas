@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import pickle
 import sys
 import time
@@ -35,6 +36,8 @@ from neuroatlas.extensions.datasets.dataio.bci import (
     PREPROCESSED_SEARCH_PATHS,
     load_and_preprocess,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def main(argv=None):
@@ -59,7 +62,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.slug not in DATASET_CONFIGS:
-        raise SystemExit(f"Unknown slug {args.slug!r}. Known: {sorted(DATASET_CONFIGS)}")
+        raise SystemExit(f"error: no motor-imagery build for {args.slug!r}; the builds: "
+                         f"{', '.join(sorted(DATASET_CONFIGS))}")
 
     cfg = DATASET_CONFIGS[args.slug]
 
@@ -68,23 +72,23 @@ def main(argv=None):
     else:
         paths = PREPROCESSED_SEARCH_PATHS.get(args.slug)
         if not paths:
-            raise SystemExit(f"No preprocessed path registered for {args.slug!r}.")
+            raise SystemExit(f"error: {args.slug}: no place to write its prepared file\n"
+                             f"fix: neuroatlas data prepare {args.slug} --dest FILE")
         output_file = Path(paths[0])
 
     if output_file.exists() and not args.force:
-        print(f"Output already exists: {output_file}\nUse --force to overwrite.")
+        logger.info("%s: already built at %s (--force builds it again)",
+                    args.slug, output_file)
         return 0
 
-    print(f"Slug: {args.slug}")
-    print(f"  moabb_name:     {cfg.moabb_name}")
-    print(f"  subjects:       {len(cfg.subjects)}")
-    print(f"  channels:       {len(cfg.channels)}")
-    print(f"  fmin={cfg.fmin} fmax={cfg.fmax} notch={cfg.notch_freq} "
-          f"sfreq={cfg.resample_sfreq} car={cfg.use_car}")
-    print(f"  tmin={cfg.tmin} tmax={cfg.tmax}")
-    print(f"  targets:        {list(cfg.targets)}")
-    print(f"  output:         {output_file}")
-    print(f"  n_jobs={args.n_jobs}\n")
+    # what is built, for -v and --log (`data prepare` shows its own lines)
+    logger.info("%s: MOABB dataset %s, %d subjects, %d channels", args.slug,
+                cfg.moabb_name, len(cfg.subjects), len(cfg.channels))
+    logger.info("%s: band %s-%s Hz, notch %s Hz, resampled to %s Hz, common average "
+                "reference %s, trial %s to %s s, classes %s", args.slug, cfg.fmin, cfg.fmax,
+                cfg.notch_freq, cfg.resample_sfreq, "on" if cfg.use_car else "off",
+                cfg.tmin, cfg.tmax, ", ".join(map(str, cfg.targets)))
+    logger.info("%s: writing %s (%d jobs)", args.slug, output_file, args.n_jobs)
 
     t0 = time.time()
 
@@ -92,13 +96,16 @@ def main(argv=None):
         # Process one subject at a time to keep peak RAM bounded.
         # Each subject's braindecode dataset is built, trials extracted,
         # then discarded before the next subject starts.
-        print(f"  [per-subject mode] Processing {len(cfg.subjects)} subjects one at a time\n")
+        logger.info("%s: one subject at a time (%d subjects)", args.slug, len(cfg.subjects))
         subject_data: dict = {}
         for si, sid in enumerate(cfg.subjects):
             try:
                 ws = load_and_preprocess(cfg, subject_ids=[sid], n_jobs=args.n_jobs)
             except Exception as exc:
-                print(f"  skip subject {sid}: {type(exc).__name__}: {exc}")
+                from neuroatlas.cli._msg import exception_text
+
+                logger.warning("%s: subject %s left out of the prepared file: %s",
+                               args.slug, sid, exception_text(exc))
                 continue
             trials, labels = [], []
             for ds in ws.datasets:
@@ -108,13 +115,14 @@ def main(argv=None):
                     labels.append(int(y))
             if trials:
                 subject_data[sid] = {"trials": trials, "labels": labels}
-            print(f"  [{si+1}/{len(cfg.subjects)}] subject {sid}: {len(trials)} trials")
+            logger.info("%s: [%d/%d] subject %s: %d trials", args.slug, si + 1,
+                        len(cfg.subjects), sid, len(trials))
             del ws, trials, labels
-        print(f"\nPreprocessing done in {time.time() - t0:.1f}s")
+        logger.info("%s: subjects read and filtered in %.1fs", args.slug, time.time() - t0)
     else:
         windows_dataset = load_and_preprocess(cfg, n_jobs=args.n_jobs)
-        print(f"Preprocessing done in {time.time() - t0:.1f}s")
-        print(f"Total recording-level datasets: {len(windows_dataset.datasets)}")
+        logger.info("%s: %d recordings read and filtered in %.1fs", args.slug,
+                    len(windows_dataset.datasets), time.time() - t0)
 
         subject_data = {}
         for ds in windows_dataset.datasets:
@@ -135,11 +143,12 @@ def main(argv=None):
         data_raw[i] = np.stack(subject_data[subj]["trials"], axis=0)
         condition[i] = np.array(subject_data[subj]["labels"], dtype=int)
 
-    print(f"  {n_subjects} subjects")
     counts = [len(condition[i]) for i in range(n_subjects)]
-    print(f"  trials per subject: min={min(counts)} max={max(counts)} mean={np.mean(counts):.1f}")
+    logger.info("%s: %d subjects, %d to %d trials each (mean %.1f)", args.slug, n_subjects,
+                min(counts), max(counts), np.mean(counts))
     if n_subjects > 0:
-        print(f"  trial shape: {data_raw[0].shape} (n_trials, n_channels, n_timesamples)")
+        logger.info("%s: trials of %d channels x %d samples", args.slug,
+                    data_raw[0].shape[1], data_raw[0].shape[2])
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "wb") as fh:
@@ -148,9 +157,10 @@ def main(argv=None):
             fh, protocol=pickle.HIGHEST_PROTOCOL,
         )
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    print(f"\nSaved to {output_file} ({size_mb:.1f} MB)")
+    logger.info("%s: wrote %s (%.1f MB)", args.slug, output_file, size_mb)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     sys.exit(main() or 0)

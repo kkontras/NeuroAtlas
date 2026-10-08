@@ -9,7 +9,7 @@ MODEL_CONTRACTS.md §2.
 
 Dataset location::
 
-    ${EEG_DATA_ROOT}/raw-sleep/cfs/
+    ${EEG_DATA_ROOT}/cfs/
     ├── polysomnography/edfs/cfs-visit5-<nsrrid>.edf
     ├── polysomnography/annotations-events-nsrr/cfs-visit5-<nsrrid>-nsrr.xml
     └── datasets/cfs-visit5-harmonized-dataset-0.7.0.csv  (nsrr_age, nsrr_sex)
@@ -30,6 +30,7 @@ age-bin set; users wanting an adult-only subset can filter via task-side
 """
 from __future__ import annotations
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -40,7 +41,11 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from neuroatlas import progress
+
 from .base import BenchmarkDataModule
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +243,13 @@ def _load_metadata(data_root: Path) -> Dict[int, Dict[str, Any]]:
         # Fall back to the unharmonized CSV.
         csvs = sorted(datasets_dir.glob("cfs-visit*-dataset-*.csv"))
     if not csvs:
-        raise FileNotFoundError(
-            f"CFS demographics not found: no cfs-visit*-harmonized-*.csv or "
-            f"cfs-visit*-dataset-*.csv under {datasets_dir}. They ship with the NSRR "
-            f"download (datasets/) and are the only source of age and sex. "
-            f"Check that data_root={data_root} is the CFS root "
-            f"(the polysomnography/ EDFs next to datasets/)."
-        )
+        # They ship with the NSRR download (datasets/) and are the only
+        # source of age and sex.
+        from neuroatlas.extensions.datasets._missing import no_data
+
+        raise FileNotFoundError(no_data(
+            "cfs", datasets_dir, "data_root", what="no demographics table (cfs-visit*.csv) in",
+            detail="the NSRR download puts it there, next to polysomnography/"))
     for csv_path in csvs:
         df = pd.read_csv(csv_path)
         for _, row in df.iterrows():
@@ -380,9 +385,9 @@ def _load_recording_signals(
                 signals[lbl] = _highpass_sos(sig, _SFREQ, float(l))
         if h is not None and h > 0:
             # not used for current contract; keep stub for future extensions
-            raise NotImplementedError(
-                "Lowpass via bandpass_hz[1] not implemented in CFS adapter; "
-                "use notch_hz only for now (matches MrOS contract)."
+            raise ValueError(
+                "cfs applies no low-pass filter (the upper edge of bandpass_hz); its "
+                "filters are the high-pass (the lower edge) and notch_hz"
             )
     if notch_hz is not None and notch_hz > 0:
         for lbl, sig in signals.items():
@@ -705,16 +710,12 @@ class CFSRawDataModule(BenchmarkDataModule):
         # least 2 subjects, got 0" -- a message about folds, for a problem
         # about a path.
         if not subject_set:
-            raise FileNotFoundError(
-                f"No CFS recordings found under data_root={root}. "
-                + (f"{len(all_records)} signal file(s) were discovered but none "
-                   "matched a subject in the metadata table; check that the "
-                   "dataset CSV is alongside them."
-                   if all_records else
-                   "The directory is missing, empty, or not the CFS root — it "
-                   "should contain the polysomnography EDFs and the CFS "
-                   "dataset CSV.")
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data(
+                "cfs", root, "data_root", what="no recordings with demographics in",
+                detail=(f"{len(all_records)} recordings, none of them in the "
+                        "demographics table" if all_records else None)))
         ages = {s: subject_meta[s]["age"] for s in subject_set}
 
         train_subs, val_subs, test_subs = _subject_splits(
@@ -745,18 +746,16 @@ class CFSRawDataModule(BenchmarkDataModule):
             bandpass_hz=bp, notch_hz=nh,
             compute_recording_stats=self._compute_recording_stats,
         )
-        print(f"[cfs] Indexing train split ({len(train_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the train split ({len(train_subs)} subjects)")
         self._train_ds = _CFSRawDataset(_records_for(set(train_subs)), channels, **ds_kwargs)
-        print(f"[cfs] Indexing val split ({len(val_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the val split ({len(val_subs)} subjects)")
         self._val_ds = _CFSRawDataset(_records_for(set(val_subs)), channels, **ds_kwargs)
-        print(f"[cfs] Indexing test split ({len(test_subs)} subjects)...", flush=True)
+        progress.current().phase(f"indexing the test split ({len(test_subs)} subjects)")
         self._test_ds = _CFSRawDataset(_records_for(set(test_subs)), channels, **ds_kwargs)
-        print(
+        logger.info(
             f"[cfs] Indexed: train={len(self._train_ds)} val={len(self._val_ds)} "
             f"test={len(self._test_ds)} epochs ({len(all_records)} recordings, "
-            f"{len(subject_set)} subjects). Filter: HP={bp} notch={nh}Hz fs={_SFREQ}Hz",
-            flush=True,
-        )
+            f"{len(subject_set)} subjects). Filter: HP={bp} notch={nh}Hz fs={_SFREQ}Hz")
 
     # ------------------------------------------------------------------
     # Global embedding cache support

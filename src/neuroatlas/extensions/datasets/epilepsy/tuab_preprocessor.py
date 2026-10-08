@@ -71,14 +71,17 @@ def discover_recordings(raw_root: str, split: str) -> List[Tuple[str, int, str, 
     directory names.
 
     Args:
-        raw_root: Path to the ``edf/`` directory of a TUAB release.
+        raw_root: The TUAB folder: the ``edf/`` directory of a TUAB release,
+            or a folder above it (``edf/`` or ``<version>/edf/`` under it).
         split: ``train`` or ``eval``.
 
     Returns:
         Sorted list of tuples
         ``(edf_path, is_abnormal, montage_type, subject_id, session_id)``.
     """
-    split_dir = Path(raw_root) / split
+    from neuroatlas.extensions.datasets._layout import descend
+
+    split_dir = descend(raw_root, ["edf", "*/edf"], split) / split
     if not split_dir.exists():
         raise FileNotFoundError(f"TUAB split directory not found: {split_dir}")
 
@@ -420,17 +423,17 @@ def summarize_cache(path: str) -> None:
             for s in h5["montage_types"][:]
         ))
 
-        print("=" * 72)
-        print(f"  TUAB Cache Summary — {path}")
-        print("=" * 72)
-        print(f"  Corpus:            {h5.attrs.get('corpus', '?')} "
-              f"{h5.attrs.get('version', '?')}")
-        print(f"  Split:             {h5.attrs.get('split', '?')}")
-        print(f"  Sampling rate:     {fs} Hz")
-        print(f"  Recordings:        {n_rec} ({n_abnormal} abnormal / {n_normal} normal)")
-        print(f"  Subjects:          {n_subjects}")
-        print(f"  Total samples:     {total_samples} ({total_samples / fs / 3600:.2f} h)")
-        print(f"  Missing electrodes (sum across recs): {n_missing_total}")
-        print(f"  Montages present:  {montages}")
-        print(f"  Schema tag:        {h5.attrs.get('schema_tag', '?')}")
-        print("=" * 72)
+        # --summary asks for these lines: printed, not logged
+        corpus = " ".join(str(h5.attrs[k]) for k in ("corpus", "version") if k in h5.attrs)
+        print(f"prepared file: {path}")
+        if corpus:
+            print(f"  data:                {corpus}")
+        if "split" in h5.attrs:
+            print(f"  split:               {h5.attrs['split']}")
+        print(f"  sampling rate:       {fs} Hz")
+        print(f"  recordings:          {n_rec} ({n_abnormal} abnormal, {n_normal} normal)")
+        print(f"  subjects:            {n_subjects}")
+        print(f"  duration:            {total_samples / fs / 3600:.2f} h "
+              f"({total_samples} samples)")
+        print(f"  missing electrodes:  {n_missing_total} (summed over recordings)")
+        print(f"  montages:            {', '.join(montages)}")

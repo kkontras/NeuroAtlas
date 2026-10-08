@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 _CACHE_ROOT_DEFAULT = (
-    "${REPO_ROOT}/bonn_cache/hdf5"
+    "${EEG_CACHE_ROOT}/prepared/bonn"
 )
 _CACHE_FILENAME = "bonn_173hz_segments.h5"
 
@@ -192,7 +192,21 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         seed: RNG seed for the StratifiedKFold split (default 42).
         split_mode: ``"clip"`` (default) or ``"paper_segments"`` (the paper's
             segment-level folds; see ``SPLIT_MODES``).
+        compute_recording_stats: taken for the models that normalise by
+            recording; every clip carries its own statistics whatever it says.
+
+    It takes no other key: a ``--set`` it does not know is refused, as by the
+    readers that take no ``**kwargs`` (``construct_datamodule``). The keys the
+    runner offers every datamodule are declared below.
     """
+
+    #: The runner's keys Bonn has no argument for, and why they do not apply.
+    RUNTIME_KEYS_IGNORED = {
+        "epoch_seconds": "a Bonn window is window_s (the whole 23.6 s clip when unset); "
+                         "the backbone is told that length",
+        "channel_specs": "a Bonn clip has one channel, which the channel map names FZ "
+                         "and every wrapper receives as it is",
+    }
 
     def __init__(
         self,
@@ -211,8 +225,13 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         seed: int = 42,
         signal_kind: str = "raw",
         split_mode: str = "clip",
-        **kwargs: Any,
+        compute_recording_stats: bool = True,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("bonn", type(self), normalize=normalize)
         if split_mode not in SPLIT_MODES:
             raise ValueError(f"split_mode must be one of {SPLIT_MODES}, got {split_mode!r}")
         if split_mode == "paper_segments":
@@ -240,21 +259,19 @@ class BonnBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule):
         # manifest ships a raw_dir default, so a user who has only ever built
         # the cache must not be broken by it -- and a user who has only the
         # raw corpus must not need to build anything.
-        raw = Path(str(raw_dir)) if raw_dir else None
+        from neuroatlas.extensions.datasets.epilepsy.bonn_preprocessor import data_folder
+
+        # the dataset's folder: the set folders in it, or in raw/ under it
+        raw = data_folder(str(raw_dir)) if raw_dir else None
         self._raw_dir = str(raw) if raw is not None and raw.is_dir() else None
         self._h5_path = str(Path(cache_root) / cache_filename) if cache_root else None
         if self._raw_dir is None and (not self._h5_path
                                       or not Path(self._h5_path).exists()):
-            raise FileNotFoundError(
-                f"No Bonn data found. Either source works:\n"
-                f"  raw clips : {raw_dir or '(no raw_dir given)'}\n"
-                f"  HDF5 cache: {self._h5_path or '(no cache_root given)'}\n"
-                "Get the corpus with:\n"
-                "  python -m neuroatlas.entrypoints.fetch --dataset bonn --download\n"
-                "The raw clips are enough; building the cache is optional:\n"
-                "  python -m neuroatlas.extensions.datasets.preprocessors.preprocess_bonn "
-                f"--raw-dir {raw_dir or '<raw>'} --output {self._h5_path or '<cache.h5>'}"
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data(
+                "bonn", raw_dir, "raw_dir",
+                detail=f"nor a prepared file at {self._h5_path}" if self._h5_path else None))
 
         self._fold = fold
         self._n_folds = n_folds

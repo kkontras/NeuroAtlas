@@ -41,15 +41,7 @@ per_model:
     C4: C4
     C3: C3
     Cz: Cz
-  timemoe:
-    C4: C4
-    C3: C3
-    Cz: Cz
   moirai:
-    C4: C4
-    C3: C3
-    Cz: Cz
-  lagllama:
     C4: C4
     C3: C3
     Cz: Cz

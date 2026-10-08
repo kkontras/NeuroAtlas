@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_RAW_ROOT = (
-    "${EEG_DATA_ROOT}/bonn/raw"
+    "${EEG_DATA_ROOT}/bonn"
 )
 _DEFAULT_OUTPUT = (
     "${EEG_CACHE_ROOT}/prepared/bonn/"
@@ -89,16 +89,14 @@ def _print_summary(h5_path: Path) -> None:
             s = s.decode() if isinstance(s, bytes) else str(s)
             per_set[s] = per_set.get(s, 0) + 1
 
-        print("\n" + "=" * 60)
-        print("  Bonn HDF5 Cache Summary")
-        print(f"  {h5_path}")
-        print("=" * 60)
-        print(f"  Clips:             {n}")
-        print(f"  Sampling rate:     {f.attrs.get('fs', '?')} Hz")
-        print(f"  Samples per clip:  {f.attrs.get('n_samples_per_segment', '?')}")
-        print(f"  Per-set counts:    {per_set}")
-        print(f"  Schema tag:        {f.attrs.get('schema_tag', '?')}")
-        print("=" * 60 + "\n")
+        # --summary asks for these lines: printed, not logged
+        print(f"bonn prepared file: {h5_path}")
+        print(f"  clips:             {n}")
+        if f.attrs.get("fs") is not None:
+            print(f"  sampling rate:     {f.attrs['fs']} Hz")
+        if f.attrs.get("n_samples_per_segment") is not None:
+            print(f"  samples per clip:  {f.attrs['n_samples_per_segment']}")
+        print("  clips per set:     " + ", ".join(f"{k} {v}" for k, v in per_set.items()))
 
 
 def main(argv=None) -> None:
@@ -107,8 +105,7 @@ def main(argv=None) -> None:
     output = Path(args.output)
 
     if output.exists() and not args.force:
-        logger.info("Output %s already exists — skipping (pass --force to rebuild).",
-                    output)
+        logger.info("bonn: already built at %s (--force builds it again)", output)
         if args.summary:
             _print_summary(output)
         return

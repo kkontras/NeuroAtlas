@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from neuroatlas.extensions.datasets.adapters.siena import _patient_splits_generic
 from neuroatlas.extensions.datasets.dataio.aub_med import (
     AUBMedDataset,
+    aub_med_folders,
     collate_aub_med,
     discover_aub_med_recordings,
 )
@@ -30,7 +31,7 @@ from .base import BenchmarkDataModule
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_RAW_DIR = "${EEG_DATA_ROOT}/aub_med/raw"
+_DEFAULT_RAW_DIR = "${EEG_DATA_ROOT}/aub_med"
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,13 @@ class AUBMedBenchmarkDataModule(BenchmarkDataModule):
         signal_kind: str = "raw",
         **_unused: Any,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("aub_med", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         metadata = {
             "canonical_label_space": ["bckg", "seiz"],
             "epoch_seconds": float(window_s),
@@ -98,6 +106,9 @@ class AUBMedBenchmarkDataModule(BenchmarkDataModule):
         }
         super().__init__(name="aub_med", metadata=metadata)
 
+        # the dataset's folder: the EDFs and Seizure_times.py sit in it, or
+        # in the raw/ and annotations/ folders under it
+        raw_dir, annotations_dir = aub_med_folders(raw_dir, annotations_dir)
         self._raw_dir = raw_dir
         self._annotations_dir = (
             annotations_dir if annotations_dir is not None
@@ -117,11 +128,9 @@ class AUBMedBenchmarkDataModule(BenchmarkDataModule):
         self._signal_cache_size = int(signal_cache_size)
 
         if not Path(raw_dir).exists():
-            raise FileNotFoundError(
-                f"AUB-MED raw_dir not found: {raw_dir}\n"
-                f"Run `python -m neuroatlas.entrypoints.fetch --dataset aub_med --download` to stage the data, "
-                f"or point `raw_dir` at an existing copy."
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data("aub_med", raw_dir, "raw_dir"))
 
         self._recordings = discover_aub_med_recordings(
             self._raw_dir, self._annotations_dir,
@@ -169,7 +178,8 @@ class AUBMedBenchmarkDataModule(BenchmarkDataModule):
 
         if not rec_indices:
             raise RuntimeError(
-                f"AUB-MED split {split!r} has 0 recordings — check fold index."
+                f"aub_med fold {self._fold}: its {split} split has no recordings "
+                f"(n_folds={self._n_folds})"
             )
 
         stride_s = self._stride_s if split == "train" else self._window_s

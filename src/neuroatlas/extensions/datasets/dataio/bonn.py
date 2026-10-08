@@ -146,11 +146,11 @@ class BonnSegmentDataset(Dataset):
 
             self._corpus = bonn_preprocessor.load_raw_corpus(self._raw_dir)
         elif not h5_path:
-            raise ValueError(
-                "Bonn needs either raw_dir (the directory holding the Z/O/N/F/S "
-                "subdirectories of .TXT clips) or h5_path (a prebuilt cache). "
-                "Run `fetch --dataset bonn` to get the corpus."
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            # raw_dir: the folder holding the Z/O/N/F/S folders of .TXT clips;
+            # h5_path: the prepared file
+            raise ValueError(no_data("bonn", None, "raw_dir"))
         self._h5_path = str(h5_path) if h5_path else None
         self._label_mode_name = label_mode
         self._label_mode = _label_mode_spec(label_mode)

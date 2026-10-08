@@ -23,7 +23,7 @@ _LOG = logging.getLogger(__name__)
 
 
 def _encoder_args() -> easydict.EasyDict:
-    # Mirrors Trui/eeg_eoe.json model.args (the unimodal_eeg checkpoint).
+    # The encoder arguments of the unimodal_eeg checkpoint's training config.
     return easydict.EasyDict({
         "dmodel": 128,
         "modality": "eeg",
@@ -35,14 +35,18 @@ def _encoder_args() -> easydict.EasyDict:
     })
 
 
-def load_sleep_transformer_model(checkpoint_path: str | Path, device: str | None = None) -> torch.nn.Module:
+def load_sleep_transformer_model(checkpoint_path: str | Path, device: str | None = None,
+                                 identifier: str | None = None) -> torch.nn.Module:
     device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     model = SleepEnc(args=_encoder_args())
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
+        command = (f"neuroatlas models download {identifier}" if identifier
+                   else "neuroatlas models status (each checkpoint's weights, and the "
+                        "command that fetches them)")
         raise FileNotFoundError(
-            f"SleepTransformer checkpoint not found at {checkpoint_path}. "
-            "Keep the local artifact in place or update the registry."
+            f"no weights for {identifier or 'SleepTransformer'} at {checkpoint_path}\n"
+            f"fix: {command}"
         )
     checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
@@ -75,7 +79,15 @@ class SleepTransformerBackbone(BenchmarkBackbone):
             )
         self.target_sfreq = _TARGET_SFREQ
         self.target_len = _TARGET_LEN
-        self.model = load_sleep_transformer_model(spec.checkpoint_path or "", device=self.device)
+        from ._checkpoint_download import ensure_checkpoint
+        checkpoint_path = ensure_checkpoint(
+            spec.checkpoint_path or "",
+            source_type=spec.source_type,
+            source_reference=spec.source_reference,
+            identifier=spec.identifier,
+        )
+        self.model = load_sleep_transformer_model(checkpoint_path, device=self.device,
+                                                  identifier=spec.identifier)
         from .core_sleep import _STFT_NORM_PATH
         nf = np.load(str(_STFT_NORM_PATH))
         self._stft_log_norm = (

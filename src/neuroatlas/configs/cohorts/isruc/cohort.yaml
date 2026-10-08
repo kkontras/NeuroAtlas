@@ -14,10 +14,10 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  ISRUC-SLEEP benchmark adapter. Three subgroups (I: sleep-disordered, II:
-  sleep-disordered with repeat sessions, III: healthy controls) with
-  2-rater hypnograms; primary label is the local 2-rater consensus,
-  per-rater labels ride in meta.
+  ISRUC-SLEEP: PSG in three subgroups (I: sleep-disordered, II:
+  sleep-disordered with repeat sessions, III: healthy controls), each scored
+  by two raters; the label is their consensus, and each rater's labels are
+  kept with the windows.
 
 cohort:
   centre: "ISRUC, University of Coimbra, Portugal"
@@ -69,7 +69,7 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/isruc"
+  data_root: "${EEG_DATA_ROOT}/isruc"
   label_mode: sleep_stage
   num_folds: 5
   signal_kind: raw

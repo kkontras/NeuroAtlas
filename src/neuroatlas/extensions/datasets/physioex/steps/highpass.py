@@ -40,10 +40,14 @@ class HighPassFilter(PreprocessingStep):
     def compile(self, fs_in: float) -> CompiledStep:
         nyq = 0.5 * fs_in
         if not 0 < self.cutoff < nyq:
-            logger.warning(
-                f"HighPassFilter(cutoff={self.cutoff}) skipped: cutoff >= "
-                f"Nyquist ({nyq} Hz at fs={fs_in}). Signal passed through."
-            )
+            # compiled once per recording: said once per run, then in the log
+            from neuroatlas import quiet
+
+            quiet.warn_once(
+                logger, f"highpass skipped:{self.cutoff}:{fs_in}",
+                f"high-pass filter at {self.cutoff:g} Hz not applied to recordings sampled at "
+                f"{fs_in:g} Hz (at or above their Nyquist frequency, {nyq:g} Hz): their signal "
+                f"is passed through unfiltered")
             return CompiledStep(
                 apply=lambda x: np.asarray(x, dtype=np.float32),
                 fs_out=fs_in,

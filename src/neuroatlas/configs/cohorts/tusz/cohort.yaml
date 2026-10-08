@@ -19,10 +19,10 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  TUH EEG Seizure Corpus v2.0.3 — binary and multi-class seizure detection
-  from 19-channel unipolar EEG at 256 Hz. Supports official 3-split and
-  patient-level k-fold evaluation. Readable either from a prebuilt HDF5
-  cache (default) or straight from the raw EDF (--set backend=edf).
+  TUH EEG Seizure Corpus v2.0.3: binary seizure detection from scalp EEG at
+  256 Hz, bipolar montage by default. The official 3-way split or
+  patient-level k-fold. Read from the raw EDFs (the default) or from a
+  prepared HDF5 cache (--set backend=hdf5).
 
 cohort:
   centre: "Temple University Hospital, USA"
@@ -94,18 +94,18 @@ backends:
     reads: a prebuilt HDF5 cache under cache_root
     recording_stats: via_dataio
     note: >
-      The default. Needs the cache to exist; build it before the first run.
-      Supports patient-level k-fold as well as the official split.
+      Needs the cache: `neuroatlas data prepare tusz` builds it. Supports
+      patient-level k-fold as well as the official split.
   edf:
     loader: adapters.tusz_edf.TUSZEDFDirectDataModule
     reads: raw EDF + .csv_bi annotations, streamed, no cache written or read
     note: >
-      Nothing to build, but it re-reads the EDFs every epoch, so it is far
-      slower. k-fold (the paper's folds, from folds.json: the three official
+      The default. Nothing to build, but it re-reads the EDFs every epoch, so
+      it is slower. k-fold (the paper's folds, from folds.json: the three official
       trees pooled, embedded once into one cache every fold is cut from) or
       the official train/dev/eval split.
     defaults:
-      raw_root: "${EEG_DATA_ROOT}/TUH/tuh_eeg/tuh_eeg_seizure/v2.0.3/edf"
+      raw_root: "${EEG_DATA_ROOT}/tusz"
       stride_s: 10.0
       balance: none
       lru_recordings: 2
@@ -192,8 +192,4 @@ provenance:
   replaces:
     - tusz_edf_direct        # retired 2026-09-21; same corpus v2.0.3, second
                              # loader only. Now `--dataset tusz --set backend=edf`.
-  known_issues:
-    - "Montage conflict: the description says unipolar, the spec and
-       embed_dataset._DEFAULT_MONTAGE both say bipolar. Kept bipolar to
-       preserve behaviour — audit OQ-11.2."
 

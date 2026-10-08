@@ -48,6 +48,9 @@ class Command:
     # Does it print a report (a table)? Then library INFO lines and warnings
     # go only to --log, unless -v: they would bury the report.
     report: Callable[[Sequence[str]], bool] = lambda argv: False
+    # Listed by `neuroatlas --help`? The two verbs `data` took over (fetch,
+    # prepare) still run, but the list names `data download` / `data prepare`.
+    listed: bool = True
 
 
 _always = lambda argv: True       # noqa: E731
@@ -63,7 +66,7 @@ COMMANDS = {
                     "Explain one benchmark and print the commands it runs.",
                     report=_always),
     "data": Command("neuroatlas.cli.data",
-                    "Is each dataset here; download it; build its cache.",
+                    "Is each dataset here; download it; build its optional prepared file.",
                     downloads=lambda argv: argv[:1] in (["download"], ["prepare"]),
                     report=lambda argv: argv[:1] == ["status"]),
     "models": Command("neuroatlas.cli.models",
@@ -71,7 +74,7 @@ COMMANDS = {
                       downloads=lambda argv: argv[:1] == ["download"],
                       report=lambda argv: argv[:1] == ["status"]),
     "check": Command("neuroatlas.cli.check",
-                     "Push one real batch through each dataset x model pair, then stop.",
+                     "Push one real batch through each dataset x checkpoint pair, then stop.",
                      report=_always),
     "run": Command("neuroatlas.cli.run",
                    "Run a benchmark here: embed where missing, probe, write results.",
@@ -83,18 +86,18 @@ COMMANDS = {
                       "How each job of a `submit` is doing.",
                       report=_always),
     "results": Command("neuroatlas.cli.results_cmd",
-                       "Summarise a benchmark's results: mean, spread, normalised score.",
+                       "Summarise a benchmark's results: its headline metric over the folds, and the others.",
                        report=_always),
     "rescore": Command("neuroatlas.cli.rescore",
                        "Recompute results' metrics from their saved test predictions.",
                        report=_always),
     "fetch": Command("neuroatlas.entrypoints.fetch",
-                     "Obtain a dataset's raw corpus, or say exactly how to.",
-                     downloads=lambda argv: "--download" in argv),
+                     "Download a dataset, or say exactly how to (as `data download`).",
+                     downloads=lambda argv: "--download" in argv, listed=False),
     "prepare": Command("neuroatlas.entrypoints.prepare",
-                       "Build a dataset's optional cache (no benchmark needs one).",
+                       "Build a dataset's optional prepared file (as `data prepare`).",
                        # MOABB builders download the corpus as they epoch it.
-                       downloads=lambda argv: True),
+                       downloads=lambda argv: True, listed=False),
     "embed": Command("neuroatlas.entrypoints.embed",
                      "Extract frozen-backbone embeddings for a dataset."),
     "probe": Command("neuroatlas.entrypoints.probe",
@@ -102,6 +105,10 @@ COMMANDS = {
     "hypnogram": Command("neuroatlas.entrypoints.hypnogram",
                          "Reconstruct hypnograms and sleep-architecture features."),
 }
+
+#: Commands whose first word is a sub-command (``data status``): a report's
+#: live line names both.
+_SUBCOMMANDS = ("config", "list", "data", "models")
 
 #: Names that are no longer commands, with the command a user who types one
 #: wants instead: the did-you-mean of the unknown-command error, for names
@@ -111,10 +118,10 @@ REMOVED = {"leaderboard": "results"}
 USAGE = "usage: neuroatlas [-v] [--log FILE] [--online] <command> [options]"
 
 #: The -m / --models help of the commands that take a benchmark.
-MODELS_HELP = ("An alias (all_fm, all_ts, ...), group, family or checkpoint ids, "
-               "comma-separated; `-name` removes one (all,-reve). A family the benchmark "
-               "leaves out (`neuroatlas show <benchmark>`) is skipped by an alias and refused "
-               "by name.")
+MODELS_HELP = ("An alias (all_fm, all_ts, all_supervised, all_random), group, family or "
+               "checkpoint ids, comma-separated; `-name` removes one (all,-reve). An alias or "
+               "group leaves out the families a benchmark does not evaluate (`neuroatlas show "
+               "<benchmark>`), and naming one of them is refused.")
 
 # (flags, help) of the options every command takes, before or after its name.
 GLOBAL_OPTIONS = [
@@ -124,8 +131,58 @@ GLOBAL_OPTIONS = [
                    "to FILE"),
     ("--online", "allow downloads for this run (off by default, except for the "
                  "commands that exist to download)"),
-    ("-V, --version", "print the version"),
+    ("-V, --version", "print the version (and the commit, when run from a source clone)"),
 ]
+
+
+def _git_commit(checkout) -> Optional[str]:
+    """The short commit a source checkout is at, read from its ``.git``
+    without running git (none installed, or slow on a network disk is not a
+    reason for ``--version`` to fail); None when it cannot say."""
+    from pathlib import Path
+
+    try:
+        git = Path(checkout) / ".git"
+        if git.is_file():                    # a worktree: "gitdir: <path>"
+            text = git.read_text().strip()
+            if not text.startswith("gitdir:"):
+                return None
+            git = Path(text.split(":", 1)[1].strip())
+            if not git.is_absolute():
+                git = Path(checkout) / git
+        head = (git / "HEAD").read_text().strip()
+        common = git
+        if (git / "commondir").is_file():
+            common = git / (git / "commondir").read_text().strip()
+        sha = head
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            sha = None
+            for folder in (git, common):
+                if (folder / ref).is_file():
+                    sha = (folder / ref).read_text().strip()
+                    break
+            if sha is None and (common / "packed-refs").is_file():
+                for line in (common / "packed-refs").read_text().splitlines():
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == ref:
+                        sha = parts[0]
+                        break
+        if sha and re.fullmatch(r"[0-9a-f]{40}", sha):
+            return sha[:7]
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def version_text() -> str:
+    """``0.1.0``, or ``0.1.0 (486d893)`` when run from a git clone: two
+    clones of one version can differ."""
+    from neuroatlas import _paths
+
+    checkout = _paths.checkout_root()
+    commit = _git_commit(checkout) if checkout is not None else None
+    return f"{__version__} ({commit})" if commit else __version__
 
 
 def global_options_text(width: int = 78) -> str:
@@ -140,12 +197,12 @@ def global_options_text(width: int = 78) -> str:
 
 
 def _help() -> str:
-    width = max(len(name) for name in COMMANDS)
+    width = max(len(name) for name, cmd in COMMANDS.items() if cmd.listed)
     return "\n".join([
         USAGE,
         "",
         "commands:",
-        *(f"  {name:<{width}}  {cmd.summary}" for name, cmd in COMMANDS.items()),
+        *(f"  {name:<{width}}  {cmd.summary}" for name, cmd in COMMANDS.items() if cmd.listed),
         "",
         "options (before or after the command):",
         global_options_text(),
@@ -230,6 +287,71 @@ def corrected_command(replacements: dict) -> Optional[str]:
     return "neuroatlas " + " ".join(shlex.quote(t) for t in out)
 
 
+def command_with(*extra: str) -> Optional[str]:
+    """The command line being run with *extra* appended (a flag a fix line
+    adds, e.g. --reprobe), or None when it is not known."""
+    if not _COMMAND_LINE:
+        return None
+    import shlex
+
+    return "neuroatlas " + " ".join(shlex.quote(t) for t in [*_COMMAND_LINE, *extra])
+
+
+def command_with_value(flags: Sequence[str], value: str) -> Optional[str]:
+    """The command line being run with the value of the first of *flags* it
+    holds (``-m X`` or ``--models=X``) replaced by *value*, or None when the
+    command line is not known or holds none of them."""
+    if not _COMMAND_LINE:
+        return None
+    import shlex
+
+    out, found, i = [], False, 0
+    tokens = list(_COMMAND_LINE)
+    while i < len(tokens):
+        token = tokens[i]
+        flag, eq, _ = token.partition("=")
+        if not found and token in flags and i + 1 < len(tokens):
+            out += [token, value]
+            found = True
+            i += 2
+            continue
+        if not found and eq and flag in flags:
+            out.append(f"{flag}={value}")
+            found = True
+        else:
+            out.append(token)
+        i += 1
+    return "neuroatlas " + " ".join(shlex.quote(t) for t in out) if found else None
+
+
+def without_families(models: str, families: Sequence[str]) -> str:
+    """A -m selection with these model families removed (``all_fm,-neurogpt``)."""
+    return ",".join([models, *(f"-{f}" for f in families)])
+
+
+def command_without(flag: str) -> Optional[str]:
+    """The command line being run without *flag* and its value (``--x N`` or
+    ``--x=N``), or None when it is not known or the flag is not in it."""
+    if not _COMMAND_LINE:
+        return None
+    import shlex
+
+    out, skip, found = [], False, False
+    for token in _COMMAND_LINE:
+        if skip:
+            skip = False
+        elif token == flag:
+            skip, found = True, True
+        elif token.startswith(flag + "="):
+            found = True
+        else:
+            out.append(token)
+    return "neuroatlas " + " ".join(shlex.quote(t) for t in out) if found else None
+
+
+_REQUIRED = re.compile(r"^the following arguments are required: (.+)$")
+
+
 class ErrorParser(argparse.ArgumentParser):
     """argparse whose errors read like every other message: ``error: ...``,
     then the corrected command (a mistyped flag or choice) or ``<prog>
@@ -242,6 +364,11 @@ class ErrorParser(argparse.ArgumentParser):
 
         suggestions = dict(_SUGGEST)
         _SUGGEST.clear()
+        required = _REQUIRED.match(message)
+        if required:
+            message, fix = self._required(required.group(1))
+            _msg.error(message, fix)
+            raise SystemExit(2)
         fix = corrected_command(suggestions)
         if fix is None:
             fix = f"{self.prog} --help"
@@ -249,6 +376,29 @@ class ErrorParser(argparse.ArgumentParser):
                 message += " (did you mean " + ", ".join(suggestions.values()) + "?)"
         _msg.error(message, fix)
         raise SystemExit(2)
+
+    def _required(self, names: str):
+        """What a missing required argument is for, and the command with it
+        (``run`` without -m: the checkpoints to run)."""
+        wanted = [n.strip() for n in names.split(",") if n.strip()]
+        first = wanted[0]
+        flag = first.split("/")[-1]
+        action = next((a for a in self._actions
+                       if flag in a.option_strings or a.dest == first), None)
+        if flag in ("--models", "-m") or first.startswith("-m/"):
+            what = (f"{self.prog} needs -m: the checkpoints to run (an id, a family, or an "
+                    f"alias such as all_fm)")
+            fix = command_with("-m", "all_fm") or f"{self.prog} -m all_fm"
+            return what, f"{fix}\nfix: neuroatlas list aliases"
+        if action is not None and action.option_strings:
+            metavar = action.metavar or action.dest.upper()
+            help_text = (action.help or "").split(".")[0]
+            what = f"{self.prog} needs {flag} {metavar}" + (f": {help_text[:1].lower()}"
+                                                           f"{help_text[1:]}" if help_text else "")
+            return what, command_with(flag, metavar) or f"{self.prog} --help"
+        if first == "benchmark":
+            return (f"{self.prog} needs a benchmark", "neuroatlas list benchmarks")
+        return (f"{self.prog} needs {', '.join(wanted)}", f"{self.prog} --help")
 
 
 class Parser(ErrorParser):
@@ -270,10 +420,13 @@ class Parser(ErrorParser):
             close = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)
             if close:
                 _SUGGEST[str(value)] = close[0]
-            text = f"invalid choice {value!r} (choose from {', '.join(choices)})"
-            # a sub-command's own name has no flag to name it by
-            raise argparse.ArgumentError(
-                None if isinstance(action, argparse._SubParsersAction) else action, text)
+            if isinstance(action, argparse._SubParsersAction) or not action.option_strings:
+                # a sub-command's own name, or a positional: no flag to name it by
+                text = f"{self.prog} has no {value!r} (choose from {', '.join(choices)})"
+            else:
+                text = (f"{action.option_strings[-1]} {value} is not one of its choices "
+                        f"(choose from {', '.join(choices)})")
+            raise argparse.ArgumentError(None, text)
 
     def _leaf(self, namespace) -> "argparse.ArgumentParser":
         parser = self
@@ -366,24 +519,36 @@ def _usage_error(message: str, fix: str = "neuroatlas --help") -> "SystemExit":
 TRACEBACK_LOGGER = "neuroatlas.traceback"
 
 
+def _on_console(record: logging.LogRecord) -> bool:
+    """What the console shows without -v: our warnings and errors, and a
+    library's errors -- not its warnings, nor Python warnings."""
+    from neuroatlas import quiet
+
+    if record.levelno >= logging.ERROR:
+        return True
+    return (record.levelno >= logging.WARNING and record.name != "py.warnings"
+            and not quiet.is_library(record))
+
+
 class _HiddenCount(logging.Handler):
-    """Counts what the console did not show (library INFO lines, Python
-    warnings), so a command can say so in one line at the end."""
+    """Counts what the console did not show (INFO lines, library and Python
+    warnings), so a command that failed can point at them in one line."""
 
     def __init__(self):
         super().__init__(logging.INFO)
         self.count = 0
 
     def emit(self, record):
-        if record.levelno < logging.WARNING or record.name == "py.warnings":
+        if not _on_console(record):
             self.count += 1
 
 
 def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[logging.Handler]:
-    """Console: WARNING and no library warnings, for every command, unless
-    -v (then DEBUG and everything): the per-model INFO lines of a long run
-    (backbone banners, loader lines, weight reports) are for -v and the log.
-    The --log file always gets everything at INFO, plus every traceback.
+    """Console: our WARNING lines, a library's errors and no other library
+    line or warning, for every command, unless -v (then DEBUG and
+    everything): the per-model INFO lines of a long run (backbone banners,
+    loader lines, weight reports, MNE's filter reports) are for -v and the
+    log. The --log file always gets everything at INFO, plus every traceback.
     Both say ``error:`` and ``warning:`` as every other message does
     (:class:`neuroatlas.cli._msg.LogFormatter`); only the console is coloured."""
     from neuroatlas.cli import _msg
@@ -412,7 +577,7 @@ def _setup_logging(verbose: bool, report: bool, console_stream, log) -> List[log
     else:
         console.setLevel(logging.WARNING)
         console.addFilter(lambda r: r.name != TRACEBACK_LOGGER)
-        console.addFilter(lambda r: r.name != "py.warnings")
+        console.addFilter(_on_console)
     handlers = [console]
     if not verbose:
         hidden = _HiddenCount()
@@ -493,7 +658,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             print(_help())
             return
         if flag in ("-V", "--version"):
-            print(f"neuroatlas {__version__}")
+            print(f"neuroatlas {version_text()}")
             return
         if flag in ("-v", "--verbose"):
             state["verbose"] = True
@@ -524,13 +689,25 @@ def main(argv: Optional[List[str]] = None) -> None:
         raise _usage_error(f"unknown command {name!r}", fixed)
     rest = _take_global_options(rest, state)
 
-    from neuroatlas import catalog, config, selectors
+    from neuroatlas import catalog, config, quiet, selectors
 
     saved = sys.stdout, sys.stderr
     log = None
+    # the exit status the command ends with (the closing note is only for a
+    # command that failed)
+    outcome = {"status": 0}
+
+    def again_verbose() -> str:
+        """The command being run, with -v: what a failed run's note offers."""
+        words = list(_COMMAND_LINE) or [name, *rest]
+        return " ".join(["neuroatlas", "-v", *(["--online"] if state["online"] else []),
+                         *(shlex.quote(t) for t in words)])
+
     handlers: List[logging.Handler] = []
     levels = {name: logging.getLogger(name or None).level
               for name in ("", "neuroatlas", TRACEBACK_LOGGER)}
+    unroute: Callable[[], None] = lambda: None     # noqa: E731
+    quiet.begin_command()
     try:
         # `config` loads the file leniently: it is how a bad file gets fixed.
         config.apply_to_environ(strict=name != "config")
@@ -542,23 +719,33 @@ def main(argv: Optional[List[str]] = None) -> None:
         if state["log"]:
             log = open(state["log"], "a", encoding="utf-8")
         handlers = _setup_logging(state["verbose"], command.report(rest), sys.stderr, log)
+        # MNE, transformers, huggingface_hub: their lines through ours (hidden
+        # unless -v, counted, kept by --log), not to the screen on their own
+        unroute = quiet.route_libraries(state["verbose"])
         if log is not None:
             sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
-        import contextlib
-
         from neuroatlas import progress
 
-        # On a terminal, "neuroatlas embed: starting (0m 03s)" until the
+        # On a terminal, "neuroatlas embed: starting (3s)" until the
         # command prints its first line: importing the engine and planning
-        # take seconds. Not for the commands that print a report.
-        with (contextlib.nullcontext() if command.report(rest) else progress.starting(name)):
+        # take seconds. A command that prints a report has its line on
+        # stderr, naming what it reads, until the report starts.
+        if command.report(rest):
+            words = [name] + rest[:1] if name in _SUBCOMMANDS and rest[:1] \
+                and not rest[0].startswith("-") else [name]
+            line = progress.reporting(" ".join(words))
+        else:
+            line = progress.starting(name)
+        with line:
             importlib.import_module(command.module).main(rest)
     except config.ConfigError as exc:
+        outcome["status"] = 2
         _msg.error(exc.code if isinstance(exc.code, str) else str(exc))
         raise SystemExit(2) from None
     except (catalog.CatalogError, selectors.SelectionError, UsageError) as exc:
         # a benchmark, dataset or model name that does not exist, a bad value:
         # a usage error; a mistyped name gets the corrected command as its fix
+        outcome["status"] = 2
         corrected = corrected_command(getattr(exc, "suggest", None) or {})
         if corrected:
             _, lines, _ = _msg.split(str(exc))
@@ -570,14 +757,19 @@ def main(argv: Optional[List[str]] = None) -> None:
         if isinstance(exc.code, str):
             # SystemExit("error: ...") from a verb: print it here, where it can
             # be captured, and exit 1 as Python itself would.
+            outcome["status"] = 1
             _msg.error(exc.code)
             raise SystemExit(1) from None
         if isinstance(exc.code, int) and exc.code not in (0, 1, 2, 130):
             # a tool's own status (wget 8, nsrr 3): not part of our contract
-            _msg.error(f"a step exited with status {exc.code}")
+            outcome["status"] = 1
+            _msg.error(f"neuroatlas {name} stopped: a tool it ran exited with status "
+                       f"{exc.code} (the lines above say why)", again_verbose())
             raise SystemExit(1) from None
+        outcome["status"] = exc.code if isinstance(exc.code, int) else 0
         raise
     except KeyboardInterrupt:
+        outcome["status"] = 130
         print(file=sys.stderr)
         _msg.error("interrupted")
         raise SystemExit(130) from None
@@ -591,6 +783,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             pass
         raise SystemExit(0) from None
     except Exception as exc:
+        outcome["status"] = 1
         if state["verbose"]:
             raise
         logging.getLogger(TRACEBACK_LOGGER).debug("uncaught", exc_info=True)
@@ -598,23 +791,38 @@ def main(argv: Optional[List[str]] = None) -> None:
         head = _msg.first_sentence(text)
         whole = " ".join(head.split()) == " ".join(text.split())
         if state["log"]:
-            where = f"traceback in {state['log']}"
             if not whole:
                 logging.getLogger(_msg.FULL_LOGGER).info("full message: %s", text)
+            _msg.error(f"neuroatlas {name} stopped: {head} (the traceback is in "
+                       f"{state['log']})")
         else:
-            where = "-v: traceback" if whole else "-v: full message and traceback"
-        _msg.error(f"{head} ({where})")
+            _msg.error(f"neuroatlas {name} stopped: {head}",
+                       f"{again_verbose()} (shows the "
+                       + ("traceback)" if whole else "whole message and the traceback)"))
+        # its own fix line says where the rest is: no second note below
+        outcome["noted"] = True
         raise SystemExit(1) from None
     finally:
         root = logging.getLogger()
+        # what repeated, once, with its count ("4 of 15 probe fits ...")
+        quiet.summarize()
         hidden = sum(h.count for h in handlers if isinstance(h, _HiddenCount))
-        if hidden and not command.report(rest):
-            where = f"they are in {state['log']}" if state["log"] else "-v shows them"
-            _msg.note(f"{_msg.plural(hidden, 'log line')} not shown: {where}", file=saved[1])
+        if hidden and outcome["status"] == 1 and not outcome.get("noted") \
+                and not command.report(rest):
+            # a command that failed: the detail the screen left out is one -v
+            # (or the --log file) away. Nothing is said when it succeeded.
+            if state["log"]:
+                _msg.note(f"every log line of this command is in {state['log']}",
+                          file=saved[1])
+            else:
+                _msg.note("this command's log lines were not shown", again_verbose(),
+                          file=saved[1])
         for h in handlers:
             root.removeHandler(h)
         for logger_name, level in levels.items():
             logging.getLogger(logger_name).setLevel(level)
+        unroute()
+        quiet.end_command()
         logging.captureWarnings(False)
         _msg.set_verbose(False)
         _COMMAND_LINE.clear()

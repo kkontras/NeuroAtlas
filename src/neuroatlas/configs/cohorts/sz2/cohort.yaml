@@ -14,9 +14,8 @@ domain: epilepsy
 paper_dataset: true
 
 description: >
-  SeizeIt2 — binary seizure detection from 19-channel unipolar EEG
-  resampled to 256 Hz. Anonymous Hospital Adult cohort. Patient-level
-  k-fold evaluation.
+  SeizeIT2: binary seizure detection from 19-channel unipolar EEG resampled
+  to 256 Hz. Patient-level k-fold evaluation.
 
 cohort:
   centre: "UZ Leuven, Belgium (SeizeIT2, 9 cohorts)"
@@ -69,7 +68,7 @@ runtime_defaults:
   balance: weighted_sampler
   batch_size: 64
   cache_root: ""
-  data_root: "${EEG_DATA_ROOT}/SeizeIT2/Anonymous_Hospital_Adult/"
+  data_root: "${EEG_DATA_ROOT}/sz2"
   fold: 0
   label_mode: binary
   montage: unipolar

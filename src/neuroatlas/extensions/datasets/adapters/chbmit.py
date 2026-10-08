@@ -19,9 +19,9 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .base import BenchmarkDataModule
 from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
-_CACHE_ROOT_DEFAULT = "${REPO_ROOT}/chbmit_cache/hdf5"
+_CACHE_ROOT_DEFAULT = "${EEG_CACHE_ROOT}/prepared/chbmit"
 _CACHE_FILENAME = "chbmit_256hz_continuous_bipolar18.h5"
-_BIDS_ROOT_DEFAULT = "${REPO_ROOT}/chbmit_cache/raw/BIDS_CHB-MIT"
+_BIDS_ROOT_DEFAULT = "${EEG_DATA_ROOT}/chbmit"
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +142,13 @@ class CHBMITBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule)
         strict_folds: bool = True,
         **kwargs,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("chbmit", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         metadata = {
             "canonical_label_space": ["bckg", "seiz"],
             "epoch_seconds": window_s,
@@ -182,12 +189,12 @@ class CHBMITBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModule)
 
             root = find_bids_root(Path(bids_root)) if bids_root else None
             if root is None:
-                raise FileNotFoundError(
-                    f"No BIDS root found at {bids_root}. Download with: "
-                    "`neuroatlas data download chbmit`; if it is elsewhere, `neuroatlas config set chbmit.bids_root <path>`"
-                )
+                from neuroatlas.extensions.datasets._missing import no_data
+
+                raise FileNotFoundError(no_data("chbmit", bids_root, "bids_root",
+                                                what="no BIDS dataset in"))
             self._bids_root = str(root)
-            self._bids_index = BIDSRecordingIndex.from_bids_root(root)
+            self._bids_index = BIDSRecordingIndex.from_bids_root(root, dataset="chbmit")
             self._DatasetCls = CHBMITBIDSDataset
             self._collate_fn = _collate_chbmit
 

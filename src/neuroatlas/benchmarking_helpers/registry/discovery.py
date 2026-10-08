@@ -9,10 +9,17 @@ from typing import Dict, Iterable, List, Optional, Sequence
 from .contracts import CheckpointSpec, DatasetSpec, ModelSpec, TaskSpec
 
 
-def _collect_specs(package_name: str, attr_name: str):
+def _collect_specs(package_name: str, attr_name: str, *, packages: bool = True):
+    """Every *attr_name* list in the modules directly under *package_name*.
+
+    ``packages=False``: modules only, not sub-packages -- the dataset specs
+    live in plain modules, and importing the readers' packages (adapters,
+    physioex, ...) to look for more pulled torch into `data status`."""
     package = importlib.import_module(package_name)
     specs = []
     for module_info in pkgutil.iter_modules(package.__path__, prefix=f"{package_name}."):
+        if module_info.ispkg and not packages:
+            continue
         module = importlib.import_module(module_info.name)
         values = getattr(module, attr_name, None)
         if values is None:
@@ -26,7 +33,8 @@ def _collect_specs(package_name: str, attr_name: str):
 
 @lru_cache(maxsize=1)
 def dataset_specs() -> List[DatasetSpec]:
-    return sorted(_collect_specs("neuroatlas.extensions.datasets", "DATASET_SPECS"), key=lambda spec: spec.slug)
+    return sorted(_collect_specs("neuroatlas.extensions.datasets", "DATASET_SPECS", packages=False),
+                  key=lambda spec: spec.slug)
 
 
 @lru_cache(maxsize=1)
@@ -44,12 +52,20 @@ def task_specs() -> List[TaskSpec]:
 # "unsupported dataset", which reads like a typo rather than a rename.
 RETIRED_SLUGS = {
     "tusz_edf_direct": (
-        "tusz_edf_direct was never a separate cohort — it is TUSZ v2.0.3 read "
-        "from raw EDF instead of the HDF5 cache. Use "
-        "`--dataset tusz --set backend=edf`, or in a config file, the key "
-        '"tusz" with "backend": "edf".'
+        "no dataset named 'tusz_edf_direct': TUSZ read from its EDF files is "
+        "--dataset tusz --set backend=edf (in a config file, \"tusz\" with "
+        "\"backend\": \"edf\")"
     ),
 }
+
+
+class UnknownName(KeyError):
+    """A dataset, model family or task name the registry does not have. A
+    ``KeyError`` (what callers catch); its text is the message, without the
+    quotes a ``KeyError`` puts around it."""
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else ""
 
 
 def load_dataset_spec(dataset_name: str) -> DatasetSpec:
@@ -58,8 +74,8 @@ def load_dataset_spec(dataset_name: str) -> DatasetSpec:
         if spec.slug.lower() == key:
             return spec
     if key in RETIRED_SLUGS:
-        raise KeyError(RETIRED_SLUGS[key])
-    raise KeyError(f"Unsupported benchmark dataset {dataset_name!r}.")
+        raise UnknownName(RETIRED_SLUGS[key])
+    raise UnknownName(f"no dataset named {dataset_name!r}")
 
 
 def load_model_spec(model_name: str) -> ModelSpec:
@@ -67,7 +83,7 @@ def load_model_spec(model_name: str) -> ModelSpec:
     for spec in model_specs():
         if spec.slug.lower() == key:
             return spec
-    raise KeyError(f"Unsupported benchmark model family {model_name!r}.")
+    raise UnknownName(f"no model family named {model_name!r}")
 
 
 def load_task_spec(task_name: str) -> TaskSpec:
@@ -75,7 +91,7 @@ def load_task_spec(task_name: str) -> TaskSpec:
     for spec in task_specs():
         if spec.slug.lower() == key:
             return spec
-    raise KeyError(f"Unsupported benchmark task {task_name!r}.")
+    raise UnknownName(f"no task named {task_name!r}")
 
 
 def _matches_filter(spec: CheckpointSpec, model_names: Optional[Iterable[str]]) -> bool:

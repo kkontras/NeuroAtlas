@@ -60,7 +60,7 @@ class HMCDataset(BasePhysioDataset):
         "ECG": ["ECG", "ECG1", "ECG2", "EKG"],
     }
 
-    def __init__(self, root: str = "${EEG_DATA_ROOT}/raw-sleep/hmc/physionet.org/files/hmc-sleep-staging/1.1/recordings", **kwargs):
+    def __init__(self, root: str = "${EEG_DATA_ROOT}/hmc", **kwargs):
         super().__init__(root=root, **kwargs)
 
     def _list_subjects(self) -> List[SubjectSpec]:

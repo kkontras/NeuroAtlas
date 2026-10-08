@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ._preproc import _ESAT_DATASETS
+from ._preproc import _PAPER_PREPROC_DATASETS
 from .base import BenchmarkBackbone
 from neuroatlas.benchmarking_helpers import CheckpointSpec
 from neuroatlas._paths import models_dir
@@ -52,11 +52,11 @@ class UnivariateTimeSeriesBackbone(BenchmarkBackbone):
             x = x.unsqueeze(1)  # (B, T) -> (B, 1, T)
         B, C, T = x.shape
 
-        # Strip all-zero channels (ESAT-only): dataio zero-pads missing
+        # Strip all-zero channels (_PAPER_PREPROC_DATASETS): dataio zero-pads missing
         # channel slots; pooling over them dilutes the embedding.
         meta = batch.get("meta") or [{}]
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             nonzero = x.abs().sum(dim=(0, 2)) > 0
             if not nonzero.all() and nonzero.any():
                 x = x[:, nonzero, :]
@@ -177,7 +177,7 @@ class UnivariateTimeSeriesBackbone(BenchmarkBackbone):
 
         meta = batch.get("meta") or [{}]
         dataset = meta[0].get("dataset", "") if meta else ""
-        if dataset in _ESAT_DATASETS:
+        if dataset in _PAPER_PREPROC_DATASETS:
             nonzero = x.abs().sum(dim=(0, 2)) > 0
             if not nonzero.all() and nonzero.any():
                 x = x[:, nonzero, :]

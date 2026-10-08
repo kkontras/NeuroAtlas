@@ -143,8 +143,15 @@ class SubjectRecord:
 
 
 def scan_physionet2026_subjects(data_root: str) -> List[SubjectRecord]:
-    """Build SubjectRecord list from demographics.csv and directory scan."""
-    root = Path(data_root)
+    """Build SubjectRecord list from demographics.csv and directory scan.
+
+    ``data_root`` is the dataset's folder: ``demographics.csv`` sits in it,
+    or in the ``training_set`` folder the challenge data unpacks to (at any
+    one level below).
+    """
+    from neuroatlas.extensions.datasets._layout import descend
+
+    root = descend(data_root, ["training_set", "*/training_set"], "demographics.csv")
     csv_path = root / "demographics.csv"
     df = pd.read_csv(csv_path)
 

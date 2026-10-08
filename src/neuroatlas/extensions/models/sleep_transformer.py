@@ -34,7 +34,7 @@ MODEL_SPECS = [
                 embedding_dim=128,
                 wrapper_name="sleep_transformer",
                 status="ready",
-                notes="EEG-only SleepEnc trunk from Trui/unimodal_eeg_eoe_fold0 (Sleep-CoRe pretraining run).",
+                notes="EEG-only SleepEnc trunk of the unimodal EEG model, fold 0 of the CoRe-Sleep pretraining run.",
                 runtime_overrides={
                     "stride": 1, "target_idx": "all",
                     "embedding_stride": 1, "embedding_target_idx": 10,

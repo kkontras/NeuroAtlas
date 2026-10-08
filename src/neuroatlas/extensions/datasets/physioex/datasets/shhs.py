@@ -91,7 +91,7 @@ class SHHSDataset(_NSRRBaseDataset):
 
     def __init__(
         self,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/shhs",
+        root: str = "${EEG_DATA_ROOT}/shhs",
         visit: int = 1,
         **kwargs,
     ):
@@ -120,7 +120,8 @@ class SHHSDataset(_NSRRBaseDataset):
         """
         csv_path = Path(root) / "datasets" / "shhs-harmonized-dataset-0.21.0.csv"
         if not csv_path.exists():
-            logger.warning("SHHS metadata CSV not found: %s", csv_path)
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+            warn_no_demographics(logger, "shhs", csv_path, download=False)
             return {}
         import pandas as pd
 

@@ -33,6 +33,7 @@ from neuroatlas.extensions.tasks.linear_probe import (
     _extract_or_load_embeddings,
 )
 from neuroatlas.extensions.tasks._epoch_labels import (
+    benchmark_datasets,
     binary_labels_from_fraction_seconds,
 )
 
@@ -136,7 +137,8 @@ def evaluate_arousal_detection(
             evaluation_mode="arousal_detection",
             failure=BenchmarkFailure(
                 code="missing_labels",
-                message="No arousal_fraction in metadata. Only MASS SS01 supports arousal detection."),
+                message=f"no arousal labels in the {dataset_name} epochs (sleep_arousal "
+                        f"runs on {benchmark_datasets('sleep_arousal', 'mass and physionet2026')})"),
         )
 
     from neuroatlas import predictions as preds
@@ -165,7 +167,8 @@ def evaluate_arousal_detection(
         if len(np.unique(train_labels)) < 2:
             fit[key] = {
                 "skipped": True,
-                "reason": f"Only one class at threshold={threshold}s",
+                "reason": (f"the training epochs hold one class only at more than "
+                           f"{threshold:g} s of arousal"),
             }
             continue
 
@@ -179,6 +182,9 @@ def evaluate_arousal_detection(
             hidden_dims=probe_config.get("hidden_dims"),
             selection_metric=selection_metric,
             class_weight=probe_config.get("class_weight"),
+            # --tune-c: the benchmark passes 1.0 (C.2: C = 1 for event
+            # detection); a grid is chosen on validation Cohen's kappa
+            c_values=probe_config.get("c_values"),
         )
         columns.update(preds.prefixed(key, preds.probe_columns(probe_result, with_row=True)))
         fit[key] = preds.probe_fit(probe_result, selection_metric=selection_metric,
@@ -233,7 +239,8 @@ def score(pred) -> Dict[str, Any]:
 TASK_SPECS = [
     TaskSpec(
         slug="arousal_detection",
-        description="Binary arousal detection probe using epoch-length-aware seconds thresholds.",
+        description="Arousal detection: one binary probe per threshold of scored arousal "
+                    "seconds in an epoch.",
         evaluator=evaluate_arousal_detection,
         score=score,
     )

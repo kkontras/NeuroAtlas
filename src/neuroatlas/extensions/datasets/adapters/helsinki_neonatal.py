@@ -27,7 +27,7 @@ from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindo
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RAW_ROOT = "${REPO_ROOT}/helsinki_neonatal_cache/raw"
+_DEFAULT_RAW_ROOT = "${EEG_DATA_ROOT}/helsinki_neonatal"
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +141,17 @@ class HelsinkiNeonatalBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkD
         seed: int = 42,
         **_unused: Any,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("helsinki_neonatal", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         if backend != "edf":
             raise ValueError(
-                f"backend must be 'edf' (the legacy 'hdf5' backend has been "
-                f"removed), got {backend!r}"
+                f"helsinki_neonatal reads only its EDF files (backend=edf), not "
+                f"backend={backend!r}"
             )
         if label_mode != "binary":
             raise ValueError(
@@ -180,10 +187,9 @@ class HelsinkiNeonatalBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkD
         self._seed = int(seed)
 
         if not Path(raw_root).exists():
-            raise FileNotFoundError(
-                f"Helsinki raw_root not found: {raw_root}. "
-                f"Run `python -m neuroatlas.entrypoints.fetch --dataset helsinki_neonatal --download` to stage it."
-            )
+            from neuroatlas.extensions.datasets._missing import no_data
+
+            raise FileNotFoundError(no_data("helsinki_neonatal", raw_root, "raw_root"))
         self._prepare_edf_backend()
 
         self._datasets: Dict[str, Any] = {}
@@ -242,7 +248,8 @@ class HelsinkiNeonatalBenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkD
 
         if not rec_indices:
             raise RuntimeError(
-                f"Helsinki split {split!r} has 0 recordings — check fold index."
+                f"helsinki_neonatal fold {self._fold}: its {split} split has no "
+                f"recordings (n_folds={self._n_folds})"
             )
 
         stride_s = self._stride_s if split == "train" else self._window_s

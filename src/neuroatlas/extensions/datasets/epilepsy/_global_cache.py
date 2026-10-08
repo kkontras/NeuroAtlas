@@ -14,7 +14,7 @@ train, val and test split through those loaders. Two consequences:
   30-45 s per batch on CHB-MIT, against ~0.3 s for the same loader read in
   order.
 * **Per-fold caches.** The cached "train split" was a random resample (on
-  the tester's Siena fold-0 cache: 27,951 rows, 11,274 distinct windows, one
+  one Siena fold-0 cache: 27,951 rows, 11,274 distinct windows, one
   seizure window drawn 98 times), so it could only belong to one fold, and
   every fold extracted again.
 
@@ -155,6 +155,63 @@ def montage_context(datamodule, context: Dict[str, Any]) -> Dict[str, Any]:
     if kept and "montage_filter" not in context:
         context["montage_filter"] = sorted(str(m) for m in kept)
     return context
+
+
+#: Settings an epilepsy embedding cache does not record. The saved
+#: embeddings (and their labels) of a dataset are made with its default for
+#: each; another value would silently read or overwrite them, so it is refused
+#: (:func:`refuse_unrecorded_settings`). The cache key is left as it is: adding
+#: them would orphan every cache already made.
+UNRECORDED_SETTINGS = ("normalize", "label_mode", "overlap_threshold")
+
+
+def _setting_default(slug: str, cls, key: str):
+    """*key*'s default for dataset *slug*: its manifest's, else *cls*'s
+    constructor default (None when neither has one)."""
+    import inspect
+
+    from neuroatlas.benchmarking_helpers.registry.discovery import load_dataset_spec
+
+    try:
+        defaults = load_dataset_spec(slug).config_defaults
+    except Exception:                       # not a registered dataset (a test double)
+        defaults = {}
+    if key in defaults:
+        return defaults[key]
+    try:
+        param = inspect.signature(cls.__init__).parameters.get(key)
+    except (TypeError, ValueError):
+        return None
+    if param is None or param.default is inspect.Parameter.empty:
+        return None
+    return param.default
+
+
+def _same_setting(key: str, value, default) -> bool:
+    if key == "normalize":
+        # `--set normalize=none` arrives as None
+        return str(value or "none").lower() == str(default or "none").lower()
+    if key == "overlap_threshold":
+        try:
+            return float(value) == float(default if default is not None else 0.0)
+        except (TypeError, ValueError):
+            return False
+    return value == default
+
+
+def refuse_unrecorded_settings(slug: str, cls, **given) -> None:
+    """Refuse a value of an :data:`UNRECORDED_SETTINGS` setting other than
+    the dataset's default: its saved embeddings do not record it."""
+    from neuroatlas.cli import _msg
+
+    for key, value in given.items():
+        default = _setting_default(slug, cls, key)
+        if _same_setting(key, value, default):
+            continue
+        raise ValueError(_msg.compose(
+            f"{slug} takes only {key}={default}, not {key}={value} (its saved "
+            f"embeddings do not record this setting)",
+            f"neuroatlas embed --dataset {slug} --help"))
 
 
 class RecordingWindowGlobalCache:

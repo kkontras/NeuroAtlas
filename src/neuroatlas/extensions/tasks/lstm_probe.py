@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from tqdm.auto import tqdm
 
+from neuroatlas import progress
 from neuroatlas.benchmarking_helpers import BenchmarkResult, EmbeddingPayload, TaskSpec
 from neuroatlas.benchmarking_helpers.probes.metrics import compute_classification_metrics
 from neuroatlas.benchmarking_helpers.probes.probe import ProbeResult
@@ -241,12 +241,12 @@ class _TorchLSTMProbe:
             cur_lr = optimizer.param_groups[0]["lr"]
 
             if epoch % 10 == 0 or improved or wait >= self.patience:
-                print(f"  epoch {epoch:3d}  val_loss={val_loss:.4f}  best={best_val_loss:.4f}  wait={wait}  lr={cur_lr:.1e}")
+                logger.debug(f"  epoch {epoch:3d}  val_loss={val_loss:.4f}  best={best_val_loss:.4f}  wait={wait}  lr={cur_lr:.1e}")
 
             if wait >= self.patience:
                 break
 
-        print(f"  stopped at epoch {epoch}, best_val_loss={best_val_loss:.4f}")
+        logger.debug(f"  stopped at epoch {epoch}, best_val_loss={best_val_loss:.4f}")
         if best_state is not None:
             self._model.load_state_dict(best_state)
 
@@ -287,7 +287,7 @@ def _aggregate_seeds(per_seed, estimators, selection_metric, test_y=None, test_o
     best_row = max(per_seed, key=lambda r: float(r["val"][selection_metric]))
     best_seed = int(best_row["seed"])
     best_val_sm = float(best_row["val"][selection_metric])
-    print(
+    logger.debug(
         f"[lstm_probe] selected best_seed={best_seed} "
         f"best_val_{selection_metric}={best_val_sm:.6f}"
     )
@@ -334,13 +334,16 @@ def _train_lstm_probe_windowed(
     estimators: Dict[int, _TorchLSTMProbe] = {}
     test_outputs: List[Dict[str, Any]] = []
 
-    print(
+    logger.debug(
         f"[lstm_probe] fitting windowed probe on "
         f"train={len(train_y)} val={len(val_y)} test={len(test_y)} "
         f"with {len(seeds)} seed(s), dim={dim}, window={window_size}"
     )
 
-    for seed in tqdm(seeds, desc="LSTM probe seeds", leave=True):
+    # seed by seed on the fold's live line, not a bar
+    item = progress.current()
+    item.phase("fitting", total=len(seeds), unit="seeds")
+    for seed in seeds:
         probe = _TorchLSTMProbe(
             dim=dim, n_classes=n_classes, seed=seed,
             device=device, class_weight=class_weight, **lstm_kwargs,
@@ -372,7 +375,8 @@ def _train_lstm_probe_windowed(
         per_seed.append({"seed": seed, "val": val_metrics, "test": test_metrics})
         test_outputs.append({"y_pred": np.asarray(test_pred), "y_score": test_score,
                              "y_proba": test_proba})
-        print(
+        item.update(advance=1)
+        logger.debug(
             f"[lstm_probe] seed={seed} "
             f"val_{selection_metric}={float(val_metrics[selection_metric]):.6f} "
             f"test_accuracy={float(test_metrics['accuracy']):.6f}"

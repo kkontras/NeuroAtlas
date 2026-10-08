@@ -19,11 +19,11 @@ not (re-)derived here.
 Usage:
     # one shard
     python -m neuroatlas.extensions.datasets.preprocessors.preprocess_sz1 \
-        --cache-root /anonorg/.../caches/sz1 --shard-index 0 --num-shards 12
+        --cache-root ${EEG_CACHE_ROOT}/prepared/sz1 --shard-index 0 --num-shards 12
 
     # finalize the cohort window index after all shards complete
     python -m neuroatlas.extensions.datasets.preprocessors.preprocess_sz1 \
-        --cache-root /anonorg/.../caches/sz1 --build-windows-index \
+        --cache-root ${EEG_CACHE_ROOT}/prepared/sz1 --build-windows-index \
         --window-s 10 --stride-s 10
 """
 from __future__ import annotations
@@ -46,6 +46,7 @@ from neuroatlas.extensions.datasets.epilepsy.sz1_preprocessor import (
     TARGET_FS,
     _parse_sz1_tsv,
     _read_sz1_edf_to_unipolar19,
+    data_folder,
     discover_recordings,
 )
 
@@ -263,6 +264,8 @@ def main() -> None:
     p.add_argument("--window-s", type=float, default=10.0)
     p.add_argument("--stride-s", type=float, default=10.0)
     args = p.parse_args()
+    # the recording ids are relative to the folder holding the subject folders
+    args.data_root = str(data_folder(args.data_root))
 
     cache_root = Path(args.cache_root)
     cache_root.mkdir(parents=True, exist_ok=True)

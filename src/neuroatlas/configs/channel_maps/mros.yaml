@@ -36,9 +36,6 @@ per_model:
   moment:
     C3-A2: C3-A2
     C4-A1: C4-A1
-  timesfm:
-    C3-A2: C3-A2
-    C4-A1: C4-A1
   neurogpt:
     C3-A2: C3
     C4-A1: C4
@@ -68,7 +65,6 @@ notes:
   chronos: Univariate per-channel; channel labels passed through (UnivariateTimeSeriesBackbone flattens (B,C,T)→(B*C,T) and mean-pools over channels).
   moirai: Univariate per-channel; channel labels passed through.
   moment: Univariate per-channel; channel labels passed through.
-  timesfm: Univariate per-channel; channel labels passed through.
   neurogpt: Bipolar central onto referential C3/C4 anchor in NeuroGPT's 22-ch legacy 10-20 layout (match-ratio 2/22). M2/A2 and M1/A1 are the same mastoids.
   neurorvq: Bipolar central onto referential C3/C4 anchor in NeuroRVQ's 102-label global vocabulary.
   steegformer: Vocab-strict supervised model on standard 10-20 names; central bipolar mapped onto referential C3/C4 anchor.

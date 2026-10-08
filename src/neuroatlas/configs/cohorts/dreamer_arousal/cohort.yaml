@@ -21,14 +21,14 @@ cohort:
   powerline_hz: 50
 
 acquisition:
-  kind: manual
+  # The benchmark reads the authors' preprocessed file, not DREAMER.mat
+  # (upstream: where the recordings come from).
+  kind: internal
   upstream: https://zenodo.org/records/546113
-  note: >
-    DREAMER (Katsigiannis & Ramzan 2018) is a restricted Zenodo record: access
-    is granted on request by its owners.
   prepared_only: >
-    the benchmark reads the preprocessed pickle the published embeddings were
-    built from; no script in this repository builds it from DREAMER.mat.
+    bci_cognitive reads DREAMER_arousal_preprocessed_*.pkl (4 s windows at
+    128 Hz), the file the published embeddings were extracted from; the
+    authors provide it on request.
     fix: ask the authors for DREAMER_arousal_preprocessed_*.pkl, then
     neuroatlas config set dreamer_arousal.preprocessed_path FILE
 

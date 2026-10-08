@@ -11,13 +11,17 @@ stratified-by-age subject-level folds at split time.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from neuroatlas import quiet
 from neuroatlas.benchmarking_helpers.registry.contracts import EmbeddingPayload
 from .base import BenchmarkDataModule
+
+logger = logging.getLogger(__name__)
 
 
 class _EmptyLoader:
@@ -70,9 +74,9 @@ def _age_bin_kfold(n_folds: int, age_bin_ids: np.ndarray, seed: int):
         n_folds, labels, seed=seed, sparse_classes="stratify")
     counts = Counter(labels)
     if stratified and counts and min(counts.values()) < n:
-        print(f"[precomputed] age bins {dict(sorted(counts.items()))}: the smallest "
-              f"has fewer than {n} subjects; stratifying anyway, as the published "
-              f"splitter did.", flush=True)
+        logger.info(f"[precomputed] age bins {dict(sorted(counts.items()))}: the smallest "
+                    f"has fewer than {n} subjects; stratifying anyway, as the published "
+                    f"splitter did.")
     return splitter, n
 
 
@@ -392,12 +396,10 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             lookup[tuple(str(row[c]) for c in self._label_lookup_join)] = row[
                 self._label_field
             ]
-        print(
+        logger.info(
             f"[precomputed] Loaded label_lookup_table {path.name}: {len(lookup)} "
             f"entries; join={list(self._label_lookup_join)}, "
-            f"label_field={self._label_field!r}",
-            flush=True,
-        )
+            f"label_field={self._label_field!r}")
         return lookup
 
     def _apply_label_lookup(self, metadata_list: List[Dict[str, Any]]) -> Tuple[int, int]:
@@ -420,12 +422,10 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
                 continue
             item[self._label_field] = value
             n_overridden += 1
-        print(
+        logger.info(
             f"[precomputed] label_lookup applied: overrode {n_overridden}/"
             f"{len(metadata_list)} item rows; {n_unmatched} unmatched "
-            f"(kept original {self._label_field}).",
-            flush=True,
-        )
+            f"(kept original {self._label_field}).")
         return n_overridden, n_unmatched
 
     def _select_holdout_subjects(
@@ -515,11 +515,9 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             holdout_ids.append(sb)
             labels[sb] = b_label
         deltas = [d for _, _, d in chosen]
-        print(
+        logger.info(
             f"[precomputed] Holdout-eval: {K} pairs reserved ({a_label} vs {b_label}); "
-            f"max |d {match_field}|={max(deltas):.2f}, mean={float(np.mean(deltas)):.2f}.",
-            flush=True,
-        )
+            f"max |d {match_field}|={max(deltas):.2f}, mean={float(np.mean(deltas)):.2f}.")
         return holdout_ids, labels
 
     def supports_global_embedding_cache(self) -> bool:
@@ -592,11 +590,10 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
                 f"to finalize before probing"
                 if inflight else ""
             )
-            print(
-                f"[precomputed] {self.name}: no finalized embedding cache for "
-                f"checkpoint {checkpoint_id!r} under {all_dir}{suffix}.",
-                flush=True,
-            )
+            quiet.warn_once(
+                logger, f"precomputed missing:{self.name}:{checkpoint_id}",
+                "%s: no finished embedding cache for checkpoint %s under %s%s",
+                self.name, checkpoint_id, all_dir, suffix)
             return None
         self._record_source_provenance(resolved)
         return resolved
@@ -665,11 +662,13 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
 
         finite_mask = np.isfinite(features).all(axis=1)
         if not finite_mask.all():
-            print(
-                f"[precomputed] Dropped {int((~finite_mask).sum())} / {n_rows} rows with "
-                f"non-finite (NaN/inf) features before fold split.",
-                flush=True,
-            )
+            from neuroatlas.benchmarking_helpers.runtime.pair import where
+
+            quiet.warn_once(
+                logger, f"precomputed non-finite:{self.name}",
+                "%s: %s of %s embeddings are not finite (NaN or inf) and are left out, "
+                "before the fold split", where(self.name, fold=False),
+                f"{int((~finite_mask).sum()):,}", f"{n_rows:,}")
             _keep(finite_mask)
 
         # Labels first: the stratified split, the holdout matching and the
@@ -684,12 +683,10 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
                 str(row.get("subject_id"))
                 for row, ok in zip(metadata_list, labelled_mask) if not ok
             })
-            print(
+            logger.info(
                 f"[precomputed] Dropped {int((~labelled_mask).sum())} / {n_rows} rows with "
                 f"no {self._label_field} ({len(groups)} subjects): "
-                f"{groups[:10]}{' ...' if len(groups) > 10 else ''}",
-                flush=True,
-            )
+                f"{groups[:10]}{' ...' if len(groups) > 10 else ''}")
             _keep(labelled_mask)
 
         if self._cv_filter and self._cv_filter_scope == "pool":
@@ -706,11 +703,9 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             before = len({str(r.get("subject_id")) for r in metadata_list})
             _keep(pool_mask)
             after = len({str(r.get("subject_id")) for r in metadata_list})
-            print(
+            logger.info(
                 f"[precomputed] cv_filter={self._cv_filter!r} on the CV pool: kept "
-                f"{n_rows} rows, {after}/{before} subjects.",
-                flush=True,
-            )
+                f"{n_rows} rows, {after}/{before} subjects.")
 
         # Reserve the holdout cohort before the CV split so its subjects never
         # appear in any train/val/test fold.
@@ -806,19 +801,15 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
             if cv_filter_mask is not None:
                 pre = int(mask.sum())
                 mask &= cv_filter_mask
-                print(
+                logger.info(
                     f"[precomputed] cv_filter={self._cv_filter!r} on {split_name}: "
-                    f"kept {int(mask.sum())}/{pre} rows.",
-                    flush=True,
-                )
+                    f"kept {int(mask.sum())}/{pre} rows.")
             if train_filter_mask is not None and split_name in ("train", "val"):
                 pre = int(mask.sum())
                 mask &= train_filter_mask
-                print(
+                logger.info(
                     f"[precomputed] train_filter={self._train_filter!r} on {split_name}: "
-                    f"kept {int(mask.sum())}/{pre} rows.",
-                    flush=True,
-                )
+                    f"kept {int(mask.sum())}/{pre} rows.")
             if self._drop_unscored:
                 mask &= stages != -1
             result[split_name] = _payload(np.flatnonzero(mask))
@@ -826,11 +817,9 @@ class PrecomputedEmbeddingDataModule(BenchmarkDataModule):
         if holdout_subject_ids:
             holdout_idx = np.flatnonzero(~in_cv_pool)
             result["holdout"] = _payload(holdout_idx, extra=holdout_group_labels)
-            print(
+            logger.info(
                 f"[precomputed] Holdout payload: {len(holdout_idx)} rows from "
-                f"{len(holdout_subject_ids)} subjects.",
-                flush=True,
-            )
+                f"{len(holdout_subject_ids)} subjects.")
         return result
 
 

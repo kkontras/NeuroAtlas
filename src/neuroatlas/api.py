@@ -78,7 +78,7 @@ def benchmarks():
 
     return _frame([{"benchmark": b.name, "title": b.title, "domain": b.domain,
                     "task": b.task, "headline": b.metrics.headline,
-                    "higher_is_better": b.metrics.higher_is_better,
+                    "higher_is_better": b.metrics.higher_is_better, "chance": b.chance(),
                     "single": b.single, "datasets": [e.slug for e in b.datasets],
                     "planned_datasets": [p["name"] for p in b.planned],
                     "excluded_models": [{"families": list(x.families), "reason": x.reason}
@@ -99,7 +99,8 @@ def models(selector: str = "all"):
     rows = []
     for spec in _specs(selector):
         st = ms.status(spec)
-        rows.append({"checkpoint": st.identifier, "source": st.source, "state": st.state,
+        rows.append({"checkpoint": st.identifier, "source": st.source,
+                     "state": ms.state_word(st.state),
                      "path": st.path or None, "note": "; ".join(st.notes) or None})
     return _frame(rows, MODEL_COLUMNS)
 
@@ -153,8 +154,8 @@ def run_benchmark(benchmark: str, models: str, datasets: str = "single",
     configured one).
 
     ``online=False`` (default): downloads off, as `neuroatlas run`; a model
-    whose weights are not here is reported failed, by name, and the others
-    run. ``online=True``: as `neuroatlas --online run`, a missing checkpoint
+    whose weights are not here is reported skipped, by name, and the others
+    run (a dataset whose data is not here is skipped too). ``online=True``: as `neuroatlas --online run`, a missing checkpoint
     is fetched. ``reprobe=True``: as `run --reprobe`, every fold is fitted
     again instead of rescored from its saved predictions."""
     from neuroatlas import run
@@ -182,25 +183,21 @@ def results(benchmark: str, paths: _Optional[_Sequence[str]] = None,
             output_root: _Optional[str] = None, variant: _Optional[str] = None):
     """One row per (dataset, variant, model), as `results --format json`:
     headline mean/std over the folds that succeeded, folds out of the
-    protocol's, normalised score, failures, and the secondary metrics.
-    ``variant``: that variant's rows only (default: every variant)."""
+    protocol's (``LOSO k/N`` for leave-one-subject-out), the headline's
+    chance level, failures, and the secondary metrics; ``note`` is the lines
+    the table prints under the row (why it is n/a, why folds failed).
+    ``variant``: that variant's rows only (default: every variant; an
+    earlier name of a variant is that variant)."""
     from neuroatlas import catalog, results as res
-    from neuroatlas.cli.results import _folds_text, _failure_lines
+    from neuroatlas.cli.results import summary_rows
 
     bench = catalog.load(benchmark)
     summaries, _ = res.benchmark_summary(benchmark, paths,
                                          _Path(output_root) if output_root else None,
                                          variant=variant)
-    rows = []
-    for s in summaries:
-        row = {"benchmark": bench.name, "metric": bench.metrics.headline,
-               "dataset": s.dataset, "variant": s.variant, "model": s.model, "status": s.status,
-               "mean": s.mean, "std": s.std, "folds": _folds_text(s), "n_folds": s.n_folds,
-               "n_expected": s.n_expected, "n_failed": s.n_failed, "normalized": s.normalized,
-               "failures": s.failures, "errors": s.errors,
-               "note": "; ".join(_failure_lines(s)) or None}
-        row.update(s.secondary)
-        rows.append(row)
+    rows, notes = summary_rows(bench, summaries, machine=True)
+    for i, row in enumerate(rows):
+        row["note"] = "; ".join(notes.get(i, [])) or None
     return _frame(rows, ["benchmark", "metric", "dataset", "variant", "model", "status",
                          "mean", "std"])
 

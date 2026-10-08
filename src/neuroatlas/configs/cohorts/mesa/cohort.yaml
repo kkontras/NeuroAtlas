@@ -23,6 +23,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: mesa
+  folders: [polysomnography/edfs, polysomnography/annotations-events-nsrr, datasets]
 
 signal:
   notch_freq: 60.0
@@ -60,7 +61,7 @@ pipeline:
   preprocessor: null
 
 runtime_defaults:
-  data_root: "${EEG_DATA_ROOT}/data/Guido/mesa/polysomnography/edfs"
+  data_root: "${EEG_DATA_ROOT}/mesa"
   batch_size: 8
   num_workers: 0
   fold: 0
@@ -81,12 +82,3 @@ spec:
 
 provenance:
   last_verified: null
-  known_issues:
-    - "Never loaded. MESA's corpus is not on the machine this was written on."
-    - "2056 recordings makes this the benchmark's largest sleep cohort; the
-       default batch_size of 8 and num_workers of 0 are the physioex base
-       defaults, not a considered choice for a corpus this size."
-    - "App. B.3 uses this cohort for brain age, but the loader carries no
-       demographics, so there is no `age` label mode here and brain age
-       cannot run on it. Adding it means joining the NSRR
-       mesa-sleep-dataset-*.csv on subject id -- the same work SHHS needs."

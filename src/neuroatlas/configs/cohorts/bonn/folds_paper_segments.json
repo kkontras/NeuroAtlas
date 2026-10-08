@@ -7,7 +7,7 @@
  "n_folds": 5,
  "what": "The folds the published Bonn numbers (Figure 8, App. D.1.3) were drawn on: stratified 5-fold CV over the 1,000 segments, as App. D.1.3 says. A clip's two segments are assigned independently, so in 770 of the 1,000 (fold, test segment) cases the other half of the same clip is in train or val.",
  "derivation": "probe_sz1_sklearn._build_patient_splits, 'Fallback B' (subjects == rec_ids == ''): StratifiedKFold(5, shuffle=True, random_state=42) over arange(1000) on S-vs-rest, segments in clip-major order (sets Z,O,N,F,S; files sorted); val = inner StratifiedKFold(5, same seed) fold (k+1) % 5 of the outer train part.",
- "evidence": "Re-probing the paper's own Bonn CBraMod embedding (sofia_inbox/bonn/embeddings_w10s_s10s_sofia/cbramod_pretrained/embeddings.npz) on these folds with the paper's probe code returns its saved test probabilities to <= 2.6e-10, its best C and threshold, and its per-fold AUROC / balanced accuracy to 6 decimals; today's extraction of that embedding equals it to 2.2e-7 in this segment order.",
+ "evidence": "Re-probing the paper's own Bonn CBraMod embedding on these folds with the paper's probe code returns its saved test probabilities to <= 2.6e-10, its best C and threshold, and its per-fold AUROC / balanced accuracy to 6 decimals; this release's extraction of that embedding equals it to 2.2e-7 in this segment order.",
  "requires": {
   "window_s": 10.0,
   "stride_s": [

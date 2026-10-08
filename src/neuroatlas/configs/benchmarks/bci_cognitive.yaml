@@ -2,7 +2,9 @@ schema_version: 1
 name: bci_cognitive
 title: Cognitive and affective states
 domain: bci
-question: Emotion (DREAMER valence and arousal) and mental arithmetic (EEGMat, ArithmeticTask).
+question: >
+  Emotion (DREAMER valence and arousal) and mental arithmetic (EEGMat,
+  ArithmeticTask), tested on people the probe never saw (leave-one-subject-out).
 paper: App. C.4
 embed: --pooling mean
 probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
@@ -10,7 +12,31 @@ probe: --pooling mean --set n_folds=loso --probe-type linear --class-weight bala
 # which is how its pickles, embeddings and probes are stored.
 datasets: [dreamer_valence, dreamer_arousal, eegmat, arithmetic_task]
 single: eegmat
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [sleep_transformer, sleepyco, core_sleep]
+    reason: >
+      sleep-staging sequence models that take sequences of 30 s epochs, not
+      the benchmark's trials
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
 metrics:
+  # Plain balanced accuracy; chance (1/C) differs by cohort, so it is a
+  # column of its own (the metric registry: balanced_accuracy -> 1/C).
   headline: balanced_accuracy
   higher_is_better: true
   secondary: [cohen_kappa, macro_f1]
+  unit: trial
+  describe: >
+    balanced accuracy over one held-out subject's trials (the mean of the
+    per-class recalls)
+  fold: >
+    leave-one-subject-out, one fold per subject (another subject is the
+    validation fold, the rest train); logistic regression, balanced loss,
+    regularisation C = 1
+  spread: population SD over the held-out subjects
+  note: >
+    The paper's figures plot (BA - 1/C) / (1 - 1/C) * 0.5 + 0.5 of this
+    number (App. C.4, Eq. 4), which puts chance at 0.5 for every C.

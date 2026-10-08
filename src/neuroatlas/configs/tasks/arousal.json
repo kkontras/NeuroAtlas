@@ -1,5 +1,6 @@
 {
-  "_doc": "Arousal detection. MASS carries subset_filter=SS01 because only subset SS01 has arousal annotations (tasks/arousal_detection.py:126 says so too). Thresholds are seconds of arousal per epoch.",
+  "about": "Arousal detection: one binary probe per threshold, positive when the epoch holds more than that many seconds of scored arousal (0, 1, 3, 5, 7 and 9 s; sleep_arousal reports 3 s).",
+  "_doc": "Arousal detection. Thresholds are seconds of arousal per epoch. On MASS the benchmark uses the mass_arousal preset (subset SS01, the only one with arousal annotations).",
   "task": {
     "name": "arousal_detection",
     "thresholds": [

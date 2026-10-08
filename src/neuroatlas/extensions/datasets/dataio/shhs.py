@@ -243,7 +243,7 @@ class Sleep_Dataset(Dataset):
             "combined": combined_set, "eeg": eeg_set, "eog": eog_set,
             "all": combined_set + eeg_set + eog_set,
         }
-        print("Subsample: {} both, {} EEG-only, {} EOG-only.".format(
+        logging.debug("Subsample: {} both, {} EEG-only, {} EOG-only.".format(
             len(combined_set), len(eeg_set), len(eog_set)))
         return skip_patient_ids
 
@@ -269,15 +269,15 @@ class Sleep_Dataset(Dataset):
 
         perc_t = {i: (np.abs(mod_diff[i]) > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
         patients_chosen = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        print("Patients with broken modalities: {}".format(len(patients_chosen)))
+        logging.debug("Patients with broken modalities: {}".format(len(patients_chosen)))
 
         perc_t = {i: (mod_diff[i] > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
         patients_chosen_eeg = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        print("Patients with broken EEG: {}".format(len(patients_chosen_eeg)))
+        logging.debug("Patients with broken EEG: {}".format(len(patients_chosen_eeg)))
 
         perc_t = {i: (-mod_diff[i] > threshold).sum() / len(mod_diff[i]) for i in mod_diff}
         patients_chosen_eog = np.array([i for i in perc_t if perc_t[i] > perc_threshold])
-        print("Patients with broken EOG: {}".format(len(patients_chosen_eog)))
+        logging.debug("Patients with broken EOG: {}".format(len(patients_chosen_eog)))
 
         skip_patient_ids = {}
         for i in patients_chosen:
@@ -434,7 +434,7 @@ class SleepDataLoader:
         num_cores = max(len(os.sched_getaffinity(0)) - 1, 0)
         explicit_workers = self.config.training_params.data_loader_workers
         train_workers = explicit_workers if explicit_workers == 0 else num_cores
-        print("Available cores: {}, using: {}".format(len(os.sched_getaffinity(0)), train_workers))
+        logging.debug("Available cores: {}, using: {}".format(len(os.sched_getaffinity(0)), train_workers))
 
         self.train_loader = torch.utils.data.DataLoader(
             sleep_dataset_train,
@@ -493,6 +493,14 @@ class SleepDataLoader:
         for view in view_dirs:
             list_dir = view_dirs[view]["list_dir"]
             dataset = []
+            if not os.path.isfile(list_dir):
+                # SHHS is read from the authors' preprocessed copy (as `data
+                # status shhs` says), whose recording list this is
+                raise FileNotFoundError(
+                    f"shhs: the preprocessed SHHS copy is not in {os.path.dirname(list_dir)} "
+                    f"(no {os.path.basename(list_dir)} there)\n"
+                    f"fix: ask the authors for the preprocessed copy, then neuroatlas config "
+                    f"set shhs.data_root DIR")
             with open(list_dir) as csv_file:
                 csv_reader = csv.reader(csv_file, delimiter='\n')
                 for j, row in enumerate(csv_reader):

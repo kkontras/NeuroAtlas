@@ -13,8 +13,9 @@ name: MrOS Sleep Study
 domain: sleep
 paper_dataset: true
 description: >
-  MrOS brain age from raw EDF — all EEG channels (C3-A2 + C4-A1), 256 Hz
-  online.
+  Osteoporotic Fractures in Men Sleep Study (MrOS): at-home PSG, C3-A2 and
+  C4-A1 read from the raw EDFs at 256 Hz; used for sleep staging and brain
+  age.
 
 cohort:
   centre: "MrOS Sleep Study (NSRR), USA"
@@ -25,6 +26,7 @@ cohort:
 acquisition:
   kind: nsrr
   ref: mros
+  folders: [polysomnography/edfs, polysomnography/annotations-events-nsrr, datasets]
 
 signal:
   notch_freq: null
@@ -62,7 +64,7 @@ runtime_defaults:
     - C3-A2
     - C4-A1
   crop_wake_mins: null
-  data_root: "${EEG_DATA_ROOT}/raw-sleep/mros"
+  data_root: "${EEG_DATA_ROOT}/mros"
   fold: 0
   n_folds: 5
   num_workers: 4
@@ -84,10 +86,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- two pre-restructure protocols disagree on
-       MrOS sleep-staging folds. This reader's age-binned folds are the
-       brain-age protocol (05fd2a8 datasets/mros); the c-tuned staging probes
-       (artifacts/probes_perC_mros) used 3c6721c configs/folds/mros_bp_2ch.json,
-       a subject round-robin (seed 42). The two share about a fifth of each
-       test fold."

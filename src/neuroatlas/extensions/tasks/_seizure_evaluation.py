@@ -23,10 +23,12 @@ it is in _event_sens_fa.py (numpy only, also used by ``neuroatlas results``).
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -40,6 +42,9 @@ from sklearn.metrics import (
     roc_curve,
 )
 from sklearn.preprocessing import StandardScaler
+
+from neuroatlas import progress
+from neuroatlas.benchmarking_helpers.probes.probe import _count_max_iter
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +346,12 @@ def fit_lr_c_grid(
     # For the event metric: a C whose validation curve never reaches the
     # 0.1-100 FA/h range scores NaN; if every C does, rank by AUPRC instead.
     fallback = []
+    # the fold's live line: C by C; a fit that stops at max_iter is counted
+    # once per run (the C kept), each one is in the log
+    item = progress.current()
+    # no time left: a large C takes many times longer than a small one
+    item.phase("fitting", total=len(c_values), unit="C values", eta=False)
+    unconverged = set()
     for C in c_values:
         clf = LogisticRegression(
             C=C,
@@ -350,10 +361,25 @@ def fit_lr_c_grid(
             random_state=seed,
         )
         try:
-            clf.fit(Xtr_s, ytr)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ConvergenceWarning)
+                clf.fit(Xtr_s, ytr)
         except Exception as e:
-            logger.warning("LR fit failed for C=%s: %s", C, e)
+            from neuroatlas.benchmarking_helpers.runtime.pair import where
+            from neuroatlas.cli import _msg
+
+            logger.warning("%s: the logistic regression at C=%s could not be fitted (%s); C is "
+                           "chosen among the others", where("seizure detection"), C,
+                           _msg.first_sentence(_msg.exception_text(e)))
+            item.update(advance=1)
             continue
+        item.update(advance=1)
+        for w in caught:
+            if issubclass(w.category, ConvergenceWarning):
+                unconverged.add(C)
+                logger.info("C=%s did not converge within max_iter=%d", C, max_iter)
+            else:
+                warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
         if is_binary and hasattr(clf, "predict_proba"):
             proba = clf.predict_proba(Xval_s)[:, 1]
             try:
@@ -378,8 +404,18 @@ def fit_lr_c_grid(
 
     if best_clf is None and fallback:
         best_score, best_C, best_clf = max(fallback, key=lambda t: t[0])
-        logger.warning("the validation fold's event Sens@FA curve never reaches 0.1-100 FA/h "
-                       "for any C; C=%s chosen by validation AUPRC instead", best_C)
+        from neuroatlas.benchmarking_helpers.runtime.pair import where
+
+        # only under --selection-metric event_sens_fa_auc, which the user
+        # chose: the fold's C is not chosen on it
+        logger.warning("%s: C=%s chosen on validation AUPRC, not event Sens@FA AUC: no C's "
+                       "validation curve reaches the 0.1-100 false alarms per hour range",
+                       where("seizure detection"), best_C)
+
+    if best_clf is not None:
+        from .seizure_detection import PAPER_MAX_ITER
+
+        _count_max_iter(best_C in unconverged, max_iter, PAPER_MAX_ITER)
 
     if best_clf is None:
         # Last-resort fallback: fit at C=1.0 without C-grid

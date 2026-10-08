@@ -17,12 +17,11 @@ paper_dataset: false
 # SeizeIT2, Helsinki and Epilepsiae
 
 description: >
-  AUB-MED / Nasreddine Epileptic EEG dataset (American University of
-  Beirut Medical Center) — binary seizure detection from 21-channel scalp
-  EEG at 500 Hz, mapped to canonical 19-channel 10-20 and resampled to 256
-  Hz at load. 6 patients, ~23 recordings with seizure clock-time
-  annotations. Patient-disjoint k-fold. Direct-EDF backend — no HDF5
-  cache.
+  AUB-MED / Nasreddine Epileptic EEG dataset (American University of Beirut
+  Medical Center): binary seizure detection from 21-channel scalp EEG at 500
+  Hz, mapped to the 19 channels of the 10-20 system and resampled to 256 Hz.
+  6 patients, about 23 recordings with seizure clock-time annotations.
+  Patient-disjoint k-fold.
 
 cohort:
   centre: "American University of Beirut, Lebanon"
@@ -65,7 +64,7 @@ splits:
                                             # the subject count anyway.
 
 runtime_defaults:
-  annotations_dir: "${EEG_DATA_ROOT}/aub_med/annotations"
+  annotations_dir: "${EEG_DATA_ROOT}/aub_med"
   balance: weighted_sampler
   batch_size: 64
   fold: 0
@@ -75,7 +74,7 @@ runtime_defaults:
   normalize: none
   num_workers: 4
   overlap_threshold: 0.0
-  raw_dir: "${EEG_DATA_ROOT}/aub_med/raw"
+  raw_dir: "${EEG_DATA_ROOT}/aub_med"
   signal_cache_size: 8
   stride_s: null
   window_s: 10.0

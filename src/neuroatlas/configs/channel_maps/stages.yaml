@@ -71,21 +71,7 @@ per_model:
     F3: F3
     O2: O2
     O1: O1
-  timemoe:
-    C4: C4
-    C3: C3
-    F4: F4
-    F3: F3
-    O2: O2
-    O1: O1
   moirai:
-    C4: C4
-    C3: C3
-    F4: F4
-    F3: F3
-    O2: O2
-    O1: O1
-  lagllama:
     C4: C4
     C3: C3
     F4: F4

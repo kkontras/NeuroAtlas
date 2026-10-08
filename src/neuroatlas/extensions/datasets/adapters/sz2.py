@@ -6,10 +6,10 @@ Supports two backends:
 
 Both backends produce identical batch shapes and metadata.
 
-Because the data path is private and may not yet be set, the ``"edf"``
-backend wraps ``discover_recordings`` in a try-catch (row 3 in
-``POINTER_SZ2_TRYCATCH.md``).  The ``"hdf5"`` backend falls back to a
-synthetic HDF5 when ``cache_root`` is empty or the file does not exist.
+The ``"edf"`` backend refuses a ``data_root`` with no EDF + annotation pairs,
+naming the folder and the setting that points at the data.  The ``"hdf5"``
+backend falls back to a synthetic HDF5 when ``cache_root`` is empty or the
+file does not exist.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindo
 # POINTER_SZ2_PATH.md rows 4-5: path placeholders — fill in before use
 # ---------------------------------------------------------------------------
 
-_DATA_ROOT_DEFAULT: str = "${EEG_DATA_ROOT}/SeizeIT2/Anonymous_Hospital_Adult/"    # fill in SeizeIt2 EDF root directory
+_DATA_ROOT_DEFAULT: str = "${EEG_DATA_ROOT}/sz2"    # fill in SeizeIt2 EDF root directory
 _CACHE_ROOT_DEFAULT: str = ""   # fill in HDF5 cache directory
 _CACHE_FILENAME = "sz2_256hz_continuous_unipolar19.h5"
 
@@ -36,6 +36,14 @@ _CACHE_FILENAME = "sz2_256hz_continuous_unipolar19.h5"
 # ---------------------------------------------------------------------------
 # Loader adapter
 # ---------------------------------------------------------------------------
+
+
+def _no_pairs(slug: str, data_root) -> str:
+    """The error for a SeizeIT folder with no recordings (sz1, sz2)."""
+    from neuroatlas.extensions.datasets._missing import no_data
+
+    return no_data(slug, data_root, "data_root",
+                   what="no EDF and annotation (_a1.tsv) pairs in")
 
 
 # The shared wrapper; the local name is kept so call sites are unchanged.
@@ -151,6 +159,13 @@ class SeizeIt2BenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModul
         strict_folds: bool = True,
         **kwargs,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("sz2", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         metadata = {
             "canonical_label_space": ["bckg", "seiz"],
             "epoch_seconds": window_s,
@@ -239,16 +254,9 @@ class SeizeIt2BenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModul
                 discover_recordings,
             )
 
-            # POINTER_SZ2_TRYCATCH.md row 3: try-catch around discover_recordings
-            try:
-                recordings = discover_recordings(data_root or "")
-                if not recordings:
-                    raise FileNotFoundError(
-                        f"No EDF+TSV pairs found under {data_root!r}. "
-                        "Set _DATA_ROOT_DEFAULT in adapters/sz2.py."
-                    )
-            except Exception as exc:
-                raise Exception("Data path not set or unreadable") from exc
+            recordings = discover_recordings(data_root or "")
+            if not recordings:
+                raise FileNotFoundError(_no_pairs("sz2", data_root))
 
             if subject_allowlist is not None:
                 allowed = set(subject_allowlist)

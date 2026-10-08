@@ -1,6 +1,6 @@
 """Hypnogram reconstruction and sleep-architecture features.
 
-The fifth verb, and the only paper result that is not a probe: Appendix C.2's
+The only paper result that is not a probe: Appendix C.2's
 hypnogram features (Table 2) are computed *from* sleep-staging predictions, so
 this runs after `probe --task sleep_staging` rather than instead of it. There
 is no embedding pass and no model here.
@@ -25,7 +25,6 @@ Where it looks for a dataset's staging results (first match wins; pass
   <output>/sleep_stage/<dataset>/          written by `neuroatlas run sleep_stage`
   <output>/sleep_stage/<dataset>/<model>/  the same, one job per model (`submit`)
   <output>/<dataset>/sleep_staging/        written by `neuroatlas probe --task sleep_staging`
-  <output>/<dataset>/.../sklearn_linear/   the layout of the paper's own runs
 
 <output> is the output root (the output_root setting, or $NEUROATLAS_OUTPUT_ROOT).
 Each results directory gets its hypnograms.json; the feature CSVs go to the
@@ -84,23 +83,48 @@ def _load_probe(probe_path: str):
         return pickle.load(f)
 
 
+def _entry_dataset(entry: Dict[str, Any], default: str = "") -> str:
+    """The dataset a results entry is for."""
+    return str(entry.get("dataset_name") or default or "")
+
+
+def _entry_name(entry: Dict[str, Any], dataset: str = "") -> str:
+    """``sleep_edf_expanded/biot_pretrained fold 0``: the run a message is about."""
+    ds = _entry_dataset(entry, dataset)
+    fold = (entry.get("metadata") or {}).get("fold")
+    name = f"{ds}/{entry.get('checkpoint_id')}" if ds else str(entry.get("checkpoint_id"))
+    return name + (f" fold {fold}" if fold is not None else "")
+
+
 def _reconstruct_for_entry(
     entry: Dict[str, Any],
     requested_splits: Set[str],
     group_by: Optional[str],
     compute_metrics: bool,
+    dataset: str = "",
 ) -> Optional[Dict[str, Any]]:
-    cache_dir = Path(entry["cache_paths"]["global_cache_dir"])
-    probe_path = Path(entry["cache_paths"]["probe"])
     fold = int(entry["metadata"]["fold"])
     model = entry["checkpoint_id"]
     fold_key = f"fold_{fold}"
+    ds = _entry_dataset(entry, dataset) or "DATASET"
+    where = _entry_name(entry, dataset)
+    reprobe = f"neuroatlas run sleep_stage --dataset {ds} -m {model} --reprobe"
 
+    paths = entry.get("cache_paths") or {}
+    if not paths.get("probe") or not paths.get("global_cache_dir"):
+        logger.warning("%s: its result names no saved probe or embeddings, so no "
+                       "hypnogram\nfix: %s", where, reprobe)
+        return None
+    cache_dir = Path(paths["global_cache_dir"])
+    probe_path = Path(paths["probe"])
     if not probe_path.exists():
-        logger.warning("probe missing: %s", probe_path)
+        logger.warning("%s: no saved probe at %s, so no hypnogram\nfix: %s",
+                       where, probe_path, reprobe)
         return None
     if not (cache_dir / "features.npy").exists():
-        logger.warning("cache missing: %s", cache_dir)
+        logger.warning("%s: its embeddings are not at %s, so no hypnogram\n"
+                       "fix: neuroatlas run sleep_stage --dataset %s -m %s",
+                       where, cache_dir, ds, model)
         return None
 
     probe = _load_probe(str(probe_path))
@@ -115,7 +139,8 @@ def _reconstruct_for_entry(
     valid_mask = [i for i in split_mask if int(items[i].get("sleep_stage", -1)) >= 0]
 
     if not valid_mask:
-        logger.warning("no valid epochs for model=%s fold=%d", model, fold)
+        logger.warning("%s: no scored epoch in its %s split, so no hypnogram", where,
+                       " and ".join(sorted(requested_splits)))
         return None
 
     idx_arr = np.array(valid_mask)
@@ -197,13 +222,21 @@ def reconstruct_results_dir(
     group_by: Optional[str] = None,
     compute_metrics: bool = False,
     merge: bool = True,
+    dataset: str = "",
 ) -> int:
     """Re-predict every probe under *results_dir* and write hypnograms.
 
     Returns the number of entries written. *merge* keeps entries already in
     *output* whose (model, fold) this run did not reproduce, so a per-model
-    rerun does not discard the rest.
+    rerun does not discard the rest. *dataset* names the dataset in messages
+    when the results do not (they do, from `run` and `probe`).
+
+    One line per (checkpoint, fold): a live line while it re-predicts, then
+    ``[k/N] sleep_edf_expanded biot_pretrained fold 0: ok, 153 recordings``.
     """
+    from neuroatlas import progress
+    from neuroatlas.cli._msg import exception_text
+
     with open(results_dir / "results.json") as f:
         all_entries = json.load(f)
 
@@ -212,7 +245,8 @@ def reconstruct_results_dir(
     requested_splits = set(splits)
 
     if compute_metrics and not group_by:
-        logger.warning("--compute-metrics without --group-by: overall metrics only")
+        logger.warning("--compute-metrics without --group-by computes the overall metrics "
+                       "only\nfix: add --group-by FIELD (subgroup, subset, group, site_id)")
 
     entries = [
         e for e in all_entries
@@ -221,30 +255,41 @@ def reconstruct_results_dir(
         and (fold_filter is None or int(e["metadata"]["fold"]) in fold_filter)
     ]
     if not entries:
-        logger.warning("no matching entries in %s", results_dir / "results.json")
+        logger.warning("no successful result matches the selection in %s",
+                       results_dir / "results.json")
         return 0
 
     logger.info("%s: processing %d entries", results_dir, len(entries))
     outputs: List[Dict[str, Any]] = []
-    n_skipped = 0
-    for entry in entries:
-        try:
-            result = _reconstruct_for_entry(
-                entry, requested_splits, group_by, compute_metrics)
-        except Exception:
-            logger.warning("skipping model=%s fold=%s: %s",
-                           entry.get("checkpoint_id", "?"),
-                           entry.get("metadata", {}).get("fold", "?"),
-                           sys.exc_info()[1])
-            n_skipped += 1
-            continue
+    n_none = 0
+    total = len(entries)
+    for k, entry in enumerate(entries, start=1):
+        # the results folder is the dataset's (`run`), or a checkpoint's in it (`submit`)
+        ds = dataset or (results_dir.parent.name if results_dir.name == entry.get("checkpoint_id")
+                         else results_dir.name)
+        where = _entry_name(entry, ds).replace("/", " ", 1)
+        result = None
+        with progress.Progress(f"[{k}/{total}] {where}", verb="reconstructing") as item:
+            try:
+                result = _reconstruct_for_entry(
+                    entry, requested_splits, group_by, compute_metrics, dataset=ds)
+            except Exception as exc:
+                logger.warning("%s: no hypnogram: %s", _entry_name(entry, ds),
+                               exception_text(exc))
+                logger.debug("hypnogram reconstruction failed", exc_info=True)
         if result is not None:
             outputs.append(result)
             logger.info("model=%s fold=%d: %d recordings, %d epochs",
                         result["model"], result["fold"],
                         len(result["recordings"]), result["n_epochs"])
-    if n_skipped:
-        logger.warning("skipped %d entries due to errors", n_skipped)
+            what = f"ok, {len(result['recordings']):,} recordings"
+        else:
+            n_none += 1
+            what = "no hypnogram"
+        progress.say(progress.result_line(k, total, where, what, item.seconds))
+    if n_none:
+        logger.warning("%d of %d results have no hypnogram (the warnings above say why)",
+                       n_none, total)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     if merge and output.exists():
@@ -457,14 +502,15 @@ def process_dataset(dataset: str, results_dirs: Optional[Sequence[Path]] = None)
     """Feature rows from the hypnograms.json in each of *results_dirs*
     (default: where ``staging_results_dirs`` finds this dataset's results)."""
     if dataset not in DATASET_HYPNO_PATHS:
-        logger.warning("unknown dataset: %s", dataset)
+        logger.warning("%s skipped: no hypnogram layout is known for this dataset", dataset)
         return []
     dirs = list(results_dirs) if results_dirs is not None else staging_results_dirs(dataset)
     paths = [d / "hypnograms.json" for d in dirs if (d / "hypnograms.json").exists()]
     if not paths:
         looked = dirs or candidate_results_dirs(dataset)
-        logger.warning("skipping %s: no hypnograms.json in %s", dataset,
-                       ", ".join(str(d) for d in looked))
+        logger.warning("%s skipped: no hypnograms.json in %s\nfix: neuroatlas hypnogram "
+                       "reconstruct --datasets %s", dataset, ", ".join(str(d) for d in looked),
+                       dataset)
         return []
     rows: List[Dict[str, Any]] = []
     for path in paths:
@@ -642,19 +688,20 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--datasets", nargs="*", default=None, metavar="SLUG",
-                        help="Dataset slugs (default: every one with staging "
+    parser.add_argument("--datasets", nargs="*", default=None, metavar="DATASET",
+                        help="Datasets (default: every one with staging "
                              f"results: {', '.join(sorted(DATASET_HYPNO_PATHS))}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would run and exit.")
     sub = parser.add_subparsers(dest="step")
-    rec = sub.add_parser("reconstruct", help="probe results -> hypnograms.json")
+    rec = sub.add_parser("reconstruct",
+                         help="Rebuild hypnograms.json from the sleep staging results.")
     _add_reconstruct_args(rec)
-    rec.add_argument("--datasets", nargs="*", default=None, metavar="SLUG")
+    rec.add_argument("--datasets", nargs="*", default=None, metavar="DATASET")
     rec.add_argument("--dry-run", action="store_true")
-    fea = sub.add_parser("features", help="hypnograms.json -> feature CSVs")
+    fea = sub.add_parser("features", help="Compute the feature CSVs from hypnograms.json.")
     _add_features_args(fea)
-    fea.add_argument("--datasets", nargs="*", default=None, metavar="SLUG")
+    fea.add_argument("--datasets", nargs="*", default=None, metavar="DATASET")
     fea.add_argument("--dry-run", action="store_true")
     # so `hypnogram` with no subcommand still accepts either step's flags
     _add_reconstruct_args(parser)
@@ -708,8 +755,8 @@ def run_reconstruct(args, datasets: Sequence[str]) -> int:
                 dirs.append(candidate_results_dirs(ds)[0])
             else:
                 logger.warning(
-                    "%s: no staging results.json in any of %s -- run `neuroatlas run "
-                    "sleep_stage --dataset %s` first, or pass --results-dir",
+                    "%s: no sleep_stage results in any of %s (or pass --results-dir)\n"
+                    "fix: neuroatlas run sleep_stage --dataset %s -m MODELS",
                     ds, ", ".join(str(c) for c in candidate_results_dirs(ds)), ds)
         if not dirs:
             return 1
@@ -717,17 +764,19 @@ def run_reconstruct(args, datasets: Sequence[str]) -> int:
     for d in dirs:
         out = Path(args.output) if args.output else d / "hypnograms.json"
         if args.dry_run:
-            print(f"reconstruct {d} -> {out}")
+            print(f"reconstruct {d}, into {out}")
             continue
         if not (d / "results.json").is_file():
-            logger.warning("no results.json in %s — run `probe --task "
-                           "sleep_staging` for it first", d)
+            ds = next((x for x in datasets if x in d.parts), "DATASET")
+            logger.warning("no results.json in %s: no sleep staging results there\n"
+                           "fix: neuroatlas run sleep_stage --dataset %s -m MODELS", d, ds)
             failed += 1
             continue
         reconstruct_results_dir(
             results_dir=d, output=out, models=args.models, folds=args.folds,
             splits=args.splits, group_by=args.group_by,
             compute_metrics=args.compute_metrics,
+            dataset=next((ds for ds in datasets if ds in d.parts), ""),
         )
     return failed
 
@@ -739,19 +788,20 @@ def run_features(args, datasets: Sequence[str]) -> int:
         for d in datasets:
             for r in given or staging_results_dirs(d) or candidate_results_dirs(d)[:1]:
                 print(f"features {r}/hypnograms.json")
-        print(f"-> {out_dir}/hypnogram_features.csv")
+        print(f"into {out_dir}/hypnogram_features.csv")
         return 0
     rows: List[Dict[str, Any]] = []
     for ds in datasets:
         rows.extend(process_dataset(ds, given))
     if not rows:
-        logger.error("no hypnograms found — run the reconstruct step first")
+        logger.error("no hypnograms found: rebuild them from the staging results first\n"
+                     "fix: neuroatlas hypnogram reconstruct --datasets %s", " ".join(datasets))
         return 1
     write_csv(rows, out_dir / "hypnogram_features.csv")
     if not args.no_summary:
         write_summary_csv(compute_summary(rows),
                           out_dir / "hypnogram_features_summary.csv")
-    logger.info("done — %d rows across %d datasets",
+    logger.info("done: %d rows across %d datasets",
                 len(rows), len({r["dataset"] for r in rows}))
     return 0
 
@@ -771,10 +821,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     datasets = args.datasets or sorted(DATASET_HYPNO_PATHS)
     unknown = [d for d in datasets if d not in DATASET_HYPNO_PATHS]
     if unknown:
-        raise SystemExit(
-            f"error: no staging-results layout known for {', '.join(unknown)} "
-            f"(known: {', '.join(sorted(DATASET_HYPNO_PATHS))})"
-        )
+        from neuroatlas.cli import _msg
+
+        _msg.error(f"no hypnogram layout is known for {', '.join(unknown)} (known: "
+                   f"{', '.join(sorted(DATASET_HYPNO_PATHS))})",
+                   "neuroatlas hypnogram --datasets " + (" ".join(
+                       d for d in datasets if d in DATASET_HYPNO_PATHS) or "DATASET"))
+        raise SystemExit(2)
 
     step = getattr(args, "step", None)
     rc = 0

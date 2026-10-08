@@ -427,6 +427,12 @@ def probe_fit(result, *, selection_metric: str, probe_type: str, mode: str = "cl
            "selection_metric": str(selection_metric),
            "higher_is_better": bool(higher_is_better),
            "probe_type": str(probe_type), "mode": mode}
+    if any("C" in r for r in result.per_seed):
+        # each seed's C from the grid, and the validation metric it was chosen on
+        from neuroatlas.benchmarking_helpers.probes.probe import C_SELECTION_METRIC
+
+        fit["C"] = [r.get("C") for r in result.per_seed]
+        fit["C_selected_on"] = C_SELECTION_METRIC
     if hidden_dims:
         fit["hidden_dims"] = list(hidden_dims)
     return fit
@@ -458,10 +464,12 @@ def score_probe(cols: Dict[str, np.ndarray], fit: Dict[str, Any]
     preds = [cols["y_pred"]] if len(seeds) == 1 else list(cols["seed_y_pred"])
     scores = _seed_scores(cols, len(seeds))
     per_seed: List[Dict[str, Any]] = []
-    for seed, val, y_pred, y_score in zip(seeds, fit["val"], preds, scores):
+    chosen = fit.get("C") or [None] * len(seeds)
+    for seed, val, y_pred, y_score, c in zip(seeds, fit["val"], preds, scores, chosen):
         test = (compute_regression_metrics(y_true, y_pred) if regression
                 else compute_classification_metrics(y_true, y_pred, y_score=y_score))
-        per_seed.append({"seed": seed, "val": val, "test": test})
+        per_seed.append({"seed": seed, "val": val, "test": test,
+                         **({"C": c} if c is not None else {})})
     selection = fit["selection_metric"]
     pick = max if fit.get("higher_is_better", True) else min
     best_row = pick(per_seed, key=lambda row: float(row["val"][selection]))
@@ -477,6 +485,9 @@ def score_probe(cols: Dict[str, np.ndarray], fit: Dict[str, Any]
     summary["best_val_metric"] = float(best_row["val"][selection])
     summary["best_val"] = best_row["val"]
     summary["best_test"] = best_row["test"]
+    if "C" in best_row:
+        summary["C"] = best_row["C"]
+        summary["C_selected_on"] = fit.get("C_selected_on")
     summary["probe_type"] = fit.get("probe_type", "linear")
     if fit.get("hidden_dims"):
         summary["hidden_dims"] = list(fit["hidden_dims"])

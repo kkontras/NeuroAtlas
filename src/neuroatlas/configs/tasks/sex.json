@@ -1,5 +1,6 @@
 {
-  "_doc": "Subject-level sex classification. NOT part of the NeuroAtlas benchmark \u2014 kept only so the four stashed probe_*_sex_fm entrypoints stay reproducible. Do not add it to a benchmark run.",
+  "about": "Subject-level sex classification; not part of any benchmark.",
+  "_doc": "Subject-level sex classification. Not part of any NeuroAtlas benchmark.",
   "task": {
     "name": "patient_classification",
     "aggregation": "mean,mean_std"

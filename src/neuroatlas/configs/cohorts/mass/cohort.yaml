@@ -14,7 +14,8 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Montreal Archive of Sleep Studies (MASS) benchmark adapter.
+  Montreal Archive of Sleep Studies: PSG scored for sleep stages; subset
+  SS01 is also annotated for microarousals.
 
 cohort:
   centre: "Montreal Archive of Sleep Studies, Canada"
@@ -59,7 +60,7 @@ runtime_defaults:
   # crashed the datamodule.)
   subsets: [1, 2, 3, 4, 5]                  # all five MASS subsets; lived only in mass_fm_probe.sh
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/raw/mass"
+  data_root: "${EEG_DATA_ROOT}/mass"
   num_folds: 5
   signal_kind: raw
 

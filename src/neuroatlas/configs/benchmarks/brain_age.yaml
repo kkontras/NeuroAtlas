@@ -8,7 +8,7 @@ question: >
   (predicted minus true age) is the clinical readout. It reuses the 30 s
   sleep embeddings rather than reading the recordings again, and re-splits
   them the way the paper did: Sleep-EDF is the Sleep Cassette subset only,
-  folds are subject-level and stratified on age (configs/tasks/brain_age.json).
+  folds are subject-level and stratified on age.
 paper: App. C.3
 task: brain_age
 embed: --set window_s=30 --set stride_s=30
@@ -29,8 +29,27 @@ planned:
   - {name: mesa, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
   - {name: hpap_lab_full, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
   - {name: stages, reason: "in the paper, but not runnable here yet: its reader has no participant ages to predict"}
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
 metrics:
   headline: mae
   higher_is_better: false
-  # the dummy is predicting the training mean age, which depends on the split
+  # no chance level: predicting the training mean age depends on the split
   secondary: [pearson_r, r2]
+  unit: subject
+  describe: >
+    MAE in years of the predicted age over the test subjects (recordings for
+    ISRUC and WSC), each one mean embedding; ridge regression, alpha by nested
+    4-fold CV on train+val
+  fold: >
+    5 subject-level folds stratified on age (PhysioNet 2026: its healthy
+    subjects only, 200 age-matched subjects held out of every fold)
+  spread: population SD over the folds

@@ -86,9 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "token", help="Save a Hugging Face, GitHub or NSRR token (asked for, never shown).",
         description="Save a token where neuroatlas reads it: $NEUROATLAS_HOME/<name>_token, "
                     "chmod 600. It is asked for without being shown, or read from stdin "
-                    "(`neuroatlas config token hf < file`), and never printed. hf: gated "
-                    "model weights (REVE, ...); github: private release assets (CoRe-Sleep, "
-                    "SleepTransformer); nsrr: the NSRR sleep cohorts.")
+                    "(`neuroatlas config token hf < file`), and never printed. hf: Hugging "
+                    "Face, needed only for a gated repository; github: needed only when a "
+                    "GitHub download is refused with an access error (401, 403 or 404); "
+                    "nsrr: `data download` of the NSRR sleep datasets.")
     token.add_argument("name", choices=sorted(_TOKENS), help="Which token.")
     token.add_argument("--remove", action="store_true", help="Delete the saved token.")
     return parser
@@ -120,7 +121,8 @@ def _token(args: argparse.Namespace) -> int:
         value = sys.stdin.read()
     value = value.strip()
     if not value or any(c.isspace() for c in value):
-        _msg.error(f"that is not a {service} token (empty, or it contains spaces)")
+        _msg.error(f"that is not a {service} token (empty, or it contains spaces)",
+                   f"neuroatlas config token {args.name} (paste the token alone)")
         return 2
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.is_file()
@@ -142,9 +144,12 @@ def _token(args: argparse.Namespace) -> int:
 def _init(args: argparse.Namespace) -> int:
     path = cfg.config_path()
     if path.exists() and not args.force:
+        from neuroatlas.cli import command_with
+
         _msg.error(f"{path} already exists",
-                   "neuroatlas config set KEY VALUE changes one setting; "
-                   "--force replaces the file")
+                   "neuroatlas config set data_root DIR (changes one setting)\n"
+                   f"fix: {command_with('--force') or 'neuroatlas config init --data-root DIR --force'}"
+                   f" (replaces the file)")
         return 2
     for slug, key, _ in args.dataset_path:
         problem = _dataset_key_error(slug, key)
@@ -179,14 +184,16 @@ def _init(args: argparse.Namespace) -> int:
 NEXT_STEPS = ("next: neuroatlas config show; neuroatlas list benchmarks; "
               "neuroatlas data status <benchmark>")
 
-DOWNLOADS_LINE = ("downloads: off, except in data download, data prepare, models download "
-                  "and fetch --download (--online allows them for one run)")
+DOWNLOADS_LINE = ("downloads: off, except in data download, data prepare and models download "
+                  "(--online allows them for one run)")
 
 
 def _warnings(data: Dict[str, Any]) -> List[str]:
     out = []
     if not Path(data["data_root"]).is_dir():
-        out.append(f"data root {data['data_root']} does not exist yet")
+        out.append(f"the data root {data['data_root']} does not exist yet; `data download` "
+                   f"creates it, or point it at your datasets\n"
+                   f"fix: neuroatlas config set data_root DIR")
     return out
 
 
@@ -199,6 +206,13 @@ def _set(args: argparse.Namespace, unset: bool = False) -> int:
     data = cfg.load_file(strict=False)
     key = args.key
     path = cfg.config_path()
+    if not unset and not str(args.value).strip():
+        _msg.error(f"{key} needs a value", f"neuroatlas config unset {key} (back to the default)")
+        return 2
+    if not unset and key in cfg.SETTINGS and Path(args.value).expanduser().is_file():
+        _msg.error(f"{key} must be a folder; {_abs(args.value)} is a file",
+                   f"neuroatlas config set {key} DIR")
+        return 2
     if key in cfg.SETTINGS or (unset and key in cfg.unknown_settings(data)):
         if unset:
             if key not in data:
@@ -220,8 +234,26 @@ def _set(args: argparse.Namespace, unset: bool = False) -> int:
         else:
             problem = _dataset_key_error(slug, sub_key)
             if problem:
-                _msg.error(problem, f"neuroatlas data status {slug} -v names the key it reads"
-                           if slug in cfg.known_dataset_slugs() else "neuroatlas list datasets")
+                if cfg.dataset_path_keys(slug) == []:          # a MOABB dataset: no key
+                    fix = "export MNE_DATA=DIR (the folder of every MOABB dataset)"
+                elif slug in cfg.known_dataset_slugs():
+                    # the command again with the key the dataset reads: the
+                    # closest one, or its only one
+                    import difflib
+
+                    valid = cfg.dataset_path_keys(slug) or []
+                    close = difflib.get_close_matches(sub_key, valid, n=1)
+                    right = close[0] if close else valid[0] if len(valid) == 1 else None
+                    fix = (f"neuroatlas config set {slug}.{right} {args.value}" if right
+                           else f"neuroatlas data status {slug} -v (names the key it reads)")
+                else:
+                    # a mistyped dataset: the command with the closest one
+                    import difflib
+
+                    close = difflib.get_close_matches(slug, cfg.known_dataset_slugs(), n=1)
+                    fix = (f"neuroatlas config set {close[0]}.{sub_key} {args.value}" if close
+                           else "neuroatlas list datasets")
+                _msg.error(problem, fix)
                 return 2
             paths.setdefault(slug, {})[sub_key] = _abs(args.value)
     else:
@@ -237,7 +269,13 @@ def _set(args: argparse.Namespace, unset: bool = False) -> int:
                    fix or "neuroatlas data status <dataset> -v names a dataset's key")
         return 2
     path = cfg.save_file(data)
-    print(f"{'removed' if unset else 'set'} {key} in {path}")
+    if unset:
+        print(f"removed {key} from {path}")
+    else:
+        value = data.get(key) if key in cfg.SETTINGS else \
+            (data.get("dataset_paths") or {}).get(key.partition(".")[0], {}).get(
+                key.partition(".")[2])
+        print(f"{key} = {value}  (saved in {path})")
     return 0
 
 
@@ -291,7 +329,8 @@ def _show() -> int:
           f"below are under it)")
     print(f"package:     {'checkout ' + str(checkout) if checkout else 'installed wheel'}")
 
-    print("roots  [state] [origin: env, file or default]")
+    print("folders  [state] [set by: an environment variable, the config file, or the "
+          "default]")
     width = max(len(k) for k in cfg.SETTINGS)
     resolved = {}
     for key, setting in cfg.SETTINGS.items():
@@ -299,12 +338,13 @@ def _show() -> int:
         if r.value is None:
             print(f"  {key.replace('_', ' '):<{width}}  -  [not set]")
             continue
-        origin = f"${setting.env}" if r.origin == "env" else r.origin
+        origin = f"${setting.env}" if r.origin == "env" else \
+            {"file": "config file"}.get(r.origin, r.origin)
         print(f"  {key.replace('_', ' '):<{width}}  {_home_relative(r.value)}  "
               f"[{_state(r.value)}] [{origin}]")
     mne = cfg.mne_data(data)
     mne_origin = {"env": "$MNE_DATA", "mne config": "MNE's config file",
-                  "data root": "data root/mne_data", "default": "MNE's default"}[mne.origin]
+                  "data root": "under the data root", "default": "MNE's default"}[mne.origin]
     print(f"  {'MOABB data':<{width}}  {_home_relative(mne.value)}  [{_state(mne.value)}] "
           f"[{mne_origin}]")
     per_dataset = cfg.mne_per_dataset_keys()
@@ -324,12 +364,12 @@ def _show() -> int:
 
     print("credentials (where, never what)")
     loose = []
-    for name, use in (("hf", "gated model weights"),
-                      ("nsrr", "the NSRR sleep cohorts"),
-                      ("github", "private release assets")):
+    for name, use in (("hf", "needed only for a gated Hugging Face repository"),
+                      ("nsrr", "needed to download the NSRR sleep datasets"),
+                      ("github", "needed only when a GitHub download is refused")):
         where = cfg.locate_token(name)
         if where is None:
-            print(f"  {name:<6}  not found  (for {use}: neuroatlas config token {name})")
+            print(f"  {name:<6}  not found  ({use}: neuroatlas config token {name})")
             continue
         shown = where if where.startswith("$") else _home_relative(Path(where))
         print(f"  {name:<6}  found in {shown}")
@@ -339,16 +379,19 @@ def _show() -> int:
     from neuroatlas import catalog
 
     try:
-        benches = catalog.catalog()
-        print(f"catalog: {len(benches)} benchmarks, valid")
+        catalog.catalog()
     except catalog.CatalogError as exc:
-        _msg.error(f"the benchmark catalog is invalid: {exc}")
+        from neuroatlas.run import REINSTALL
+
+        _msg.error(f"the benchmark definitions shipped with the package do not load: {exc}",
+                                   REINSTALL)
         return 1
     _print_legacy_notes(data)
     from_user = cfg.offline_vars_from_user()
     if from_user:
         _msg.warning("your environment sets " + ", ".join(f"{v}={os.environ[v]}" for v in from_user)
-                     + ", which overrides the downloads setting above")
+                     + ", which overrides the downloads setting above",
+                     "unset " + " ".join(from_user) + " (to restore it)")
     for where in loose:
         _msg.warning(f"{_home_relative(Path(where))} is readable by others", f"chmod 600 {where}")
     if not path.is_file():

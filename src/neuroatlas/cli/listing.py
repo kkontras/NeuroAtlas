@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from neuroatlas.cli import Parser
+from neuroatlas.cli import Parser, _msg
 from neuroatlas.cli._table import NOT_APPLICABLE, add_format_arg, render
 
 
@@ -52,6 +52,64 @@ def _count(args, n: int, total: int, what: str, scope: str) -> str:
 
 # -- benchmarks ------------------------------------------------------------------
 
+#: The task a benchmark without a `task` of its own runs on every BCI dataset:
+#: a linear probe on that dataset's own trial labels.
+BCI_TASK = "trial classification"
+
+
+def task_label(bench, slug: Optional[str] = None) -> str:
+    """What a benchmark's probe predicts, as `list benchmarks` and `run
+    --dry-run` print it: the task preset (``sleep_staging``), ``per dataset``
+    when each dataset has its own, ``hypnogram`` for the benchmark built on
+    another's predictions, ``trial classification`` on BCI (each dataset's
+    own classes)."""
+    entry = next((e for e in bench.datasets if e.slug == slug), None) if slug else None
+    if entry is not None and entry.task:
+        return entry.task
+    if bench.task:
+        return bench.task
+    if bench.derived_from:
+        return "hypnogram"
+    if slug is None and any(e.task for e in bench.datasets):
+        return "per dataset"
+    return BCI_TASK if bench.domain == "bci" else "per dataset"
+
+
+def headline_text(bench) -> str:
+    """The headline as `list benchmarks` prints it: the metric's name, the
+    event threshold its probe is read at, and the direction when lower is
+    better (``AUPRC (> 3 s arousal per epoch)``, ``MAE in years (lower is
+    better)``)."""
+    m = bench.metrics
+    text = bench.metric_info(m.headline).name
+    seconds = m.at_seconds()
+    if seconds is not None:
+        event = (m.event_words() or "").replace("scored ", "")
+        text += f" (> {seconds:g} s{' ' + event if event else ''} per epoch)"
+    return text + ("" if m.higher_is_better else " (lower is better)")
+
+
+def chance_text(bench) -> Any:
+    """The headline's chance level where one is defined: a number, ``1/C``
+    (balanced accuracy, per dataset) or ``prevalence`` (AUPRC), ``-`` when
+    there is none (the YAML's ``metrics.chance``, else the metric registry's)."""
+    value = bench.chance()
+    if value is None:
+        return NOT_APPLICABLE
+    return f"{value:g}" if isinstance(value, float) else value
+
+
+def _left_out_line(bench) -> Optional[str]:
+    """``left out: core_sleep, sleep_transformer, sleepyco (why); eegnetv4
+    (why)``: the checkpoint families a benchmark does not evaluate, each group
+    with the benchmark file's reason, or None when it leaves none out."""
+    groups = []
+    for x in bench.excluded_models:
+        reason = " ".join(str(x.reason or "").split()).rstrip(".")
+        groups.append(", ".join(sorted(x.families)) + (f" ({reason})" if reason else ""))
+    return f"left out: {'; '.join(groups)}" if groups else None
+
+
 def list_benchmarks(args) -> None:
     from neuroatlas import catalog
 
@@ -59,13 +117,13 @@ def list_benchmarks(args) -> None:
     rows, notes = [], {}
     for bench in _grep_benchmarks(every, args.grep):
         m = bench.metrics
-        dummy = ("per dataset" if isinstance(m.dummy, dict) or m.dummy is None else m.dummy)
         rows.append({
             "benchmark": bench.name,
             "domain": bench.domain,
-            "task": bench.task or ("derived" if bench.derived_from else "per dataset"),
-            "headline": m.headline + ("" if m.higher_is_better else " (lower better)"),
-            "dummy": dummy if bench.metrics.higher_is_better else NOT_APPLICABLE,
+            "task": task_label(bench),
+            "headline": headline_text(bench),
+            "headline_key": m.headline,
+            "chance": chance_text(bench),
             "single": bench.single or NOT_APPLICABLE,
             "n_full": len(bench.datasets),
             "planned": len(bench.planned),
@@ -76,35 +134,52 @@ def list_benchmarks(args) -> None:
                                 for x in bench.excluded_models],
         })
         listed = [e.slug for e in bench.datasets] + [f"{p['name']} (planned)" for p in bench.planned]
-        left_out = [f"models left out: {', '.join(x.families)}"
-                    + (f" -- {x.reason}" if args.verbose else "") for x in bench.excluded_models]
         if args.verbose and args.format == "table":
-            # one line per dataset: its name, how it is obtained, its own task or note
+            # one line per dataset: its name, how it is obtained, its own task or
+            # note; then the families the benchmark leaves out, on one line
+            left_out = _left_out_line(bench)
             notes[len(rows) - 1] = [_dataset_line(e) for e in bench.datasets] + [
-                f"{p['name']}: planned -- {p['reason']}" for p in bench.planned] + left_out
+                f"{p['name']}: planned ({p['reason']})" for p in bench.planned] + (
+                [left_out] if left_out else [])
         elif listed:
-            notes[len(rows) - 1] = [", ".join(listed), *left_out]
+            notes[len(rows) - 1] = [", ".join(listed)]
     if not _done(args, rows, len(every), "benchmarks"):
         return
-    render(rows, ["benchmark", "domain", "task", "headline", "dummy", "single",
+    render(rows, ["benchmark", "domain", "task", "headline", "chance", "single",
                   "n_full", "planned", "variants"], args.format, notes,
-           extra=["datasets", "planned_datasets", "excluded_models"])
+           extra=["headline_key", "datasets", "planned_datasets", "excluded_models"],
+           labels={"single": "quick dataset", "n_full": "datasets"})
     if args.format == "table":
+        print("\n" + "\n".join(_msg.legend([
+            ("quick dataset", "the one dataset `run` and `check` use by default "
+                              "(--dataset single); --dataset full runs all of them"),
+            ("datasets", "how many datasets the benchmark has (listed under its row); "
+                         "planned: how many more the paper lists that cannot run here yet"),
+            ("chance", "the headline's value for a classifier that guesses (-: the "
+                       "headline has no fixed chance value)"),
+            ("variants", "other protocols beside the default one (--variant NAME; "
+                         "`neuroatlas show <benchmark>` explains each)"),
+        ])))
         print(f"\n{_count(args, len(rows), len(every), 'benchmarks', '')}. "
-              + ("" if args.verbose else "-v adds each dataset's task and notes. ")
+              + ("" if args.verbose else "-v adds each dataset's name, task and notes, and "
+                                         "the checkpoint families each benchmark leaves out. ")
               + "`neuroatlas show <benchmark>` explains one; "
                 "`neuroatlas run <benchmark> --dry-run` plans it.")
 
 
 def _dataset_line(entry) -> str:
+    from neuroatlas import data
     from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
 
     spec = next((s for s in dataset_specs() if s.slug == entry.slug), None)
     manifest = (spec.manifest if spec else None) or {}
     parts = [str(manifest.get("name") or (spec.description if spec else "") or "").strip()]
-    kind = (manifest.get("acquisition") or {}).get("kind")
-    parts += [f"access {kind}" if kind else "", f"task {entry.task}" if entry.task else "",
-              entry.note or ""]
+    acq = manifest.get("acquisition") or {}
+    kind = acq.get("kind")
+    how = data.download_word(kind, data.HANDLERS.get(kind, "manual")) if kind else ""
+    where = "" if how == "from the authors" else f" from {data.host_word(kind, acq)}"
+    parts += [f"{how}{where}" if kind else "",
+              f"task {entry.task}" if entry.task else "", entry.note or ""]
     return f"{entry.slug}: " + "; ".join(p for p in parts if p)
 
 
@@ -118,8 +193,18 @@ def _grep_benchmarks(benches, pattern):
 
 # -- datasets --------------------------------------------------------------------
 
+def _size(gb: Any) -> Any:
+    """``392 GB``, ``8.1 GB``, ``3.0 MB``; None when the size is not recorded."""
+    from neuroatlas import progress
+
+    try:
+        return progress.size(float(gb) * 1e9)
+    except (TypeError, ValueError):
+        return None
+
+
 def list_datasets(args) -> None:
-    from neuroatlas import catalog
+    from neuroatlas import catalog, data
     from neuroatlas.benchmarking_helpers.registry.discovery import dataset_specs
 
     rows = []
@@ -128,27 +213,46 @@ def list_datasets(args) -> None:
         in_paper = bool(manifest.get("paper_dataset")) or "paper_cohort" in manifest
         if not args.all and not in_paper:
             continue
-        acq = manifest.get("acquisition") or {}
+        acq = data.acquisition(spec.slug) if not manifest.get("acquisition") else \
+            dict(manifest["acquisition"])
+        kind = acq.get("kind")
+        handler = "refused" if acq.get("unusable_download") else \
+            data.HANDLERS.get(kind or "manual", "manual")
         rows.append({
             "dataset": spec.slug,
             "name": manifest.get("name") or spec.description,
             "domain": manifest.get("domain") or NOT_APPLICABLE,
-            "access": acq.get("kind") or NOT_APPLICABLE,
+            "access": kind or NOT_APPLICABLE,
+            "host": data.host_word(kind, acq) if kind else NOT_APPLICABLE,
+            "download": data.download_word(kind or "manual", handler),
             "size_gb": acq.get("size_gb"),
+            "size": _size(acq.get("size_gb")),
             "benchmarks": catalog.benchmarks_using(spec.slug),
-            "source": acq.get("ref") or NOT_APPLICABLE,
+            "source": data.origin_text(kind, acq, spec.slug) or NOT_APPLICABLE,
         })
     total = len(rows)
-    rows = _grep(rows, args.grep, ["dataset", "name", "domain", "access", "benchmarks"])
-    scope = "registered" if args.all else "in the paper"
+    rows = _grep(rows, args.grep, ["dataset", "name", "domain", "access", "host", "download",
+                                   "benchmarks"])
+    scope = "readable here" if args.all else "in the paper"
     if not _done(args, rows, total, "datasets", scope):
         return
-    columns = ["dataset", "name", "domain", "access", "size_gb", "benchmarks"]
+    human = args.format in ("table", "md")
+    columns = ["dataset", "name", "domain", "host", "download",
+               "size" if human else "size_gb", "benchmarks"]
+    if not human:
+        columns.insert(3, "access")
     render(rows, columns + (["source"] if args.verbose else []), args.format,
-           extra=[] if args.verbose else ["source"])
+           extra=[] if args.verbose else ["source"], labels={"source": "source"})
     if args.format == "table":
+        words = [w for w in dict.fromkeys(r["download"] for r in rows)]
+        explained = [(w, data.DOWNLOAD_MEANINGS[w]) for w in words
+                     if w in data.DOWNLOAD_MEANINGS]
+        if any(r["size"] is None for r in rows):
+            explained.append(("size n/a", "the host does not publish a size"))
+        print("\n" + "\n".join(_msg.legend(explained)))
         count = _count(args, len(rows), total, "datasets", scope)
-        more = "" if args.all else " (--all for every registered one)"
+        more = "" if args.all else " (--all adds the ones readable here that the paper " \
+                                   "does not evaluate)"
         print(f"\n{count}{more}. `neuroatlas data status <dataset>` says whether one is here "
               f"and how to get it" + ("" if args.verbose else "; -v adds where each comes from")
               + ".")
@@ -160,25 +264,26 @@ def list_models(args) -> None:
     from neuroatlas import selectors
     from neuroatlas.benchmarking_helpers.registry.discovery import checkpoint_registry
 
-    specs = checkpoint_registry()
+    # a registry entry that is not ready is not part of the release
+    specs = [s for s in checkpoint_registry() if s.status == "ready"]
     if args.benchmark:
         from neuroatlas import catalog
 
-        # what the benchmark evaluates: the selection (default: every ready
+        # what the benchmark evaluates: the selection (default: every
         # checkpoint) without the families the benchmark leaves out
         wanted = set(catalog.load(args.benchmark).select_models(args.selector or "all"))
         specs = [s for s in specs if s.identifier in wanted]
     elif args.selector:
         wanted = set(selectors.resolve_models(args.selector))
         specs = [s for s in specs if s.identifier in wanted]
-    elif not args.all:
-        specs = [s for s in specs if s.status == "ready"]
+    from neuroatlas import models
+
     rows = [{
         "checkpoint": s.identifier,
         "family": s.model_family,
         "group": "baseline" if selectors.is_baseline(s) else selectors.group_of(s.model_family),
-        "status": s.status,
         "weights": s.source_type,
+        "weights_from": models.source_word(s.source_type, s.model_family),
         "hz": int(s.expected_sampling_rate) if s.expected_sampling_rate else "any",
         "window_s": (float(s.expected_epoch_seconds) if s.expected_epoch_seconds
                      else NOT_APPLICABLE),
@@ -186,18 +291,29 @@ def list_models(args) -> None:
         "source": s.source_reference or NOT_APPLICABLE,
     } for s in specs]
     total = len(rows)
-    rows = _grep(rows, args.grep, ["checkpoint", "family", "group", "weights"])
+    rows = _grep(rows, args.grep, ["checkpoint", "family", "group", "weights", "weights_from"])
     if not _done(args, rows, total, "checkpoints"):
         return
-    columns = ["checkpoint", "family", "group", "status", "weights", "hz", "window_s", "dim"]
+    human = args.format in ("table", "md")
+    columns = ["checkpoint", "family", "group",
+               "weights_from" if human else "weights", "hz", "window_s", "dim"]
     render(rows, columns + (["source"] if args.verbose else []), args.format,
-           extra=[] if args.verbose else ["source"], formats={"window_s": "{:.3g}"})
+           extra=[] if args.verbose else ["source"], formats={"window_s": "{:.3g}"},
+           labels={"weights_from": "weights from", "hz": "rate (Hz)", "window_s": "window (s)",
+                   "dim": "embedding size", "source": "from (URL)"})
     if args.format == "table":
+        print("\n" + "\n".join(_msg.legend([
+            ("rate, window", "the input the model was built for. A benchmark cuts its own "
+                             "windows (30 s epochs in sleep, 10 s windows in epilepsy, the "
+                             "trial in BCI), and each model gets them resampled to its rate; "
+                             "any: the recording's own rate"),
+            ("embedding size", "the length of the vector the model gives per window, which "
+                               "the probe is fitted on"),
+        ])))
         scope = f"the {args.benchmark} benchmark evaluates" if args.benchmark else ""
-        print(f"\n{_count(args, len(rows), total, 'checkpoints', scope)}. `ready` means the "
-              f"model's code is in place, not that its weights are on this machine "
-              f"(`neuroatlas models status`)." + ("" if args.verbose else
-                                                   " -v adds where each comes from."))
+        print(f"\n{_count(args, len(rows), total, 'checkpoints', scope)}"
+              + ". `neuroatlas models status` says whether their weights are on this machine."
+              + ("" if args.verbose else " -v adds where each comes from."))
         print("Every value of the `group` column, every family and every checkpoint id "
               "is a selector for -m / --models.")
 
@@ -214,7 +330,7 @@ def list_aliases(args) -> None:
         notes[len(rows) - 1] = [", ".join(members)]
     for name, group in groups["groups"].items():
         members = selectors.resolve_models(name)
-        rows.append({"alias": name, "kind": "paper group", "n": len(members),
+        rows.append({"alias": name, "kind": "group", "n": len(members),
                      "selects": first_sentence(group["description"]), "members": members})
         notes[len(rows) - 1] = [", ".join(members)]
     total = len(rows)
@@ -223,47 +339,80 @@ def list_aliases(args) -> None:
     if not _done(args, rows, total, "aliases"):
         return
     render(rows, ["alias", "kind", "n", "selects"], args.format,
-           notes if args.verbose or args.format != "table" else None, extra=["members"])
+           notes if args.verbose or args.format != "table" else None, extra=["members"],
+           labels={"alias": "name", "n": "checkpoints", "selects": "what it selects"})
     if args.format == "table":
-        print("\nUse any of these, a family (reve: its trained checkpoints) or a checkpoint id "
+        print("\nkind: alias, a name for a set of checkpoints; group, one of the paper's "
+              "model groups (the `group` column of `neuroatlas list models`).")
+        print("Use any of these, a family (reve: its trained checkpoints) or a checkpoint id "
               "with -m / --models; combine them with commas."
-              + ("" if args.verbose else " -v lists each one's members."))
+              + ("" if args.verbose else " -v lists each one's checkpoints."))
 
 
-def _task_about(doc: Any, verbose: bool) -> str:
-    """A preset's description for users: its first sentence (the full text
-    with -v), without the developer history ("Was probe_x.py.")."""
-    flat = " ".join(str(doc or "").split())
-    sentences = [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z(])", flat)
-                 if s and not s.startswith("Was ")]
-    if verbose:
-        return " ".join(sentences)
-    about = sentences[0] if sentences else ""
-    if re.search(r"\bnot part of the neuroatlas benchmark\b", flat, re.I):
-        about += " Not part of the benchmark."
-    return about
+def _task_about(preset: Dict[str, Any]) -> str:
+    """A preset's description for users: its ``about`` (the ``_doc`` beside
+    it is a developer note, never printed); a preset without one gets the
+    first sentence of its ``_doc``."""
+    about = preset.get("about")
+    if about:
+        return " ".join(str(about).split())
+    return first_sentence(preset.get("_doc", ""))
+
+
+def _tasks_in_use() -> Dict[str, List[str]]:
+    """task -> the benchmarks whose probe runs it (a BCI benchmark runs
+    linear_probe on each dataset's own labels)."""
+    from neuroatlas import catalog
+
+    used: Dict[str, List[str]] = {}
+    for bench in catalog.catalog().values():
+        if bench.derived_from:
+            continue
+        for entry in bench.datasets:
+            task = entry.task or bench.task or "linear_probe"
+            names = used.setdefault(task, [])
+            if bench.name not in names:
+                names.append(bench.name)
+    return used
 
 
 def list_tasks(args) -> None:
     from neuroatlas.benchmarking_helpers.registry.discovery import task_specs
     from neuroatlas.entrypoints.probe import available_tasks, load_task_preset
 
-    rows = [{"task": s.slug, "kind": "registered",
-             "about": " ".join(str(s.description).split()) if args.verbose
-             else first_sentence(s.description)} for s in task_specs()]
-    for name in available_tasks():
+    used = _tasks_in_use()
+    presets = available_tasks()
+    # `--task brain_age` is the preset when there is one of that name
+    rows = [{"task": s.slug, "kind": "task",
+             "benchmarks": [] if s.slug in presets else used.get(s.slug, []),
+             "about": " ".join(str(s.description).split())}
+            for s in task_specs()]
+    for name in presets:
         preset = load_task_preset(name)
-        rows.append({"task": name, "kind": f"preset -> {preset['task']['name']}",
-                     "about": _task_about(preset.get("_doc", ""), args.verbose)})
+        rows.append({"task": name, "kind": f"preset of {preset['task']['name']}",
+                     "benchmarks": used.get(name, []), "about": _task_about(preset)})
+    # The tasks a user can run: those a benchmark uses. -v (and every
+    # machine format) adds the rest of the registry.
+    every = len(rows)
+    if not args.verbose and args.format == "table":
+        rows = [r for r in rows if r["benchmarks"]]
+        rows.sort(key=lambda r: (r["benchmarks"][0], r["task"]))
     total = len(rows)
-    rows = _grep(rows, args.grep, ["task", "kind", "about"])
+    rows = _grep(rows, args.grep, ["task", "kind", "about", "benchmarks"])
     if not _done(args, rows, total, "tasks"):
         return
-    render(rows, ["task", "kind", "about"], args.format)
+    columns = ["task", *(["kind"] if args.verbose or args.format != "table" else []),
+               "benchmarks", "about"]
+    render(rows, columns, args.format, labels={"benchmarks": "used by"})
     if args.format == "table":
-        print(f"\n{_count(args, len(rows), total, 'tasks', '')}. A preset is a registered task "
-              f"with its settings; `--task <preset>` uses it."
-              + ("" if args.verbose else " -v prints each description in full."))
+        print(f"\n{_count(args, len(rows), total, 'tasks', '')}, the ones the benchmarks run"
+              if not args.verbose else f"\n{_count(args, len(rows), total, 'tasks', '')}",
+              end="")
+        print(". `neuroatlas run <benchmark>` picks its task itself; "
+              "`neuroatlas probe --task <task>` runs one by hand."
+              + (f" -v lists all {every}." if not args.verbose
+                 else " kind: a task is the code that fits the probe; a preset is a task with "
+                      "the settings a benchmark runs it with (--task takes either)."))
 
 
 LISTINGS = {
@@ -271,15 +420,15 @@ LISTINGS = {
     "datasets": (list_datasets, "Every paper dataset: domain, access, size, benchmarks."),
     "models": (list_models, "Checkpoints: family, group, input rate and window, embedding size."),
     "aliases": (list_aliases, "Names for groups of checkpoints, for -m / --models."),
-    "tasks": (list_tasks, "Registered probe tasks and the presets built on them."),
+    "tasks": (list_tasks, "Probe tasks, and the settings each benchmark runs them with."),
 }
 
 _VERBOSE_HELP = {
-    "benchmarks": "Also list each benchmark's datasets.",
-    "datasets": "Also show where each dataset comes from (URL or DOI).",
+    "benchmarks": "Also show each dataset's full name, how it is obtained and its task.",
+    "datasets": "Also show where each dataset comes from (its web page, or its MOABB name).",
     "models": "Also show where each checkpoint's weights come from.",
     "aliases": "Also list each alias's checkpoints.",
-    "tasks": "Print each description in full.",
+    "tasks": "Also list the tasks no benchmark runs, and each one's kind.",
 }
 
 
@@ -295,14 +444,14 @@ def build_parser() -> Parser:
             p.add_argument("selector", nargs="?",
                            help="Only these: an alias, group, family or ids (e.g. all_fm, "
                                 "baseline, reve).")
-            p.add_argument("--all", action="store_true", help="Include planned checkpoints.")
             p.add_argument("--benchmark", metavar="NAME", default=None,
                            help="Only the checkpoints this benchmark evaluates: the selector "
-                                "(default: every ready one) without the model families the "
+                                "(default: every checkpoint) without the model families the "
                                 "benchmark leaves out.")
         if name == "datasets":
             p.add_argument("--all", action="store_true",
-                           help="Include registered datasets the paper does not evaluate.")
+                           help="Also list the datasets readable here that the paper does "
+                                "not evaluate.")
     return parser
 
 

@@ -60,7 +60,7 @@ class SleepEDFDataset(BasePhysioDataset):
 
     def __init__(
         self,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/physionet-sleep-data",
+        root: str = "${EEG_DATA_ROOT}/sleep_edf",
         **kwargs,
     ):
         super().__init__(root=root, **kwargs)

@@ -14,7 +14,8 @@ domain: sleep
 paper_dataset: true
 
 description: >
-  Sleep-EDF Expanded (Cassette + Telemetry) raw EDF adapter.
+  Sleep-EDF Database Expanded: Sleep Cassette and Sleep Telemetry PSG, read
+  from the raw EDFs.
 
 cohort:
   centre: "Sleep-EDF Expanded (PhysioNet), Netherlands"
@@ -60,7 +61,7 @@ splits:
 
 runtime_defaults:
   batch_size: 32
-  data_root: "${EEG_DATA_ROOT}/data/sleep-edf-database-expanded-1.0.0"
+  data_root: "${EEG_DATA_ROOT}/sleep_edf_expanded"
   label_mode: sleep_stage
   num_folds: 5
   signal_kind: raw

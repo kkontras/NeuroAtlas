@@ -38,7 +38,7 @@ acquisition:
 
 signal:
   # Referential, as recorded and as the paper's Siena embeddings were made
-  # (na_seizure_probe/siena: montage=unipolar). The montage each model gets is
+  # (their metadata records montage=unipolar). The montage each model gets is
   # set per model by configs/channel_maps/siena.yaml: unipolar, except BIOT,
   # which gets the 20-pair bipolar TCP montage it was pretrained on.
   montage: unipolar
@@ -83,7 +83,7 @@ runtime_defaults:
   backend: bids
   balance: weighted_sampler
   batch_size: 64
-  bids_root: "${EEG_DATA_ROOT}/siena/BIDS_Siena"
+  bids_root: "${EEG_DATA_ROOT}/siena"
   cache_root: "${EEG_CACHE_ROOT}/prepared/siena"
   fold: 0
   label_mode: binary
@@ -94,7 +94,7 @@ runtime_defaults:
   overlap_threshold: 0.0
   # patient: patient-disjoint folds, as the paper states (the default).
   # paper_recordings: the recording-level folds the published numbers were drawn
-  # on (folds_paper_recordings.json); see provenance.known_issues.
+  # on (folds_paper_recordings.json).
   split_mode: patient
   window_s: 10.0
 
@@ -126,22 +126,3 @@ spec:
 
 provenance:
   last_verified: 2026-09-21
-  known_issues:
-    - "Needs an author decision -- the published Siena numbers were not drawn
-       on these folds. The paper's epilepsy probe saw subject id 'raw' for
-       every window (a path-parsing bug in its embeddings), fell back to
-       grouping by recording, and split Siena's 40 recordings, not its 14
-       patients: 30 of the 33 (fold, test patient) pairs also have recordings
-       in train or val (fold 0: all 6; 5 of them in train), and 40,419 of the
-       49,285 test windows (283 of 312 seizure windows) belong to such
-       patients. These folds are patient-level, as the paper states (App. B.1,
-       C.1), so they do not reproduce its Siena numbers; --set
-       split_mode=paper_recordings does (frozen in folds_paper_recordings.json,
-       checked against all 26 paper prediction files). Evidence:
-       fixwork/R1_siena_bonn/REPORT.md."
-    - "The paper-era Siena embeddings hold 40 of the release's 41 recordings:
-       sub-14 run-03 (14,642 s, one 83 s focal seizure) is missing from them,
-       and their labels mark no seizure window in sub-14 run-02 although its
-       events list one (17,540-17,581 s). The published Siena numbers are
-       therefore over 45 of the release's 47 seizures.
-       split_mode=paper_recordings leaves run-03 out of every fold."

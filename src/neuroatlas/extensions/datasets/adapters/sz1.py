@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .base import BenchmarkDataModule
 from neuroatlas.extensions.datasets.epilepsy._global_cache import RecordingWindowGlobalCache
 
-_DATA_ROOT_DEFAULT: str = "${EEG_DATA_ROOT}/SeizeIT1/Data"
+_DATA_ROOT_DEFAULT: str = "${EEG_DATA_ROOT}/sz1"
 _CACHE_ROOT_DEFAULT: str = ""
 _CACHE_FILENAME = "sz1_256hz_continuous_unipolar19.h5"
 
@@ -146,6 +146,13 @@ class SeizeIt1BenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModul
         strict_folds: bool = True,
         **kwargs,
     ) -> None:
+        from neuroatlas.extensions.datasets.epilepsy._global_cache import (
+            refuse_unrecorded_settings,
+        )
+
+        refuse_unrecorded_settings("sz1", type(self),
+                                   normalize=normalize, label_mode=label_mode,
+                                   overlap_threshold=overlap_threshold)
         metadata = {
             "canonical_label_space": ["bckg", "seiz"],
             "epoch_seconds": window_s,
@@ -233,17 +240,11 @@ class SeizeIt1BenchmarkDataModule(RecordingWindowGlobalCache, BenchmarkDataModul
                 discover_recordings,
             )
 
-            try:
-                recordings = discover_recordings(data_root or "")
-                if not recordings:
-                    raise FileNotFoundError(
-                        f"No EDF+TSV pairs found under {data_root!r}. "
-                        "Set data_root to the SeizeIt1 data directory."
-                    )
-            except Exception as exc:
-                raise Exception(
-                    f"SeizeIt1 EDF data not available at {data_root!r}: {exc}"
-                ) from exc
+            recordings = discover_recordings(data_root or "")
+            if not recordings:
+                from neuroatlas.extensions.datasets.adapters.sz2 import _no_pairs
+
+                raise FileNotFoundError(_no_pairs("sz1", data_root))
 
             if subject_allowlist is not None:
                 allowed = set(subject_allowlist)

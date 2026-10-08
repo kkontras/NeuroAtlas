@@ -207,6 +207,7 @@ class HelsinkiNeonatalEdfDataset(Dataset):
         clinical = _load_helsinki_clinical(raw_root)
 
         self._recordings: List[_HelsinkiRecording] = []
+        unreadable: List[str] = []          # recordings whose EDF header pyedflib refuses
         for rec_i, rec in enumerate(discovered):
             subject_id = rec["subject_id"]
             a = annotations["A"][subject_id - 1]
@@ -220,15 +221,15 @@ class HelsinkiNeonatalEdfDataset(Dataset):
             # 3 of 79 Helsinki files (eeg4/eeg29/eeg50) trip pyedflib's
             # strict header validator ("the label is incorrect", caused by
             # a numeric truncation in the per-channel phys_min field).
-            # MNE reads them but the dataio is pyedflib-only, so skip them
-            # with a warning rather than failing the whole dataset build.
+            # MNE reads them but the dataio is pyedflib-only, so they are
+            # left out (said once per command, at the end) rather than
+            # failing the whole dataset build.
             try:
                 n_samples, duration_s = self._probe_edf(rec["edf_path"])
             except OSError as exc:
-                logger.warning(
-                    "Skipping Helsinki recording %s — pyedflib rejected header: %s",
-                    rec["edf_path"], exc,
-                )
+                logger.debug("helsinki_neonatal: %s left out: its EDF header does not "
+                             "follow the EDF standard (%s)", rec["edf_path"], exc)
+                unreadable.append(str(rec["edf_path"]))
                 continue
 
             per_sec_collapsed = consensus_per_second(a, b, c, mode=self._consensus)
@@ -257,6 +258,21 @@ class HelsinkiNeonatalEdfDataset(Dataset):
                 neuroimaging=demo.get("neuroimaging", ""),
                 primary_localisation=demo.get("primary_localisation", ""),
             ))
+
+        if unreadable:
+            # a standing fact of the published files, the same on every run:
+            # once per command, for -v and --log (one count however often the
+            # dataset is built)
+            from neuroatlas import quiet
+
+            names = ", ".join(sorted((Path(p).stem for p in unreadable),
+                                     key=lambda n: (len(n), n)))
+            quiet.count(
+                f"helsinki unreadable:{raw_root}",
+                "helsinki_neonatal: {hit} of {of} recordings left out (" + names + "): "
+                "their EDF headers do not follow the EDF standard",
+                hit=unreadable, of=[str(r["edf_path"]) for r in discovered],
+                level=logging.INFO)
 
         if recording_indices is not None:
             keep = set(int(i) for i in recording_indices)

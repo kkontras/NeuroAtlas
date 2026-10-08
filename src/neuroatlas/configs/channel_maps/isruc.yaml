@@ -100,28 +100,7 @@ per_model:
     F4: F4
     O1: O1
     O2: O2
-  timemoe:
-    C3: C3
-    C4: C4
-    F3: F3
-    F4: F4
-    O1: O1
-    O2: O2
   moirai:
-    C3: C3
-    C4: C4
-    F3: F3
-    F4: F4
-    O1: O1
-    O2: O2
-  lagllama:
-    C3: C3
-    C4: C4
-    F3: F3
-    F4: F4
-    O1: O1
-    O2: O2
-  timesfm:
     C3: C3
     C4: C4
     F3: F3
@@ -159,7 +138,4 @@ notes:
   sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
   chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timemoe: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
   moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  lagllama: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
-  timesfm: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.

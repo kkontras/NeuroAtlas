@@ -161,7 +161,10 @@ def discover_nmt_recordings(
     otherwise they are ``None`` / ``""``.  The filesystem location is the
     authoritative source of ``split`` and ``is_abnormal``.
     """
-    raw_root_p = Path(raw_root)
+    from neuroatlas.extensions.datasets._layout import descend
+
+    # the dataset's folder, or the top folder of the archive under it
+    raw_root_p = descend(raw_root, ["*"], "normal")
     labels = _load_labels_csv(raw_root_p / "Labels.csv")
 
     out: List[Dict[str, Any]] = []
@@ -289,8 +292,8 @@ class NMTEdfDataset(Dataset):
 
         if not recs:
             raise RuntimeError(
-                "NMTEdfDataset has zero recordings after filtering — "
-                "check raw_root and recording_indices."
+                f"nmt: none of its {len(recordings)} recordings is left after the "
+                f"fold's selection"
             )
         self._recordings: List[Dict[str, Any]] = recs
 
@@ -307,10 +310,8 @@ class NMTEdfDataset(Dataset):
         )
         if len(self._index) == 0:
             raise RuntimeError(
-                f"NMTEdfDataset produced 0 windows for "
-                f"window_s={window_s}, stride_s={self._stride_s}. "
-                f"All {len(recs)} recordings are shorter than "
-                f"{self._window_samples} samples (~{window_s:.1f}s)?"
+                f"nmt: no {window_s:g} s window fits in any of these {len(recs)} "
+                f"recordings (each is shorter than {window_s:g} s)"
             )
 
         logger.info(

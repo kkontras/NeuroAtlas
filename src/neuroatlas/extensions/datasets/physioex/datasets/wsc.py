@@ -63,7 +63,7 @@ class WSCDataset(BasePhysioDataset):
     Args:
         visit: int (1, 2, or 3). Selects which visit's recordings to load.
         root: path to the WSC data directory
-              (default: ``${EEG_DATA_ROOT}/raw-sleep/wsc``).
+              (default: ``${EEG_DATA_ROOT}/wsc``).
     """
 
     DATASET_NAME = "wsc"
@@ -92,7 +92,7 @@ class WSCDataset(BasePhysioDataset):
     def __init__(
         self,
         visit: int = 1,
-        root: str = "${EEG_DATA_ROOT}/raw-sleep/wsc",
+        root: str = "${EEG_DATA_ROOT}/wsc",
         **kwargs,
     ):
         if visit not in (1, 2, 3, 4, 5):
@@ -115,7 +115,8 @@ class WSCDataset(BasePhysioDataset):
         """
         csv_path = Path(root) / "datasets" / "wsc-dataset-0.8.0.csv"
         if not csv_path.exists():
-            logger.warning("WSC metadata CSV not found: %s", csv_path)
+            from neuroatlas.extensions.datasets._missing import warn_no_demographics
+            warn_no_demographics(logger, "wsc", csv_path)
             return {}
         import pandas as pd
         df = pd.read_csv(csv_path, low_memory=False)

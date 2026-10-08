@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Data root path
 # ---------------------------------------------------------------------------
 
-SZ1_DATA_ROOT: str = "${EEG_DATA_ROOT}/SeizeIT1/Data"
+SZ1_DATA_ROOT: str = "${EEG_DATA_ROOT}/sz1"
 
 # ---------------------------------------------------------------------------
 # Channel mapping
@@ -189,6 +189,14 @@ def _read_sz1_edf_to_unipolar19(
 # ---------------------------------------------------------------------------
 
 
+def data_folder(root: str | Path) -> Path:
+    """The folder holding the SeizeIt1 subject folders: ``root`` itself, or the
+    ``Data`` folder the dataset is delivered in, under it."""
+    from neuroatlas.extensions.datasets._layout import descend
+
+    return descend(root, ["Data", "*/Data"], "*/*.edf")
+
+
 def discover_recordings(root: str | Path) -> List[Tuple[Path, Path, str]]:
     """Discover all SeizeIt1 EDF + ``_a1.tsv`` annotation pairs under ``root``.
 
@@ -201,7 +209,7 @@ def discover_recordings(root: str | Path) -> List[Tuple[Path, Path, str]]:
     Returns:
         List of ``(edf_path, tsv_a1_path, subject_id)`` tuples, sorted by path.
     """
-    root = Path(root)
+    root = data_folder(root)
     results: List[Tuple[Path, Path, str]] = []
 
     for edf_path in sorted(root.rglob("*.edf")):
@@ -301,12 +309,13 @@ def build_h5_cache(root: str | Path, output_path: str | Path) -> Path:
         Path to the written HDF5 file.
     """
     output_path = Path(output_path)
+    root = data_folder(root)      # the recording ids are relative to it
 
     recordings = discover_recordings(root)
     if not recordings:
         raise FileNotFoundError(
-            f"No EDF+_a1.tsv pairs found under {root!r}. "
-            "Set SZ1_DATA_ROOT in sz1_preprocessor.py."
+            f"sz1: no EDF and annotation (_a1.tsv) pairs in {root} (give the folder "
+            "with --data-root)"
         )
 
     all_signals: List[np.ndarray] = []
