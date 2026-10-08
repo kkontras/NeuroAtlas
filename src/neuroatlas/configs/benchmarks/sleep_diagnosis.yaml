@@ -8,9 +8,8 @@ question: >
   2026), or which disorder (ISRUC's mixed cohort)?
 paper: App. C.2, Fig. 3d
 embed: --set window_s=30 --set stride_s=30
-# Unweighted logistic regression at C = 1, as published: the paper-era
-# patient_classification task never passed a class weight or a C grid (the
-# probe now refuses --class-weight and --tune-c for it rather than ignore them).
+# Unweighted logistic regression at C = 1 on each subject's mean embedding;
+# the probe refuses --class-weight and --tune-c for this task.
 probe: --aggregation mean
 datasets:
   # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments

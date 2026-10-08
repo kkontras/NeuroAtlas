@@ -63,8 +63,8 @@ variants:
     probe: --set confound_control=true --pooling per_patch --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
   no_filtering:
     description: >
-      no filtering, mean-pool: each trial from the cue to 4 s after it, in the
-      same 4-40 Hz band; only the first second differs from the default
+      no filtering, mean-pool: each trial from the cue to 4 s after it,
+      band-passed 4-40 Hz, its patch tokens averaged into one vector
     paper: Fig. 26a, the no-filtering bars (mean pool)
     embed: --set confound_control=false --pooling mean
     probe: --set confound_control=false --pooling mean --set n_folds=loso --probe-type linear --class-weight balanced --tune-c 1.0 --max-iter 1000
