@@ -35,7 +35,7 @@ in `MODELS`, and section 4 prints the state of each checkpoint's weights.
 Use Python 3.11 and run these lines in a clone of the repository.
 
 ```bash
-pip install -e ".[fm,ts]" -c requirements-fm.txt
+pip install -e ".[ts]" -c requirements-fm.txt
 pip install --no-deps "momentfm==0.1.4"
 pip install matplotlib -c requirements-fm.txt
 ```

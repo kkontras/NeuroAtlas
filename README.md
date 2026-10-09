@@ -55,21 +55,22 @@ baselines, and randomly initialized baselines.
 We tested the code on Linux with Python 3.11.
 
 ```bash
-pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+pip install neuroatlas-bench
 ```
 
-The constraints file pins every dependency to the version used in the paper. The install takes
-about 5 minutes and 6.5 GB of disk space. The command and the Python import are both `neuroatlas`.
+The install takes about 5 minutes and 6.5 GB of disk space. The command and the Python import are
+both `neuroatlas`. To install exactly the package versions used in the paper, add
+`-c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.1/requirements-fm.txt`.
 
 Some models and datasets need extra packages:
 
 ```bash
 # BCI datasets (MOABB)
-pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+pip install "neuroatlas-bench[bci]"
 pip install --no-deps "moabb==1.2.0"
 
 # Chronos and MOMENT
-pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+pip install "neuroatlas-bench[ts]"
 pip install --no-deps "momentfm==0.1.4"
 ```
 
@@ -84,7 +85,7 @@ from a clone instead:
 ```bash
 git clone https://github.com/kkontras/NeuroAtlas.git
 cd NeuroAtlas
-pip install -e ".[fm]" -c requirements-fm.txt
+pip install -e . -c requirements-fm.txt
 ```
 
 Note that the package on PyPI called `neuroatlas` is unrelated to this project.

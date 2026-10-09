@@ -78,7 +78,7 @@ Use one Python 3.11 kernel in a clone of the repository. Install the package wit
 time-series models, MOMENT and matplotlib.
 
 ```bash
-pip install -e ".[fm,ts]" -c requirements-fm.txt
+pip install -e ".[ts]" -c requirements-fm.txt
 pip install --no-deps "momentfm==0.1.4"
 pip install matplotlib -c requirements-fm.txt
 ```
