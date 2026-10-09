@@ -13,12 +13,10 @@ epilepsy, brain age and brain-computer interfaces, with 42 datasets and 44 model
 
 ## Installation
 
-Install from a clone of the repository, with Python 3.11:
+Install the package from PyPI, with Python 3.11:
 
 ```bash
-git clone https://github.com/kkontras/NeuroAtlas.git
-cd NeuroAtlas
-pip install -e ".[fm]" -c requirements-fm.txt
+pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
 ```
 
 [Installation](getting-started/installation.md) covers conda and venv, GPUs, and the extra
