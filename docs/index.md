@@ -13,7 +13,7 @@ epilepsy, brain age and brain-computer interfaces, with 42 datasets and 44 model
 
 ## Installation
 
-Install the package from PyPI, with Python 3.11:
+Install the package from PyPI (Python 3.10 or newer, Linux):
 
 ```bash
 pip install neuroatlas-bench

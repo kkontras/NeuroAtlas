@@ -1,6 +1,6 @@
 # Installation
 
-We tested the code on Linux with Python 3.11. Python 3.10 or newer works.
+NeuroAtlas requires Python 3.10 or newer and runs on Linux.
 
 ## Install the package
 

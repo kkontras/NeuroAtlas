@@ -10,6 +10,16 @@ Christos Chatzichristos<sup>1</sup>, Paul Pu Liang<sup>2</sup>, Maarten De Vos<s
 <sup>1</sup>KU Leuven &nbsp; <sup>2</sup>MIT &nbsp; <sup>*</sup>Equal contribution
 </p>
 
+<p align="center"><b>NeurIPS 2026, Evaluations & Datasets Track</b></p>
+
+<p align="center">
+<a href="https://arxiv.org/abs/2605.14698"><img src="https://img.shields.io/badge/arXiv-2605.14698-b31b1b.svg" alt="arXiv"></a>
+<a href="https://pypi.org/project/neuroatlas-bench/"><img src="https://img.shields.io/pypi/v/neuroatlas-bench.svg" alt="PyPI"></a>
+<a href="https://pypi.org/project/neuroatlas-bench/"><img src="https://img.shields.io/pypi/pyversions/neuroatlas-bench.svg" alt="Python"></a>
+<a href="https://kkontras.github.io/NeuroAtlas/"><img src="https://img.shields.io/badge/docs-online-blue.svg" alt="Documentation"></a>
+<a href="https://github.com/kkontras/NeuroAtlas/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+</p>
+
 <p align="center">
 <a href="https://arxiv.org/abs/2605.14698">Paper</a> |
 <a href="https://kkontras.github.io/NeuroAtlas/">Documentation</a> |
@@ -52,14 +62,13 @@ baselines, and randomly initialized baselines.
 
 ## Installation
 
-We tested the code on Linux with Python 3.11.
-
 ```bash
 pip install neuroatlas-bench
 ```
 
-The install takes about 5 minutes and 6.5 GB of disk space. The command and the Python import are
-both `neuroatlas`. To install exactly the package versions used in the paper, add
+NeuroAtlas requires Python 3.10 or newer and runs on Linux. The install takes about 5 minutes and
+6.5 GB of disk space. The command and the Python import are both `neuroatlas`. To install exactly
+the package versions used in the paper, add
 `-c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.1/requirements-fm.txt`.
 
 Some models and datasets need extra packages:
@@ -186,15 +195,17 @@ is subject to its own license and terms of use.
 ## Citation
 
 ```bibtex
-@article{kontras2026neuroatlas,
+@inproceedings{kontras2026neuroatlas,
   title   = {NeuroAtlas: Benchmarking Foundation Models for Clinical EEG and Brain-Computer Interfaces},
   author  = {Kontras, Konstantinos and Osselaer, Trui and Mouslech, Stylianos G. and
              Karaiskou, Angeliki-Ilektra and Gagliardi, Guido and Strypsteen, Thomas and
              Badiei, Mohammad Hossein and Rani, Anku and Vanmarcke, Maarten and
              Bhagubai, Miguel and Ekbote, Chanakya and Hwang, Jaedong and
              Chatzichristos, Christos and Liang, Paul Pu and De Vos, Maarten},
-  journal = {arXiv preprint arXiv:2605.14698},
-  year    = {2026}
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS), Evaluations \& Datasets Track},
+  year    = {2026},
+  eprint  = {2605.14698},
+  archivePrefix = {arXiv}
 }
 ```
 
