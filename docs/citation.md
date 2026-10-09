@@ -3,15 +3,17 @@
 If you use NeuroAtlas in your work, please cite the paper:
 
 ```bibtex
-@article{kontras2026neuroatlas,
+@inproceedings{kontras2026neuroatlas,
   title   = {NeuroAtlas: Benchmarking Foundation Models for Clinical EEG and Brain-Computer Interfaces},
   author  = {Kontras, Konstantinos and Osselaer, Trui and Mouslech, Stylianos G. and
              Karaiskou, Angeliki-Ilektra and Gagliardi, Guido and Strypsteen, Thomas and
              Badiei, Mohammad Hossein and Rani, Anku and Vanmarcke, Maarten and
              Bhagubai, Miguel and Ekbote, Chanakya and Hwang, Jaedong and
              Chatzichristos, Christos and Liang, Paul Pu and De Vos, Maarten},
-  journal = {arXiv preprint arXiv:2605.14698},
-  year    = {2026}
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS), Evaluations \& Datasets Track},
+  year    = {2026},
+  eprint  = {2605.14698},
+  archivePrefix = {arXiv}
 }
 ```
 
