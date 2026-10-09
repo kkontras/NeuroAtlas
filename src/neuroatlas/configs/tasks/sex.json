@@ -1,0 +1,23 @@
+{
+  "about": "Subject-level sex classification; not part of any benchmark.",
+  "_doc": "Subject-level sex classification. Not part of any NeuroAtlas benchmark.",
+  "task": {
+    "name": "patient_classification",
+    "aggregation": "mean,mean_std"
+  },
+  "datasets": {
+    "isruc": {
+      "label_mode": "sex"
+    },
+    "ucddb": {
+      "label_mode": "sex"
+    },
+    "wsc": {
+      "label_mode": "sex"
+    },
+    "sleep_edf_expanded": {
+      "label_mode": "sex"
+    }
+  },
+  "_status": "exploratory, not in the paper"
+}

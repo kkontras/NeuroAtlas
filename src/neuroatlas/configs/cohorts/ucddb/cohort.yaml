@@ -1,0 +1,94 @@
+# ucddb — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: ucddb
+name: St. Vincent's University Hospital / UCD Sleep Apnea Database (UCDDB)
+domain: sleep
+paper_dataset: true
+
+description: >
+  St. Vincent's University Hospital / University College Dublin Sleep Apnea
+  Database: PSG scored for sleep stages and respiratory events.
+
+cohort:
+  centre: "St Vincent's University Hospital, Ireland"
+  country: IE
+  powerline_hz: 50
+
+acquisition:
+  kind: physionet
+  ref: ucddb
+  version: 1.0.0
+  size_gb: 1.3                        # the project page's total uncompressed size
+  expect: {glob: "ucddb*.rec", count: 25}   # 25 subjects, one .rec each
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      implemented_by: adapters.ucddb
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+  also_implemented:
+    - sex
+splits:
+  manifest: folds.json
+  grouping: patient
+  n_folds: 5
+
+runtime_defaults:
+  # No `montage` key: ucddb_fm_probe.sh passed `--montage ucddb_eeg_2` as
+  # channel_specs, which the runner always replaced with channel_maps/ucddb.yaml
+  # channels_used (C3A2, C4A1). No code ever read the name; the channels come
+  # from the channel map. (As a runtime default it crashed the datamodule.)
+  age_csv: "${EEG_DATA_ROOT}/ucddb/SubjectDetails.csv"
+  age_xls: "${EEG_DATA_ROOT}/ucddb/SubjectDetails.xls"
+  batch_size: 32
+  data_root: "${EEG_DATA_ROOT}/ucddb"
+  label_mode: sleep_stage
+  num_folds: 5
+  signal_kind: raw
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - sleep_stage
+    enforced_by: adapters.ucddb
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.ucddb.UCDDBBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - num_folds
+    - label_mode
+
+provenance:
+  last_verified: 2026-09-21

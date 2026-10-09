@@ -1,0 +1,128 @@
+# tuab — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# First generated from the hand-written DatasetSpec this cohort used to have,
+# plus the constants its per-dataset entrypoint pinned; hand-maintained since.
+# Edit this file, not the spec module, which only binds the manifest to a
+# datamodule.
+
+schema_version: 1
+
+slug: tuab
+name: TUH EEG Abnormal Corpus (TUAB)
+domain: epilepsy
+paper_dataset: true
+
+description: >
+  TUH EEG Abnormal Corpus v3.0.1: binary normal/abnormal classification from
+  19-channel unipolar EEG at 256 Hz, read from the raw EDFs (a prepared HDF5
+  cache is optional). The official train/eval split with a subject-disjoint
+  validation set, or subject-stratified k-fold.
+
+cohort:
+  centre: "Temple University Hospital, USA"
+  country: US
+  powerline_hz: 60
+
+acquisition:
+  kind: tuh
+  ref: tuh_eeg_abnormal/v3.0.1
+  upstream: https://isip.piconepress.com/projects/nedc/html/tuh_eeg/
+
+signal:
+  montage: unipolar
+  window_s: 10.0
+  stride_s: null
+  notch_freq: null
+
+labels:
+  granularity: recording
+  # one label per recording; window scores are aggregated to the recording before scoring
+  default: binary
+  modes:
+    binary:
+      implemented_by: dataio.tuab
+splits:
+  derivation: >
+    in the default split_mode=official the official train/eval partition fixes
+    the TEST set and validation is carved out of train by a single seeded
+    StratifiedKFold pass over subjects, stratified on abnormal/normal.
+    split_mode=kfold instead splits all subjects with
+    StratifiedKFold(shuffle=True, random_state=`seed`, default 42).
+  derived_by: src/neuroatlas/extensions/datasets/adapters/tuab.py:101-142
+  # No fold manifest; reproducible because every splitter here is seeded.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+  mode: official
+
+pipeline:
+  # How `prepare` builds this cohort's optional fast-path cache.
+  # The flag names differ per builder, so they are recorded here
+  # rather than guessed.
+  preprocessor:
+    # Optional. The default backend reads the raw corpus directly -- see
+    # `backend`/runtime_defaults below -- so this cache only speeds up large
+    # sweeps. `prepare --dataset tuab` is never a prerequisite for `embed`.
+    optional: true
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_tuab
+    args:
+      raw: --raw-root
+      out: --cache-root
+    shard:
+      index: --shard-index
+      count: --num-shards
+  recording_stats: eager
+
+runtime_defaults:
+  balance: weighted_sampler
+  batch_size: 64
+  cache_max_recordings: 16
+  cache_root: "${EEG_CACHE_ROOT}/prepared/tuab"
+  corpus_version: v3.0.1
+  fold: 0
+  label_mode: binary
+  montage_filter: null
+  n_folds: 5
+  normalize: none
+  num_workers: 4
+  raw_root: "${EEG_DATA_ROOT}/tuab"
+  seed: 42
+  split_mode: official
+  stride_s: null
+  window_s: 10.0
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  montage:
+    values:
+      - bipolar
+      - unipolar
+    enforced_by: dataio.tuab
+  split_mode:
+    values:
+      - official
+      - kfold
+    enforced_by: adapters.tuab
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.tuab.TuabBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  last_verified: 2026-09-21

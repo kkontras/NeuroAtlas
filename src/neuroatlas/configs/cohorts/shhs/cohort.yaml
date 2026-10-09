@@ -1,0 +1,121 @@
+# shhs — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# Hand-maintained. The reader reads NSRR's EDFs and NSRR's XML annotations
+# and prepares each night the way the SleepTransformer / CoRe-Sleep SHHS
+# preprocessing did (see dataio/shhs.py).
+
+schema_version: 1
+
+slug: shhs
+name: Sleep Heart Health Study (SHHS)
+domain: sleep
+paper_dataset: true
+
+description: >
+  Sleep Heart Health Study: at-home PSG from two visits (SHHS-1, SHHS-2),
+  scored for sleep stages, with each participant's age at the visit. The
+  reader takes the C4-A1 EEG from NSRR's EDFs at 100 Hz, band-passed 0.3-40
+  Hz.
+
+cohort:
+  centre: "Sleep Heart Health Study (NSRR), USA"
+  country: US
+  powerline_hz: 60
+
+acquisition:
+  kind: nsrr
+  ref: shhs
+  folders: [polysomnography/edfs, polysomnography/annotations-events-nsrr, datasets]
+  # the EDFs of both visits, NSRR's annotations and the dataset tables
+  size_gb: 375.0
+  expect: {glob: "shhs[12]-*.edf", count: 8444}   # 5793 SHHS-1 + 2651 SHHS-2 recordings
+
+signal:
+  # The reader's own 0.3-40 Hz band-pass (the SHHS preprocessing the
+  # supervised baselines were trained on) already removes the 60 Hz line.
+  notch_freq: null
+  channels:
+    - C4-A1
+
+labels:
+  granularity: window
+  # one label per window — this is the DEFAULT mode's granularity;
+  # a mode that differs says so under modes.<name>.granularity
+  default: sleep_stage
+  modes:
+    sleep_stage:
+      classes:
+        - W
+        - N1
+        - N2
+        - N3
+        - REM
+      note: >
+        5-class AASM staging per 30 s epoch from NSRR's annotations (stage 4
+        is N3); unscored and movement epochs are left out, and wake beyond
+        the largest sleep stage is trimmed from the ends of the night
+      implemented_by: adapters.shhs
+    age:
+      granularity: recording   # one age per recording: the participant's age at that visit
+      note: >
+        age in years at the visit (shhs1-dataset age_s1, shhs2-dataset
+        age_s2); regression via `--task brain_age`
+      implemented_by: adapters.shhs._age_labels
+
+splits:
+  manifest: ../../folds/shhs_combined.json
+  derivation: >
+    5-fold partition of the 8444 recordings, frozen; a participant's two
+    visits are always in the same fold. subject_folds["k"] is fold k's test
+    group; val is group k+1 and train is the rest (fold_manifest.py's
+    `partition` rule). Verified: the five test groups are disjoint, cover
+    all 8444 recordings, and none of the 5797 participants is in two folds.
+  derived_by: src/neuroatlas/extensions/datasets/adapters/shhs.py  # _fold_assignments
+  grouping: patient
+  n_folds: 5
+  n_subjects: 8444
+
+pipeline:
+  # No prepare step: the reader reads the NSRR EDFs as they are.
+  preprocessor: null
+
+runtime_defaults:
+  data_root: "${EEG_DATA_ROOT}/shhs"
+  batch_size: 32
+  num_workers: 0
+  fold: 0
+  n_folds: 5                    # the manifest's five folds: `run` probes all five
+  label_mode: sleep_stage
+  signal_kind: raw
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  label_mode:
+    values:
+      - sleep_stage
+      - age
+    enforced_by: adapters.shhs
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.shhs.SHHSBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+    - label_mode
+
+provenance:
+  last_verified: 2026-10-08

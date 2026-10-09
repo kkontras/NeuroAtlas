@@ -1,0 +1,103 @@
+# The documentation site: `pip install -e ".[docs]"`, then `mkdocs serve` to
+# preview it or `mkdocs build --strict` to build it into site/.
+site_name: NeuroAtlas
+# Where the site is published. Change it here when the site moves.
+site_url: https://kkontras.github.io/NeuroAtlas/
+site_description: Documentation of neuroatlas, a command-line tool and Python package for benchmarking EEG foundation models
+site_author: Konstantinos Kontras
+repo_url: https://github.com/kkontras/NeuroAtlas
+repo_name: kkontras/NeuroAtlas
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 The NeuroAtlas authors. Released under the MIT license.
+
+theme:
+  name: material
+  icon:
+    logo: material/console
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.instant
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - github-callouts
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
+# Under --strict every broken link or anchor fails the build.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quick start: getting-started/quick-start.md
+      - Walkthrough: getting-started/walkthrough.md
+  - User guide:
+      - guide/index.md
+      - 1. Configuration: guide/configuration.md
+      - 2. Data: guide/data.md
+      - 3. Models: guide/models.md
+      - 4. Benchmarks: guide/benchmarks.md
+      - 5. Running benchmarks: guide/running.md
+      - 6. Results: guide/results.md
+      - 7. Advanced use: guide/advanced.md
+      - 8. Troubleshooting: guide/troubleshooting.md
+  - Command reference:
+      - reference/index.md
+      - Setup: reference/setup.md
+      - Explore: reference/explore.md
+      - Data and weights: reference/data-and-weights.md
+      - Run: reference/run.md
+      - Results: reference/results.md
+      - Individual steps: reference/individual-steps.md
+  - Citation: citation.md

@@ -1,0 +1,37 @@
+schema_version: 1
+name: sleep_respiratory
+title: Respiratory event detection
+domain: sleep
+question: Does a 30 s epoch contain an apnea or hypopnea?
+paper: App. C.2
+task: respiratory
+embed: --set window_s=30 --set stride_s=30
+probe: --probe-type linear --class-weight balanced --tune-c 1.0
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: physionet2026, embed: ""}
+  - {slug: ucddb, embed: ""}
+single: ucddb
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
+metrics:
+  # AUPRC at 10 s of apnea or hypopnea (Fig. 17b). ahi_fraction is the apnea
+  # and hypopnea time of an epoch (apnea_any plus hypopnea, capped at 1).
+  headline: auprc
+  at: ahi_fraction@10.0s
+  higher_is_better: true
+  secondary: [macro_f1, balanced_accuracy, auroc]
+  unit: 30 s epoch
+  describe: >
+    AUPRC over 30 s epochs, positive = more than 10 s of scored apnea or
+    hypopnea in the epoch (RERAs not counted), each fold's test subjects pooled
+  fold: 5 subject-level folds; logistic regression, balanced loss, C = 1
+  spread: population SD over the folds

@@ -1,0 +1,87 @@
+dataset: mesa
+channels_available:
+  - C4
+  - C3
+  - Cz
+channels_used:
+  - C4
+  - C3
+  - Cz
+
+per_model:
+  eegpt:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  cbramod:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  labram:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  neurolm:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  reve:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  biot:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  chronos:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  moment:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  moirai:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  sleepfm:
+    C4: C4
+    C3: C3
+    Cz: Cz
+
+  neurogpt:
+    C4: C4
+    C3: C3
+    Cz: CZ
+  neurorvq:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  steegformer:
+    C4: C4
+    C3: C3
+    Cz: Cz
+
+  core_sleep:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  sleep_transformer:
+    C4: C4
+    C3: C3
+    Cz: Cz
+  sleepyco:
+    C4: C4
+    C3: C3
+    Cz: Cz
+
+notes:
+  eegpt: "MESA generic EEG labels mapped to NSRR-documented 10-20 positions."
+  labram: "MESA generic labels mapped to standard_1020 positions."
+  neurolm: "MESA generic labels mapped to 10-20 positions."
+  reve: "MESA generic labels mapped to REVE position bank names (mixed case)."
+  biot: "MESA 3 monopolar channels mapped to 10-20 names."
+  neurogpt: "MESA's three EEG channels, as the reader names them (C4, C3, Cz), uppercase in NeuroGPT's 22-channel layout (3 of 22 filled)."
+  neurorvq: "MESA's three EEG channels as the reader names them; NeuroRVQ looks names up case-insensitively."
+  steegformer: "MESA's three EEG channels as the reader names them, mixed case as S-TEEGformer's vocabulary spells them (Cz)."

@@ -1,0 +1,164 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# The distribution is neuroatlas-bench; the command and the import are neuroatlas.
+name = "neuroatlas-bench"
+dynamic = ["version"]
+description = "NeuroAtlas: a benchmark for EEG foundation models across epilepsy, sleep, brain age and BCI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["EEG", "foundation models", "benchmark", "sleep", "epilepsy", "BCI", "brain age"]
+authors = [
+    {name = "Konstantinos Kontras", email = "konstantinos.kontras@kuleuven.be"},
+    {name = "Trui Osselaer"},
+    {name = "Stylianos G. Mouslech"},
+    {name = "Angeliki-Ilektra Karaiskou"},
+    {name = "Guido Gagliardi"},
+    {name = "Thomas Strypsteen"},
+    {name = "Mohammad Hossein Badiei"},
+    {name = "Anku Rani"},
+    {name = "Maarten Vanmarcke"},
+    {name = "Miguel Bhagubai"},
+    {name = "Chanakya Ekbote"},
+    {name = "Jaedong Hwang"},
+    {name = "Christos Chatzichristos"},
+    {name = "Paul Pu Liang"},
+    {name = "Maarten De Vos"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+# Bounded to the tested ranges. requirements-fm.txt has the exact versions;
+# requirements-tsfm.txt the separate Moirai environment.
+dependencies = [
+    "numpy>=1.26,<2",            # the paper's 1.26.4; moabb 1.2.0 (the BCI stack) needs numpy<2
+    "scipy>=1.11,<2",
+    "pandas>=2.2,<3",
+    "scikit-learn>=1.7,<1.8",
+    "h5py>=3.10,<4",
+    "edfio>=0.4.13,<0.5",
+    "pyyaml>=6.0,<7",            # cohort manifests and channel maps -- read by every run
+    "pyedflib>=0.1.38,<0.2",     # EDF reader behind the PhysioEx-style sleep cohorts; imported by dataset discovery
+    "huggingface_hub>=0.34,<1.0",  # gated and hub-hosted model weights; transformers 4.x needs <1.0
+]
+
+[project.urls]
+Homepage = "https://github.com/kkontras/NeuroAtlas"
+Paper = "https://arxiv.org/abs/2605.14698"
+Documentation = "https://kkontras.github.io/NeuroAtlas/"
+Issues = "https://github.com/kkontras/NeuroAtlas/issues"
+
+[project.scripts]
+neuroatlas = "neuroatlas.cli:main"
+
+[project.optional-dependencies]
+# The model stack: everything a run imports. One command gives the paper's
+# exact versions, with requirements-fm.txt as the constraints file:
+#     pip install -e ".[fm]" -c requirements-fm.txt
+# torch is unpinned: pip takes the default build (CUDA 13); for another CUDA
+# build install torch from pytorch.org first and pip keeps it.
+fm = [
+    "torch",
+    "tqdm>=4.66,<5",              # probe progress bars
+    "easydict>=1.13,<2",          # CoRe-Sleep and SleepTransformer
+    "physioex>=1.0.9,<1.1",       # the Sleep-EDF reader's PhysioEx preprocessing
+    "loguru>=0.7,<0.8",           # imported by that reader
+    "transformers>=4.57.1,<5",
+    "safetensors>=0.7,<1",
+    "einops>=0.8.1,<0.9",
+    "timm>=1.0.22,<1.1",
+    "braindecode>=1.4,<1.5",     # 1.4.0 is the paper's; 1.5+ is untested here
+    "mne>=1.11,<1.14",           # 1.14 drops the "standard_1020" montage name neurolm and the BCI reader use
+    "xlrd>=2.0.1,<3",            # Sleep-EDF ships SC-subjects.xls as legacy .xls: subject ages
+    "openpyxl>=3.1.5,<4",        # ISRUC's subject table is .xlsx (read with engine="openpyxl"): ages
+]
+# The generic time-series FMs that share this environment. MOMENT's momentfm
+# is not here: every release pins transformers==4.33.3 and numpy==1.25.2, so
+# it goes in on its own with `pip install --no-deps "momentfm==0.1.4"` (it runs
+# with the fm stack). Moirai (uni2ts) needs torch<2.5: requirements-tsfm.txt.
+ts = [
+    "chronos-forecasting>=1.5.2,<2",   # 1.5.0/1.5.1 cap transformers below 4.48
+    "accelerate>=0.32,<2",
+]
+# What reproduction/neuroatlas_minimal_repro.ipynb imports. momentfm is not
+# here: install it with --no-deps (reproduction/README.md), since its declared
+# pins would downgrade transformers and numpy.
+notebook = [
+    "torch",
+    "transformers",
+    "safetensors",
+    "chronos-forecasting",  # generic time-series FM
+    "matplotlib",           # hypnogram plot
+    "pyyaml",               # src/neuroatlas/configs/channel_maps/*.yaml
+    "xlrd",                 # Sleep-EDF ships SC-subjects.xls as legacy .xls
+]
+# The 14 MOABB BCI cohorts. moabb itself is NOT in this extra: every release
+# since 1.4 needs numpy>=2, and 1.2.0 -- the last on numpy<2, so the one that
+# keeps the paper's numpy 1.26.4 -- declares caps the paper stack exceeds
+# (scikit-learn<1.6, urllib3<2, seaborn<0.13). Install it on its own, like
+# momentfm:
+#     pip install -e ".[fm,bci]" && pip install --no-deps "moabb==1.2.0"
+# It runs with this stack (BNCI2014_001/004 batches are bit-identical to moabb
+# 1.7.2's); `pip check` then lists those declared caps. Here are its runtime
+# dependencies that do not conflict. Dreyer2023 and Kim2025BetaRange, newer
+# than 1.2.0, are vendored (extensions/datasets/dataio/moabb_vendored).
+# Imported lazily: the rest of the benchmark runs without any of it.
+bci = [
+    "pyriemann>=0.7,<0.8",
+    "pooch>=1.6,<2",
+    "memory-profiler>=0.61,<0.62",
+    "edflib-python>=1.0.6,<2",
+    "coverage>=7.0.1,<8",        # moabb imports it at module level
+    "mne-bids>=0.18,<0.21",      # moabb's BIDS readers; the vendored Dreyer2023
+    "matplotlib>=3.6.2,<4",
+    "seaborn>=0.12.1,<0.14",     # imported by moabb.datasets; moabb 1.2.0 declares <0.13
+]
+# The documentation site (mkdocs.yml): `mkdocs serve` previews it,
+# `mkdocs build --strict` builds it.
+docs = [
+    "mkdocs>=1.6.1,<2",
+    "mkdocs-material>=9.7.7,<10",
+    "markdown-callouts>=0.4,<0.5",   # GitHub's "> [!NOTE]" boxes, so the pages read well on GitHub too
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "neuroatlas.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["neuroatlas*"]
+exclude = ["*.__pycache__"]
+
+# The shipped tables (cohort manifests, channel maps, folds, task presets) and
+# the licences of the vendored code. Everything else a run needs -- weights,
+# caches, corpora -- is the user's, never shipped. DeepSOZ-HEM's code and
+# checkpoint (GPL-3.0) are not shipped either: `models download` fetches them.
+[tool.setuptools.package-data]
+neuroatlas = [
+    "configs/**/*.yaml",
+    "configs/**/*.json",
+    "configs/**/*.md",
+    "extensions/models/backbones/third_party/*/LICENSE*",
+    "extensions/models/backbones/data/*.npz",
+    "extensions/datasets/dataio/moabb_vendored/LICENSE*",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: builds a wheel or touches real data"]

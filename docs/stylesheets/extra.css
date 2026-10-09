@@ -1,0 +1,29 @@
+/* Plain documentation look: dark text on a white header, solid headings. */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #ffffff;
+  --md-primary-fg-color--light: #ffffff;
+  --md-primary-fg-color--dark: #f5f5f5;
+  --md-primary-bg-color: #1a1a1a;
+  --md-primary-bg-color--light: #555555;
+  --md-accent-fg-color: #1d4f91;
+  --md-typeset-a-color: #1d4f91;
+}
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1e2129;
+  --md-primary-fg-color--dark: #16181d;
+  --md-primary-bg-color: #e6e6e6;
+  --md-primary-bg-color--light: #a0a0a0;
+  --md-accent-fg-color: #7aa7e8;
+  --md-typeset-a-color: #7aa7e8;
+}
+.md-header, .md-tabs { box-shadow: none; border-bottom: 1px solid rgba(0, 0, 0, 0.08); }
+[data-md-color-scheme="slate"] .md-header,
+[data-md-color-scheme="slate"] .md-tabs { border-bottom-color: rgba(255, 255, 255, 0.08); }
+.md-typeset h1 { font-weight: 600; color: var(--md-default-fg-color); letter-spacing: -0.01em; }
+.md-typeset h2 { font-weight: 600; }
+.md-typeset h3 { font-weight: 600; }
+.md-typeset dl dt { font-weight: 600; }
+
+/* the search field on a white header */
+[data-md-color-scheme="default"] .md-search__input { background-color: #f1f2f4; }
+[data-md-color-scheme="default"] .md-search__input:hover { background-color: #e9eaee; }

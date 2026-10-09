@@ -1,0 +1,110 @@
+# eegmat — dataset manifest
+#
+# Schema: _schema.yaml
+# Facts read from the preprocessing script that produced this cohort's pickles
+# and from the pickles themselves; see provenance below.
+
+schema_version: 1
+
+slug: eegmat
+name: EEG During Mental Arithmetic Tasks (EEGMat)
+domain: bci
+paper_dataset: true
+
+description: >
+  EEG During Mental Arithmetic Tasks: resting state against serial-subtraction
+  cognitive workload, 36 subjects, 19-channel 10-20.
+
+cohort:
+  centre: "Taras Shevchenko National University / Igor Sikorsky KPI, Kyiv, Ukraine"
+  country: UA
+  powerline_hz: 50
+
+acquisition:
+  # PhysioNet's EDFs; `neuroatlas data prepare eegmat` builds the files the
+  # reader reads from them.
+  kind: physionet
+  ref: eegmat
+  version: 1.0.0
+  size_gb: 0.18                             # "Total uncompressed size: 175.1 MB"
+  dest: ${EEG_DATA_ROOT}/eegmat
+  expect: {glob: "Subject*.edf", count: 72} # RECORDS: 36 subjects x (rest, task)
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: trial
+  default: trial_class
+  modes:
+    trial_class:
+      note: >
+        rest=0, arithmetic=1, as the upstream preprocessing writes them. Raw is 72
+        EDFs, two per subject (_1 rest, _2 task).
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py (get_subject_split)
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+pipeline:
+  # `neuroatlas data prepare eegmat` builds the two files the reader reads
+  # (no filtering, confound filtering) from the raw data, into
+  # <cache root>/prepared/eegmat/.
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_cognitive
+    args:
+      slug: --dataset
+      raw: --raw-dir
+      out: --output
+
+runtime_defaults:
+  batch_size: 64
+  preprocessed_path: null              # `config set eegmat.preprocessed_path FILE`
+  fold: 0
+  n_folds: 5
+  num_workers: 0
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_cognitive benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      reads EEGMat_preprocessed_trackD_*.pkl, the file filtered 4-40 Hz, instead of EEGMat_preprocessed_*.pkl. A file whose recorded
+      band is the other one is refused. The two are cached separately.
+    implemented_by: extensions/datasets/adapters/cognitive.py
+  bci_format:
+    values: [labram, bendr, steegformer]
+    effect: >
+      the model format the trials are prepared in: the file of that format
+      (its sampling rate and band) (dataio/bci_formats.py). `run`, `embed` and `probe` pass the
+      checkpoint's own (EEGPT bendr; ST-EEGFormer and SleepFM steegformer;
+      every other model labram); set it to read another.
+    implemented_by: extensions/datasets/dataio/bci_formats.py
+
+spec:
+  datamodule: neuroatlas.extensions.datasets.adapters.cognitive.EEGMatBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+
+provenance:
+  last_verified: 2026-09-30
+  note: >
+    36 subjects, 4.0 s windows, resampled to 128 Hz. Classes: rest (0), arithmetic (1).
+    Labels read from the upstream preprocessing rather than inferred from the
+    stored integers.

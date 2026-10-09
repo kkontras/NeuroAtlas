@@ -1,0 +1,105 @@
+dataset: hmc
+channels_available:
+  - F4
+  - C4
+  - O2
+  - C3
+channels_used:
+  - F4
+  - C4
+  - O2
+  - C3
+
+per_model:
+  eegpt:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  cbramod:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  labram:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  neurolm:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  reve:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  biot:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  chronos:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  moment:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  moirai:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleepfm:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
+  neurogpt:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  neurorvq:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  steegformer:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
+  core_sleep:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleep_transformer:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+  sleepyco:
+    F4: F4
+    C4: C4
+    O2: O2
+    C3: C3
+
+notes:
+  eegpt: "Linked-mastoid bipolars → referential 10-20 anchors."
+  labram: "Linked-mastoid bipolars → standard_1020 referential anchors."
+  neurolm: "Linked-mastoid bipolars → referential 10-20 anchors."
+  reve: "Linked-mastoid bipolars → 10-20 names per REVE position bank."
+  biot: "4 monopolar anchors from bipolars. Wrapper computes derivations where possible; remaining slots zero-padded."
+  neurogpt: "The reader names each linked-mastoid bipolar (F4-M1, C4-M1, O2-M1, C3-M2) by its active electrode; that referential anchor is its slot in NeuroGPT's 22-channel layout (4 of 22 filled)."
+  neurorvq: "Linked-mastoid bipolars, named by their active electrode, onto that referential anchor in NeuroRVQ's vocabulary."
+  steegformer: "Linked-mastoid bipolars, named by their active electrode, onto that referential anchor; monopolar anchor approximation."

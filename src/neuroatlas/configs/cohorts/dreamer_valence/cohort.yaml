@@ -1,0 +1,113 @@
+# dreamer_valence — dataset manifest
+#
+# Schema: _schema.yaml
+# Facts read from the preprocessing script that produced this cohort's pickles
+# and from the pickles themselves; see provenance below.
+
+schema_version: 1
+
+slug: dreamer_valence
+name: DREAMER valence
+domain: bci
+paper_dataset: true
+
+description: >
+  DREAMER affective recordings, valence axis. 23 subjects x 18 film clips on a
+  14-channel Emotiv EPOC.
+
+cohort:
+  centre: "University of the West of Scotland, UK"
+  country: GB
+  powerline_hz: 50
+
+acquisition:
+  # DREAMER.mat, one file for valence and arousal; Zenodo grants access to it
+  # on request. `neuroatlas data prepare dreamer_valence` builds the files
+  # the reader reads from it.
+  kind: manual
+  upstream: https://zenodo.org/records/546113
+  note: >
+    Request access on the Zenodo record; the reader expects DREAMER.mat in
+    the dataset's folder (dreamer_valence and dreamer_arousal read the same
+    file: a copy or a link in each folder).
+  dest: ${EEG_DATA_ROOT}/dreamer_valence
+  expect: {glob: "DREAMER.mat", count: 1}
+
+signal:
+  notch_freq: 50.0
+
+labels:
+  granularity: trial
+  default: trial_class
+  modes:
+    trial_class:
+      note: >
+        The 1-5 self-report is binarised at 3: <=3 low, >3 high. These are
+        intensity levels, not presence and absence.
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py (get_subject_split)
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+pipeline:
+  # `neuroatlas data prepare dreamer_valence` builds the two files the reader reads
+  # (no filtering, confound filtering) from the raw data, into
+  # <cache root>/prepared/dreamer_valence/.
+  preprocessor:
+    module: neuroatlas.extensions.datasets.preprocessors.preprocess_cognitive
+    args:
+      slug: --dataset
+      raw: --raw-dir
+      out: --output
+
+runtime_defaults:
+  batch_size: 64
+  preprocessed_path: null              # `config set dreamer_valence.preprocessed_path FILE`
+  fold: 0
+  n_folds: 5
+  num_workers: 0
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_cognitive benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      reads DREAMER_valence_preprocessed_trackD_*.pkl, the file filtered 4-40 Hz, instead of DREAMER_valence_preprocessed_*.pkl. A file whose recorded
+      band is the other one is refused. The two are cached separately.
+    implemented_by: extensions/datasets/adapters/cognitive.py
+  bci_format:
+    values: [labram, bendr, steegformer]
+    effect: >
+      the model format the trials are prepared in: the file of that format
+      (its sampling rate and band) (dataio/bci_formats.py). `run`, `embed` and `probe` pass the
+      checkpoint's own (EEGPT bendr; ST-EEGFormer and SleepFM steegformer;
+      every other model labram); set it to read another.
+    implemented_by: extensions/datasets/dataio/bci_formats.py
+
+spec:
+  datamodule: neuroatlas.extensions.datasets.adapters.cognitive.DreamerValenceBenchmarkDataModule
+  default_task: linear_probe
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: raw
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+
+provenance:
+  last_verified: 2026-09-30
+  note: >
+    23 subjects, 4.0 s windows, resampled to 128 Hz. Classes: low_valence (0), high_valence (1).
+    Labels read from the upstream preprocessing rather than inferred from the
+    stored integers.

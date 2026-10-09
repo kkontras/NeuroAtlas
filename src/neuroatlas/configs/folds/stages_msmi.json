@@ -1,0 +1,81 @@
+{
+  "dataset": "stages_msmi",
+  "n_subjects": 63,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "MSMI00002",
+      "MSMI00004",
+      "MSMI00009",
+      "MSMI00011",
+      "MSMI00017",
+      "MSMI00025",
+      "MSMI00027",
+      "MSMI00035",
+      "MSMI00037",
+      "MSMI00039",
+      "MSMI00061",
+      "MSMI00062",
+      "MSMI00063"
+    ],
+    "1": [
+      "MSMI00001",
+      "MSMI00003",
+      "MSMI00008",
+      "MSMI00012",
+      "MSMI00015",
+      "MSMI00022",
+      "MSMI00030",
+      "MSMI00032",
+      "MSMI00033",
+      "MSMI00051",
+      "MSMI00053",
+      "MSMI00055",
+      "MSMI00058"
+    ],
+    "2": [
+      "MSMI00013",
+      "MSMI00016",
+      "MSMI00019",
+      "MSMI00021",
+      "MSMI00023",
+      "MSMI00028",
+      "MSMI00041",
+      "MSMI00042",
+      "MSMI00044",
+      "MSMI00052",
+      "MSMI00054",
+      "MSMI00057",
+      "MSMI00059"
+    ],
+    "3": [
+      "MSMI00005",
+      "MSMI00007",
+      "MSMI00014",
+      "MSMI00018",
+      "MSMI00024",
+      "MSMI00029",
+      "MSMI00034",
+      "MSMI00036",
+      "MSMI00038",
+      "MSMI00040",
+      "MSMI00045",
+      "MSMI00049"
+    ],
+    "4": [
+      "MSMI00006",
+      "MSMI00010",
+      "MSMI00020",
+      "MSMI00026",
+      "MSMI00031",
+      "MSMI00043",
+      "MSMI00046",
+      "MSMI00047",
+      "MSMI00048",
+      "MSMI00050",
+      "MSMI00056",
+      "MSMI00060"
+    ]
+  }
+}

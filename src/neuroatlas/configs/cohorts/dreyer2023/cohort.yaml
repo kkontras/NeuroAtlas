@@ -1,0 +1,93 @@
+# Dreyer2023 — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+#
+# Written because this cohort IS in the paper but was invisible to every tool
+# that filters on `paper_dataset`: MOABB specs are generated from a table in
+# extensions/datasets/moabb_*.py with no manifest, so the flag defaulted to
+# false. Facts below come from the paper's dataset table.
+
+schema_version: 1
+
+slug: dreyer2023
+name: Dreyer2023
+domain: bci
+paper_dataset: true          # paper [63]
+
+description: >
+  MOABB Dreyer2023 motor-imagery benchmark (2-class MI, 27 ch, 87 subj).
+
+cohort:
+  powerline_hz: 50           # unverified: MOABB does not record the recording
+                             # site, and nothing applies this yet (audit OQ-3.2)
+
+acquisition:
+  kind: moabb
+  ref: dreyer2023
+  note: >
+    `neuroatlas data download dreyer2023` has MOABB fetch it into
+    $MNE_DATA (`neuroatlas config show` prints the folder).
+  checksum: TBD              # MOABB verifies its own downloads
+  nemar: nm000250                         # moabb 1.7: dreyer2023 downloads NEMAR/nm000250
+  size_gb: 7.52                         # NEMAR manifest, sourcedata/ (what MOABB fetches; 2026-10-02)
+  moabb_folder: MNE-dreyer2023-data   # where moabb 1.2.0 keeps it under $MNE_DATA (1.6+: NEMAR/<id>)
+
+signal:
+  montage: as-published      # MOABB returns the dataset's own channel set
+
+labels:
+  granularity: trial
+  # one label per trial (a cue-locked epoch), which is the unit the BCI
+  # protocols score
+  default: trial_class
+  modes:
+    trial_class:
+      implemented_by: adapters.moabb_generic
+
+splits:
+  derivation: >
+    subjects are permuted once with numpy RandomState(42) and cut into
+    n_folds chunks: chunk `fold` is test, chunk `fold+1` is validation, the
+    rest is train. n_folds = the subject count gives leave-one-subject-out.
+  derived_by: src/neuroatlas/extensions/datasets/dataio/bci.py:2014-2042
+  # No fold manifest; reproducible because the permutation is seeded.
+  manifest: null
+  grouping: patient
+  n_folds: 5
+
+pipeline:
+  paradigm: motor_imagery
+  # No build step: this cohort is loaded through adapters.moabb_generic,
+  # which calls load_and_preprocess_moabb on first use -- MOABB downloads and
+  # epochs it itself. (preprocess_moabb_mi only knows the seven datasets in
+  # dataio/bci.py:_BROAD_MI_SPECS.)
+  preprocessor: null
+
+runtime_options:
+  # Confound filtering (App. D.6): `--set confound_control=true` on `embed`
+  # and `probe`, as the bci_motor_imagery benchmark's default passes it;
+  # `--set confound_control=false` is its no_filtering variant.
+  confound_control:
+    default: false
+    effect: >
+      holds the passband to the 4-40 Hz motor range and starts each trial
+      1 s after the cue, so the evoked response and the eye movement towards
+      the cue are outside the window: 1-4 s after the cue. Off uses the
+      model's own band and the 4 s trial from the cue, 0-4 s
+      (moabb_loader.trial_window). The two are cached separately, and the gap
+      between them is how much of a score came from the cue rather than the
+      imagery.
+    implemented_by: extensions/datasets/dataio/moabb_loader.py:resolve_confound_control
+  bci_format:
+    values: [labram, bendr, steegformer]
+    effect: >
+      the model format the trials are prepared in: its sampling rate, band
+      and notch (dataio/bci_formats.py). `run`, `embed` and `probe` pass the
+      checkpoint's own (EEGPT bendr; ST-EEGFormer and SleepFM steegformer;
+      every other model labram); set it to read another.
+    implemented_by: extensions/datasets/dataio/bci_formats.py
+
+provenance:
+  added: "2026-09-23"
+  migrated_from:
+    - src/neuroatlas/extensions/datasets/moabb_*.py   # description, paradigm

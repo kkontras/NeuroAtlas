@@ -1,0 +1,379 @@
+dataset: mass
+channels_available:
+- Fp1
+- Fp2
+- Fpz
+- F7
+- F3
+- Fz
+- F4
+- F8
+- T3
+- C3
+- Cz
+- C4
+- T4
+- T5
+- P3
+- Pz
+- P4
+- T6
+- O1
+- O2
+- Oz
+channels_used:
+- Fp1
+- Fp2
+- F7
+- F3
+- Fz
+- F4
+- F8
+- T3
+- C3
+- Cz
+- C4
+- T4
+- T5
+- P3
+- Pz
+- P4
+- T6
+- O1
+- O2
+per_model:
+  eegpt:
+    Fp1: FP1
+    Fp2: FP2
+    F7: F7
+    F3: F3
+    Fz: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  cbramod:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  labram:
+    Fp1: FP1
+    Fp2: FP2
+    F7: F7
+    F3: F3
+    Fz: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  neurolm:
+    Fp1: FP1
+    Fp2: FP2
+    F7: F7
+    F3: F3
+    Fz: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  reve:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T7
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T8
+    T5: P7
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: P8
+    O1: O1
+    O2: O2
+  steegformer:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  neurorvq:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  neurogpt:
+    Fp1: FP1
+    Fp2: FP2
+    F7: F7
+    F3: F3
+    Fz: FZ
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: CZ
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: PZ
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  biot:
+    Fp1: FP1
+    Fp2: FP2
+    F7: F7
+    F3: F3
+    Fz: FZ
+    F4: F4
+    F8: F8
+    T3: T7
+    C3: C3
+    Cz: CZ
+    C4: C4
+    T4: T8
+    T5: P7
+    P3: P3
+    Pz: PZ
+    P4: P4
+    T6: P8
+    O1: O1
+    O2: O2
+  sleepfm:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  chronos:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  moment:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  moirai:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  core_sleep:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  sleep_transformer:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+  sleepyco:
+    Fp1: Fp1
+    Fp2: Fp2
+    F7: F7
+    F3: F3
+    Fz: Fz
+    F4: F4
+    F8: F8
+    T3: T3
+    C3: C3
+    Cz: Cz
+    C4: C4
+    T4: T4
+    T5: T5
+    P3: P3
+    Pz: Pz
+    P4: P4
+    T6: T6
+    O1: O1
+    O2: O2
+notes:
+  eegpt: Standard 10-20 expanded to 16 channels. Paper pretrained unipolar; identity mappings (case-folded to uppercase).
+  labram: Standard 10-20 expanded to 16 channels → standard_1020 referential anchors.
+  neurolm: Uppercase per NeuroLM standard_1020 vocabulary.
+  reve: REVE uses mixed-case per position bank. T3→T7, T4→T8 per 10-10 naming convention.
+  steegformer: Standard 10-20 display names; identity mapping. Full 19-channel coverage in the 142-entry vocabulary.
+  neurogpt: "Standard 10-20 display names case-folded to uppercase for NeuroGPT legacy layout. Best coverage: 19/22, missing T1/T2/OZ."
+  biot: 19 monopolar channels → uppercase 10-20 names (T3→T7, T4→T8, T5→P7, T6→P8 aliases). Wrapper computes all 16/16 derivations by subtraction. FZ, CZ, PZ are extras not referenced by any BIOT slot.
+  sleepfm: SleepFM is channel-label-agnostic (no position embedding); all channels passed through, wrapper pads to 10 BAS slots.
+  chronos: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moment: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  moirai: Univariate TS FM; channel names unused (mean-pooled). Identity mapping.
+  core_sleep: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleep_transformer: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.
+  sleepyco: Single-channel; wrapper selects C4 > C3 > Fpz-Cz by name preference.

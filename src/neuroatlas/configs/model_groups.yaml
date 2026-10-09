@@ -1,0 +1,78 @@
+# The three model groups NeuroAtlas compares, as the paper defines them
+# (Appendix A.2: "three complementary groups: supervised EEG models, EEG
+# foundation models, and general time-series foundation models").
+#
+# This is the paper's taxonomy, not a property of any checkpoint, which is why
+# it lives here rather than in the registry: the same wrapper could be grouped
+# differently by a different paper. `-m` reads it, so a run can say
+# "every EEG-FM" (`-m all_fm`) without retyping the family names.
+#
+# Membership was checked family by family against the paper's own spellings.
+# A family the paper never names goes under `other`, NOT into a group it
+# happens to resemble -- `--models eeg_fm` must mean what the paper means by
+# EEG-FM, or a sweep silently reports models the paper never evaluated.
+
+schema_version: 1
+
+groups:
+  eeg_fm:
+    description: >
+      EEG foundation models: pretrained on EEG or neurophysiological data with
+      masked reconstruction, contrastive, autoregressive, token-prediction or
+      multimodal objectives. (App. A.2 also names MIRepNet, which has no
+      wrapper here yet.)
+    families: [biot, cbramod, eegpt, labram, neurogpt, neurolm, neurorvq,
+               reve, sleepfm, steegformer]
+
+  ts_fm:
+    description: >
+      General time-series foundation models, pretrained on heterogeneous
+      non-EEG temporal data. They encode no electrode topology, montage
+      geometry or referencing assumptions, so they are the domain-agnostic
+      baseline for whether generic temporal pretraining transfers to EEG.
+      The paper names exactly these three families (Chronos-T/S/B/L,
+      Moirai-S/B/L, MOMENT-S/B/L).
+    families: [chronos, moirai, moment]
+
+  supervised:
+    description: >
+      Supervised-Pre: models trained with supervision on other EEG datasets.
+      Epilepsy-trained Seizure-TF and DeepSOZ; sleep-trained SleepTransformer,
+      SleePyCo and CoRe-Sleep; the sleep EEG Brain Age feature model; EEGNet.
+    families: [seizure_transformer, deepsoz_hem, sleep_transformer, sleepyco,
+               core_sleep, brain_age_cnn, eegnetv4]
+
+# Every family below is registered and every registered family is above:
+# 10 EEG-FM + 3 TS-FM + 7 Supervised-Pre = the 20 in the checkpoint registry.
+# An `other:` block used to sit here listing brainbert, sjepa, timesfm,
+# timemoe, lagllama, sleepgpt and physioex as "runnable by name". None of
+# them had a wrapper any more, so `--models brainbert` did not work and the
+# note promising it did was wrong.
+
+# What `--models` accepts besides a family or a checkpoint id. Each alias
+# selects *ready* checkpoints; a group alias takes every checkpoint of the
+# group's families except untrained baselines, which only `all_random` (or its
+# synonym `baseline`, the group `list models` shows for them) and `all`
+# select -- a random-init CBraMod is not an EEG foundation model. A family
+# (`reve`) likewise means its trained checkpoints only in `run`, `check`,
+# `submit` and `list`; the original verbs (`embed`, `probe`) keep the
+# runner's meaning, every checkpoint of the family, which the launchers'
+# family lists rely on.
+aliases:
+  all_fm:
+    group: eeg_fm
+    description: every EEG foundation model
+  all_ts:
+    group: ts_fm
+    description: every general time-series foundation model
+  all_supervised:
+    group: supervised
+    description: every model trained with labels on other EEG data
+  all_random:
+    source_type: random_init
+    description: untrained baselines, the same architectures with random weights
+  baseline:
+    source_type: random_init
+    description: the same as all_random (the group `list models` shows for them)
+  all:
+    description: every ready checkpoint

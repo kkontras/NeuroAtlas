@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environments and editors
+.venv/
+.env
+.idea/
+.vscode/
+.DS_Store
+.nfs*
+.cache/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+site/
+
+# Logs
+*.log
+lightning_logs/
+
+# Data, caches, weights and results (they live in your project folder)
+artifacts/
+outputs/
+wandb/
+data/
+/checkpoints/
+*.pth.tar
+*.pt
+*_cache/
+
+# Editor backups
+*.bak
+*.bak.[0-9]*
+
+# Tests are kept out of the public tree
+/tests/

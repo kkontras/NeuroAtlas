@@ -1,0 +1,56 @@
+{
+  "dataset": "stages_msnf",
+  "n_subjects": 38,
+  "n_folds": 5,
+  "seed": 42,
+  "folds": {
+    "0": [
+      "MSNF00012",
+      "MSNF00018",
+      "MSNF00019",
+      "MSNF00022",
+      "MSNF00025",
+      "MSNF00029",
+      "MSNF00031",
+      "MSNF00034"
+    ],
+    "1": [
+      "MSNF00002",
+      "MSNF00003",
+      "MSNF00005",
+      "MSNF00007",
+      "MSNF00013",
+      "MSNF00021",
+      "MSNF00028",
+      "MSNF00036"
+    ],
+    "2": [
+      "MSNF00001",
+      "MSNF00006",
+      "MSNF00008",
+      "MSNF00009",
+      "MSNF00010",
+      "MSNF00011",
+      "MSNF00023",
+      "MSNF00038"
+    ],
+    "3": [
+      "MSNF00015",
+      "MSNF00017",
+      "MSNF00020",
+      "MSNF00026",
+      "MSNF00030",
+      "MSNF00035",
+      "MSNF00039"
+    ],
+    "4": [
+      "MSNF00004",
+      "MSNF00014",
+      "MSNF00016",
+      "MSNF00024",
+      "MSNF00032",
+      "MSNF00037",
+      "MSNF00040"
+    ]
+  }
+}

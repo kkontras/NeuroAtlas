@@ -1,0 +1,76 @@
+dataset: cfs
+channels_available:
+- C3-M2
+- C4-M1
+channels_used:
+- C3-M2
+- C4-M1
+per_model:
+  eegpt:
+    C3-M2: C3
+    C4-M1: C4
+  cbramod:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  labram:
+    C3-M2: C3
+    C4-M1: C4
+  neurolm:
+    C3-M2: C3
+    C4-M1: C4
+  reve:
+    C3-M2: C3
+    C4-M1: C4
+  biot:
+    C3-M2: C3-P3
+    C4-M1: C4-P4
+  sleepfm:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  chronos:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  moirai:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  moment:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  neurogpt:
+    C3-M2: C3
+    C4-M1: C4
+  neurorvq:
+    C3-M2: C3
+    C4-M1: C4
+  steegformer:
+    C3-M2: C3
+    C4-M1: C4
+  core_sleep:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  sleep_transformer:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+  sleepyco:
+    C3-M2: C3-M2
+    C4-M1: C4-M1
+notes:
+  eegpt: Bipolar central onto referential C3/C4 anchor; pretrained unipolar.
+  cbramod: Index-based and permutation-invariant; bipolar labels passed through.
+  labram: Bipolar central onto standard_1020 referential names; shared vocabulary
+    with NeuroLM.
+  neurolm: Uppercase 10-20 names per NeuroLM standard_1020 vocabulary.
+  reve: "Lowercase 10-20 names per REVE position bank \u2014 REVE accepts both casings."
+  biot: Central bipolar mapped to nearest BIOT double-banana slot (closest central
+    derivation in BIOT's 16-slot vocabulary). 14/16 slots zero-padded.
+  sleepfm: Channel-label-agnostic; bipolar labels pass through, wrapper pads to 10
+    BAS slots.
+  chronos: Univariate per-channel; channel labels passed through.
+  moirai: Univariate per-channel; channel labels passed through.
+  moment: Univariate per-channel; channel labels passed through.
+  neurogpt: Bipolar central onto referential C3/C4 anchor in NeuroGPT 22-ch layout.
+  neurorvq: Bipolar central onto referential C3/C4 anchor in NeuroRVQ 102-label vocab.
+  steegformer: Vocab-strict supervised; central bipolar onto referential C3/C4.
+  core_sleep: Multi-modal CoRe-Sleep; bipolar labels pass through.
+  sleep_transformer: Wrapper selects best channel by name; bipolar labels pass through.
+  sleepyco: Wrapper selects best channel by name; bipolar labels pass through.

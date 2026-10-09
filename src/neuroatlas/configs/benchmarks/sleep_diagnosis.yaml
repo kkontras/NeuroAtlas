@@ -1,0 +1,42 @@
+schema_version: 1
+name: sleep_diagnosis
+title: Subject-level diagnosis
+domain: sleep
+question: >
+  From each subject's mean embedding (all of its 30 s epochs averaged):
+  obstructive sleep apnea vs healthy (DOD), cognitive impairment (PhysioNet
+  2026), or which disorder (ISRUC's mixed cohort)?
+paper: App. C.2, Fig. 3d
+embed: --set window_s=30 --set stride_s=30
+# Unweighted logistic regression at C = 1 on each subject's mean embedding;
+# the probe refuses --class-weight and --tune-c for this task.
+probe: --aggregation mean
+datasets:
+  # embed: "" -- fixed 30 s scoring epochs; these readers take no window arguments
+  - {slug: dod, task: osa, embed: ""}
+  - {slug: physionet2026, task: cognitive, embed: ""}
+  - {slug: isruc, task: pathology, embed: ""}
+single: dod
+# Model families this benchmark does not evaluate: `-m all`, a group or an
+# alias leaves them out; naming one is refused.
+excluded_models:
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+  - families: [deepsoz_hem, seizure_transformer]
+    reason: >
+      seizure-detection models, which the paper reports on epilepsy only
+metrics:
+  # AUROC, as paper v2 reports diagnosis (Fig. 3d, Fig. 18). It needs two
+  # classes: ISRUC's diagnosis has more, and its row is n/a with that reason.
+  headline: auroc
+  higher_is_better: true
+  secondary: [balanced_accuracy, macro_f1]
+  unit: subject
+  describe: >
+    AUROC over the test subjects, each one mean embedding: OSA vs healthy
+    (DOD), cognitive impairment vs none (PhysioNet 2026); n/a for ISRUC,
+    whose diagnosis is multi-class
+  fold: 5 subject-level folds; logistic regression, unweighted loss, C = 1
+  spread: population SD over the folds

@@ -1,0 +1,151 @@
+dataset: alzheimers_hc
+channels_available:
+- C4
+- C3
+- F4
+- F3
+- O2
+- O1
+- Fz
+- Pz
+channels_used:
+- C4
+- C3
+- F4
+- F3
+- O2
+- O1
+- Fz
+- Pz
+per_model:
+  eegpt:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: FZ
+    Pz: PZ
+  cbramod:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  labram:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: FZ
+    Pz: PZ
+  neurolm:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: FZ
+    Pz: PZ
+  reve:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  biot:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: FZ
+    Pz: PZ
+  sleepfm:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  chronos:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  moment:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  moirai:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  core_sleep:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  sleep_transformer:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+  sleepyco:
+    C4: C4
+    C3: C3
+    F4: F4
+    F3: F3
+    O2: O2
+    O1: O1
+    Fz: Fz
+    Pz: Pz
+notes:
+  eegpt: "Average-reference EEG → referential 10-20 anchors; FZ/PZ uppercased."
+  cbramod: "CBraMod is index-based; channel labels passed through unchanged."
+  labram: "Average-reference EEG → standard_1020 referential anchors; FZ/PZ uppercased."
+  neurolm: "Average-reference EEG → uppercase 10-20 names per NeuroLM vocabulary."
+  reve: "Average-reference EEG → 10-20 names per REVE position bank."
+  biot: "8 channels → uppercase 10-20 names."
+  sleepfm: "SleepFM is channel-label-agnostic; all 8 channels passed through, wrapper pads to 10 BAS slots."
+  chronos: "Univariate TS FM; channel names unused. Identity mapping."
+  moment: "Univariate TS FM; channel names unused. Identity mapping."
+  moirai: "Univariate TS FM; channel names unused. Identity mapping."
+  core_sleep: "Average-reference EEG → identity mapping; backbone selects C4."
+  sleep_transformer: "Average-reference EEG → identity mapping; backbone selects C4."
+  sleepyco: "Average-reference EEG → identity mapping; backbone selects C4."

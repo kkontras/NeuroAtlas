@@ -1,0 +1,51 @@
+schema_version: 1
+name: epilepsy
+title: Seizure and abnormality detection
+domain: epilepsy
+question: >
+  Is a 10 s EEG window part of a seizure? For TUAB, NMT and Bonn, which label
+  whole recordings rather than seizures, is the recording abnormal?
+paper: App. C.1
+task: seizure_detection
+embed: --set window_s=10 --set stride_s=10 --expected-epoch-seconds 10
+probe: --probe-type linear --class-weight balanced --tune-c 0.001,0.01,0.1,1,10,100 --selection-metric auprc
+datasets: [bonn, chbmit, epilepsiae, helsinki_neonatal, nmt, siena, sz1, sz2, tuab, tusz]
+# The quick dataset is Siena: open (Zenodo, 4.5 GB, `neuroatlas data download
+# siena`), with seizures annotated along continuous recordings, so the
+# event-level headline is defined on it.
+single: siena
+# Model families this benchmark does not evaluate. `-m all`, a group or an
+# alias leaves them out; naming one is refused. Their checkpoints include the
+# ℓ=1 (`_seq1`) variants.
+excluded_models:
+  - families: [sleep_transformer, sleepyco, core_sleep]
+    reason: >
+      sleep-staging sequence models that take sequences of 30 s epochs, not
+      the benchmark's 10 s windows
+  - families: [eegnetv4]
+    reason: >
+      motor-imagery checkpoints, which the paper evaluates on motor imagery
+      only
+# The paper's headline (Fig. 2, Tables 3-5; App. C.1 Eq. (2), App. D.1.2):
+# event-level sensitivity vs false alarms per hour, as the area under the
+# folds' median curve over 0.1-100 FA/h on a log10 axis, ± the sample SD of
+# the per-fold areas. Defined only for seizures annotated along continuous
+# recordings: n/a on Bonn, TUAB and NMT (one label per recording), for which
+# the paper reports AUROC and balanced accuracy (App. D.1.3). No chance level:
+# what a constant predictor scores depends on the split (its recordings
+# without a seizure per hour).
+metrics:
+  headline: event_sens_fa_auc
+  higher_is_better: true
+  secondary: [auroc, auprc, balanced_accuracy, mcc, ovlp_f1, sensitivity_at_fpr_h_1_0]
+  unit: 10 s window
+  describe: >
+    event-level Sens@FA AUC, the area under the folds' median
+    sensitivity-vs-false-alarm curve over 0.1-100 false alarms per hour (log
+    axis), seizures as events; n/a on Bonn, TUAB and NMT, which label whole
+    recordings
+  fold: >
+    5 patient-level folds; the probe's C is chosen on validation AUPRC,
+    balanced loss
+  # ddof=1 here, as in the paper's epilepsy tables; every other benchmark: ddof=0
+  spread: sample SD of the per-fold AUCs

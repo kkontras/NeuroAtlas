@@ -1,0 +1,25 @@
+{
+  "about": "Limb-movement detection: one binary probe per event (any limb movement, periodic limb movement) and threshold, positive when the epoch holds more than that many seconds of it (sleep_limb reports periodic limb movement at 0.5 s).",
+  "_doc": "Limb-movement detection with the respiratory_event_detection task, a per-field binary event probe driven by event_fields. Thresholds are seconds of limb movement per epoch: the task's default grid plus 0.5 s, the threshold paper v2 reports periodic limb movement at (Fig. 17c; the sleep_limb benchmark's headline).",
+  "task": {
+    "name": "respiratory_event_detection",
+    "event_fields": [
+      "limb_movement_any_fraction",
+      "limb_movement_plm_fraction"
+    ],
+    "thresholds": [
+      0.0,
+      0.5,
+      1.0,
+      3.0,
+      5.0,
+      7.0,
+      10.0
+    ]
+  },
+  "datasets": {
+    "physionet2026": {
+      "require_human_annotations": true
+    }
+  }
+}

@@ -1,0 +1,157 @@
+# CHB-MIT Scalp EEG Database — dataset manifest
+#
+# Schema: datasets/_schema.yaml
+# This file is the single home for every fact about CHB-MIT. Before it existed,
+# these values were spread across nine files (see provenance.migrated_from).
+#
+# Every value below is annotated with where it came from, so the migration is
+# checkable line by line against the retired pre-migration snapshot.
+
+schema_version: 1
+
+slug: chbmit
+name: CHB-MIT Scalp EEG Database
+domain: epilepsy
+paper_dataset: true          # the paper's dataset table:34 — one of the paper's 11 epilepsy cohorts
+
+# description: verbatim from neuroatlas.extensions/datasets/chbmit.py:17-22
+description: >
+  CHB-MIT Scalp EEG Database (BIDS/SzCORE) — binary seizure detection from
+  18-channel bipolar (double-banana) EEG at 256 Hz.  23 paediatric subjects,
+  982 hours, 198 seizures.  Patient-level k-fold evaluation.
+
+cohort:
+  centre: Boston Children's Hospital, USA   # embed_dataset.py:_DATASET_CENTER["chbmit"]
+  country: US
+  powerline_hz: 60                          # implied by country; US mains.
+                                            # NOTE: nothing applies this yet — see
+                                            # audit OQ-3.2. This field is the
+                                            # intended single source once
+                                            # pipelines/_make_pipeline stops
+                                            # hardcoding 50 Hz.
+  n_subjects: 23                            # description
+  hours: 982                                # description
+  seizures: 198                             # description
+  population: paediatric
+
+acquisition:
+  kind: zenodo
+  ref: "10259996"
+  file: BIDS_CHB-MIT.zip                    # the record's only file
+  upstream: https://physionet.org/content/chbmit/1.0.0/   # the paper's dataset table:34
+  note: >
+    Zenodo record 10259996 is the SzCORE BIDS conversion, not the raw PhysioNet
+    release. The BIDS conversion is what every loader in this repo expects.
+  size_gb: 21.7                             # Zenodo API: 21.687 GB (2026-10-02)
+  checksum: md5:df22b26fb8bf3db837c1bdbf205e99b7   # Zenodo API, the zip
+  expect: {glob: "*_eeg.edf", count: 686}   # 686 EDFs in the zip's central directory
+
+signal:
+  montage: bipolar                          # embed_dataset.py:_DEFAULT_MONTAGE["chbmit"]
+                                            # AND extensions/datasets/chbmit.py config_defaults
+                                            # — the two agreed, unlike siena (OQ-11.2)
+  # montage_rationale: the sole record of this reasoning was a comment at
+  # embed_dataset.py:67-70 — it existed nowhere else in the repo.
+  montage_rationale: >
+    CHB-MIT stays bipolar because the original reference is unrecoverable from
+    the BIDS conversion, so the double-banana is the only faithful
+    representation. Contrast Siena/TUAB, which default to unipolar so BIOT can
+    route by meta['channels'].
+  sampling_rate_hz: 256                     # description
+  notch_freq: null                          # current spec sets no notch_freq, so
+                                            # build_config injects neither notch
+                                            # nor highpass. Kept null to preserve
+                                            # behaviour exactly; see cohort.powerline_hz
+                                            # for the physical fact (60 Hz).
+  n_channels: 18                            # description ("18-channel bipolar")
+  window_s: 10.0                            # the epilepsy protocol window. The old spec
+                                            # default was 30 s, which no launcher ever
+                                            # passed; embed_chbmit_siena.py defaults to
+                                            # 30 s and its _sharded sibling to 2 s / 1 s
+                                            # — see OQ-11.4.
+  stride_s: null                            # null = non-overlapping
+  overlap_threshold: 0.0                    # config_defaults
+
+labels:
+  granularity: window
+  # one label per window; event-level metrics (any-overlap, FA/h) are computed on top of the window scores
+  default: binary
+  modes:
+    binary:
+  # Implemented in the loader but not set by any shipped config, task
+  # preset or launcher. Recorded so the capability is not lost; not
+  # offered by --help, because an option nobody runs is noise.
+  also_implemented:
+    - seizure_type
+splits:
+  manifest_note: >
+    This cohort ships a frozen fold manifest, so the split is a file
+    rather than a computation. The other epilepsy cohorts derive theirs
+    at load time — see their splits.derivation.
+  manifest: folds.json                      # was src/neuroatlas/configs/folds/chbmit.json
+  grouping: patient                         # description: "Patient-level k-fold"
+  n_folds: 5
+
+pipeline:
+  recording_stats: via_dataio               # cache_recording_stats_simple.py:_run_chbmit_bids
+                                            # walks one window per recording and lets the
+                                            # dataio write its own stats cache
+  preprocessor: chbmit                      # datasets/epilepsy/chbmit_preprocessor.py
+  cache_layout: HDF5 under cache_root, built by the download script (no longer shipped)
+
+runtime_defaults:                           # -> DatasetSpec.config_defaults, unchanged
+  backend: bids
+  bids_root: ${EEG_DATA_ROOT}/chbmit
+  cache_root: ${EEG_CACHE_ROOT}/prepared/chbmit
+  fold: 0
+  n_folds: 5
+  batch_size: 64
+  # num_workers: not pinned. The default is the CPUs the job may use minus
+  # one (at most 16): the global-cache loader reads each recording in one
+  # worker only, so more workers scale. It was 4, which kept CHB-MIT
+  # extraction loader-bound.
+  window_s: 10.0
+  montage: bipolar
+  label_mode: binary
+  normalize: none
+  balance: weighted_sampler
+  overlap_threshold: 0.0
+
+
+# Allowed values for the enumerable --set keys, and where the code
+# enforces them. Surfaced by `--dataset <slug> --help`.
+runtime_options:
+  backend:
+    values:
+      - bids
+      - hdf5
+    enforced_by: dataio.chbmit
+
+spec:
+  # The datamodule this cohort constructs. A dotted path, resolved on
+  # first use, so the registry can build the spec without a per-cohort
+  # Python module holding two strings.
+  datamodule: neuroatlas.extensions.datasets.adapters.chbmit.CHBMITBenchmarkDataModule
+  default_task: seizure_detection
+  supports_folds: true
+  input_kind_signal_map:
+    raw_timeseries: eeg
+  metadata_keys:
+    - canonical_label_space
+    - epoch_seconds
+    - channel_policy
+    - signal_kind
+    - fold
+    - n_folds
+
+provenance:
+  added: "2026-05-07"
+  last_verified: "2026-09-21"
+  migrated_from:
+    - src/neuroatlas/extensions/datasets/chbmit.py            # spec + defaults
+    - src/neuroatlas/entrypoints/embed_dataset.py             # montage + centre + rationale
+    - src/neuroatlas/entrypoints/embed_chbmit_siena.py        # seizure-type rule, BIDS root
+    - src/neuroatlas/entrypoints/cache_recording_stats_simple.py  # stats strategy
+    - src/neuroatlas/configs/folds/chbmit.json                                  # -> folds.json
+    - the download script (no longer shipped)                            # acquisition
+    - the download script (no longer shipped)                          # cache layout

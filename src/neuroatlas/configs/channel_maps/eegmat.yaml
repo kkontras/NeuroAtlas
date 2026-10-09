@@ -1,0 +1,305 @@
+dataset: eegmat
+channels_available: &id001
+- Fp1
+- Fp2
+- F3
+- F4
+- F7
+- F8
+- T7
+- T8
+- C3
+- C4
+- P7
+- P8
+- P3
+- P4
+- O1
+- O2
+- Fz
+- Cz
+- Pz
+channels_used: *id001
+per_model:
+  eegpt:
+    Fp1: FP1
+    Fp2: FP2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: FZ
+    Cz: CZ
+    Pz: PZ
+  labram:
+    Fp1: FP1
+    Fp2: FP2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: FZ
+    Cz: CZ
+    Pz: PZ
+  neurolm:
+    Fp1: FP1
+    Fp2: FP2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: FZ
+    Cz: CZ
+    Pz: PZ
+  biot:
+    Fp1: FP1
+    Fp2: FP2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: FZ
+    Cz: CZ
+    Pz: PZ
+  cbramod:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  reve:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  sleepfm:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  chronos:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  moment:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  moirai:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  core_sleep:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  sleep_transformer:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  sleepyco:
+    Fp1: Fp1
+    Fp2: Fp2
+    F3: F3
+    F4: F4
+    F7: F7
+    F8: F8
+    T7: T7
+    T8: T8
+    C3: C3
+    C4: C4
+    P7: P7
+    P8: P8
+    P3: P3
+    P4: P4
+    O1: O1
+    O2: O2
+    Fz: Fz
+    Cz: Cz
+    Pz: Pz
+  eegnetv4: {mode: label_pass_through}
+  neurogpt: {mode: label_pass_through}
+  neurorvq: {mode: label_pass_through}
+  steegformer: {mode: label_pass_through}
+notes:
+  eegpt: BCI EEG → referential 10-20 anchors; uppercased.
+  cbramod: CBraMod is index-based; channel labels passed through unchanged.
+  labram: BCI EEG → standard_1020 referential anchors; uppercased.
+  neurolm: BCI EEG → uppercase 10-20 names per NeuroLM vocabulary.
+  reve: BCI EEG → 10-20 names per REVE position bank.
+  biot: BCI channels → uppercase 10-20 names.
+  sleepfm: SleepFM is channel-label-agnostic; channels passed through unchanged.
+  chronos: Univariate TS FM; channel names unused. Identity mapping.
+  moment: Univariate TS FM; channel names unused. Identity mapping.
+  moirai: Univariate TS FM; channel names unused. Identity mapping.
+  core_sleep: Identity mapping; backbone selects C4.
+  sleep_transformer: Identity mapping; backbone selects C4.
+  sleepyco: Identity mapping; backbone selects C4.
+  eegnetv4: "EEGNetv4 takes C3, Cz and C4 by name, the channels its checkpoints were trained on, and leaves the rest out."
+  neurogpt: "NeuroGPT places the 10-20 names on its 22-channel layout itself (T7, T8, P7, P8 on its T3, T4, T5, T6 slots): 19 of 22 filled."
+  neurorvq: "NeuroRVQ looks the 10-20 names up in its vocabulary itself, ignoring case; every channel is in it."
+  steegformer: "S-TEEGformer looks the 10-20 names up in its vocabulary itself, ignoring case; every channel is in it."
