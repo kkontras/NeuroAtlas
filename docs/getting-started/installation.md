@@ -4,37 +4,40 @@ We tested the code on Linux with Python 3.11. Python 3.10 or newer works.
 
 ## Install the package
 
-Clone the repository and install it into a new environment:
+Install the package from PyPI into a new environment:
 
 === "conda"
 
     ```bash
-    git clone https://github.com/kkontras/NeuroAtlas.git
-    cd NeuroAtlas
     conda create -n neuroatlas python=3.11 -y
     conda activate neuroatlas
-    pip install -e ".[fm]" -c requirements-fm.txt
+    pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
     ```
 
 === "venv"
 
     ```bash
-    git clone https://github.com/kkontras/NeuroAtlas.git
-    cd NeuroAtlas
     python3.11 -m venv .venv
     source .venv/bin/activate
-    pip install -e ".[fm]" -c requirements-fm.txt
+    pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
     ```
 
-`requirements-fm.txt` pins every dependency to the version used in the paper. The install takes
-about 5 minutes and 6.5 GB of disk space.
-
-The distribution is called `neuroatlas-bench` and is installed from the repository. The command
-and the Python import are both `neuroatlas`.
+The constraints file pins every dependency to the version used in the paper. The install takes
+about 5 minutes and 6.5 GB of disk space. The distribution is called `neuroatlas-bench`; the
+command and the Python import are both `neuroatlas`.
 
 > [!WARNING]
 > Do not `pip install neuroatlas`. The package on PyPI called `neuroatlas` is unrelated to this
 > project.
+
+To work on the code, or to run `run/default_runs.sh` and the notebook in `reproduction/`, install
+from a clone instead:
+
+```bash
+git clone https://github.com/kkontras/NeuroAtlas.git
+cd NeuroAtlas
+pip install -e ".[fm]" -c requirements-fm.txt
+```
 
 Check the install:
 
@@ -42,7 +45,7 @@ Check the install:
 neuroatlas --version
 ```
 
-From a clone this prints the version and the commit, for example `neuroatlas 0.1.0 (1c13d9e)`.
+It prints `neuroatlas 0.1.0`. From a clone it also prints the commit.
 
 ## GPU
 
@@ -56,22 +59,22 @@ Some models and datasets need more packages:
 | To run | Install |
 |---|---|
 | EEG foundation models, supervised baselines, sleep and epilepsy datasets | `[fm]` |
-| Chronos | `pip install -e ".[fm,ts]" -c requirements-fm.txt` |
+| Chronos | `pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt` |
 | MOMENT | the line above, then `pip install --no-deps "momentfm==0.1.4"` |
 | Moirai | a separate environment from `requirements-tsfm.txt` (Python 3.10, torch 2.4.1) |
-| the 14 MOABB BCI datasets | `pip install -e ".[fm,bci]" -c requirements-fm.txt`, then `pip install --no-deps "moabb==1.2.0"` |
+| the 14 MOABB BCI datasets | `pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt`, then `pip install --no-deps "moabb==1.2.0"` |
 
 === "BCI datasets (MOABB)"
 
     ```bash
-    pip install -e ".[fm,bci]" -c requirements-fm.txt
+    pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
     pip install --no-deps "moabb==1.2.0"
     ```
 
 === "Chronos and MOMENT"
 
     ```bash
-    pip install -e ".[fm,ts]" -c requirements-fm.txt
+    pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
     pip install --no-deps "momentfm==0.1.4"
     ```
 

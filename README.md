@@ -16,7 +16,7 @@ Christos Chatzichristos<sup>1</sup>, Paul Pu Liang<sup>2</sup>, Maarten De Vos<s
 <a href="#citation">Citation</a>
 </p>
 
-![NeuroAtlas overview](docs/figures/neuroatlas_overview.png)
+![NeuroAtlas overview](https://raw.githubusercontent.com/kkontras/NeuroAtlas/main/docs/figures/neuroatlas_overview.png)
 
 ## Abstract
 
@@ -55,25 +55,21 @@ baselines, and randomly initialized baselines.
 We tested the code on Linux with Python 3.11.
 
 ```bash
-git clone https://github.com/kkontras/NeuroAtlas.git
-cd NeuroAtlas
-conda create -n neuroatlas python=3.11 -y
-conda activate neuroatlas
-pip install -e ".[fm]" -c requirements-fm.txt
+pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
 ```
 
-`requirements-fm.txt` pins every dependency to the version used in the paper. The install takes
-about 5 minutes and 6.5 GB of disk space.
+The constraints file pins every dependency to the version used in the paper. The install takes
+about 5 minutes and 6.5 GB of disk space. The command and the Python import are both `neuroatlas`.
 
 Some models and datasets need extra packages:
 
 ```bash
 # BCI datasets (MOABB)
-pip install -e ".[fm,bci]" -c requirements-fm.txt
+pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
 pip install --no-deps "moabb==1.2.0"
 
 # Chronos and MOMENT
-pip install -e ".[fm,ts]" -c requirements-fm.txt
+pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
 pip install --no-deps "momentfm==0.1.4"
 ```
 
@@ -81,6 +77,15 @@ Moirai needs an older PyTorch and has its own environment, described in `require
 
 The default PyTorch build needs a GPU with compute capability 7.5 or higher and a CUDA 13 driver.
 On older hardware, install a CUDA 12 build of PyTorch first. The probes themselves run on the CPU.
+
+To work on the code, or to run `run/default_runs.sh` and the notebook in `reproduction/`, install
+from a clone instead:
+
+```bash
+git clone https://github.com/kkontras/NeuroAtlas.git
+cd NeuroAtlas
+pip install -e ".[fm]" -c requirements-fm.txt
+```
 
 Note that the package on PyPI called `neuroatlas` is unrelated to this project.
 
@@ -106,7 +111,7 @@ neuroatlas run sleep_stage -m biot_pretrained            # all folds
 neuroatlas results sleep_stage
 ```
 
-See the [walkthrough](docs/getting-started/walkthrough.md) for a full example with the expected output.
+See the [walkthrough](https://kkontras.github.io/NeuroAtlas/getting-started/walkthrough/) for a full example with the expected output.
 
 ## Running a benchmark
 
@@ -171,7 +176,7 @@ reproduction/               step-by-step notebook of the pipeline
 
 ## License
 
-The code is released under the MIT license (see [LICENSE](LICENSE)). The vendored
+The code is released under the MIT license (see [LICENSE](https://github.com/kkontras/NeuroAtlas/blob/main/LICENSE)). The vendored
 Seizure-Transformer code (MIT) and MOABB readers (BSD-3-Clause) keep their original licenses.
 DeepSOZ-HEM is GPL-3.0 and is not included; `neuroatlas models download deepsoz_hem_pretrained`
 fetches it from the [original repository](https://github.com/amruth-sn/deepsoz-hem). Each dataset
