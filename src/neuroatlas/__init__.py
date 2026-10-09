@@ -7,4 +7,4 @@ front of them. Importing this module is cheap: it pulls in neither torch nor
 any dataset reader.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

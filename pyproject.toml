@@ -50,24 +50,7 @@ dependencies = [
     "pyyaml>=6.0,<7",            # cohort manifests and channel maps -- read by every run
     "pyedflib>=0.1.38,<0.2",     # EDF reader behind the PhysioEx-style sleep cohorts; imported by dataset discovery
     "huggingface_hub>=0.34,<1.0",  # gated and hub-hosted model weights; transformers 4.x needs <1.0
-]
-
-[project.urls]
-Homepage = "https://github.com/kkontras/NeuroAtlas"
-Paper = "https://arxiv.org/abs/2605.14698"
-Documentation = "https://kkontras.github.io/NeuroAtlas/"
-Issues = "https://github.com/kkontras/NeuroAtlas/issues"
-
-[project.scripts]
-neuroatlas = "neuroatlas.cli:main"
-
-[project.optional-dependencies]
-# The model stack: everything a run imports. One command gives the paper's
-# exact versions, with requirements-fm.txt as the constraints file:
-#     pip install -e ".[fm]" -c requirements-fm.txt
-# torch is unpinned: pip takes the default build (CUDA 13); for another CUDA
-# build install torch from pytorch.org first and pip keeps it.
-fm = [
+    # the model stack
     "torch",
     "tqdm>=4.66,<5",              # probe progress bars
     "easydict>=1.13,<2",          # CoRe-Sleep and SleepTransformer
@@ -82,6 +65,20 @@ fm = [
     "xlrd>=2.0.1,<3",            # Sleep-EDF ships SC-subjects.xls as legacy .xls: subject ages
     "openpyxl>=3.1.5,<4",        # ISRUC's subject table is .xlsx (read with engine="openpyxl"): ages
 ]
+
+[project.urls]
+Homepage = "https://github.com/kkontras/NeuroAtlas"
+Paper = "https://arxiv.org/abs/2605.14698"
+Documentation = "https://kkontras.github.io/NeuroAtlas/"
+Issues = "https://github.com/kkontras/NeuroAtlas/issues"
+
+[project.scripts]
+neuroatlas = "neuroatlas.cli:main"
+
+[project.optional-dependencies]
+# Kept so that `neuroatlas-bench[fm]` still installs: the model stack is part of
+# the base install now.
+fm = []
 # The generic time-series FMs that share this environment. MOMENT's momentfm
 # is not here: every release pins transformers==4.33.3 and numpy==1.25.2, so
 # it goes in on its own with `pip install --no-deps "momentfm==0.1.4"` (it runs

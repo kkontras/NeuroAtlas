@@ -180,9 +180,9 @@ NO_NSRR_TOKEN = "no NSRR token"
 NO_FOLDER = "no folder is set for this dataset: point it at your copy"
 
 #: The one install line for MOABB (the BCI datasets), as the README gives it.
-MOABB_INSTALL = ('pip install -e ".[fm,bci]" -c requirements-fm.txt && '
+MOABB_INSTALL = ('pip install "neuroatlas-bench[bci]" && '
                  'pip install --no-deps "moabb==1.2.0"')
-MOABB_WHERE = "in your NeuroAtlas clone"
+MOABB_WHERE = "in the same Python environment"
 
 
 def manifest_text(value: Any) -> str:

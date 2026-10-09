@@ -11,7 +11,7 @@ Install the package from PyPI into a new environment:
     ```bash
     conda create -n neuroatlas python=3.11 -y
     conda activate neuroatlas
-    pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+    pip install neuroatlas-bench
     ```
 
 === "venv"
@@ -19,11 +19,17 @@ Install the package from PyPI into a new environment:
     ```bash
     python3.11 -m venv .venv
     source .venv/bin/activate
-    pip install "neuroatlas-bench[fm]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+    pip install neuroatlas-bench
     ```
 
-The constraints file pins every dependency to the version used in the paper. The install takes
-about 5 minutes and 6.5 GB of disk space. The distribution is called `neuroatlas-bench`; the
+The install takes about 5 minutes and 6.5 GB of disk space. To install exactly the package
+versions used in the paper, add the constraints file:
+
+```bash
+pip install neuroatlas-bench -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.1/requirements-fm.txt
+```
+
+ The distribution is called `neuroatlas-bench`; the
 command and the Python import are both `neuroatlas`.
 
 > [!WARNING]
@@ -36,7 +42,7 @@ from a clone instead:
 ```bash
 git clone https://github.com/kkontras/NeuroAtlas.git
 cd NeuroAtlas
-pip install -e ".[fm]" -c requirements-fm.txt
+pip install -e . -c requirements-fm.txt
 ```
 
 Check the install:
@@ -58,23 +64,23 @@ Some models and datasets need more packages:
 
 | To run | Install |
 |---|---|
-| EEG foundation models, supervised baselines, sleep and epilepsy datasets | `[fm]` |
-| Chronos | `pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt` |
+| EEG foundation models, supervised baselines, sleep and epilepsy datasets | the base install |
+| Chronos | `pip install "neuroatlas-bench[ts]"` |
 | MOMENT | the line above, then `pip install --no-deps "momentfm==0.1.4"` |
 | Moirai | a separate environment from `requirements-tsfm.txt` (Python 3.10, torch 2.4.1) |
-| the 14 MOABB BCI datasets | `pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt`, then `pip install --no-deps "moabb==1.2.0"` |
+| the 14 MOABB BCI datasets | `pip install "neuroatlas-bench[bci]"`, then `pip install --no-deps "moabb==1.2.0"` |
 
 === "BCI datasets (MOABB)"
 
     ```bash
-    pip install "neuroatlas-bench[fm,bci]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+    pip install "neuroatlas-bench[bci]"
     pip install --no-deps "moabb==1.2.0"
     ```
 
 === "Chronos and MOMENT"
 
     ```bash
-    pip install "neuroatlas-bench[fm,ts]" -c https://raw.githubusercontent.com/kkontras/NeuroAtlas/v0.1.0/requirements-fm.txt
+    pip install "neuroatlas-bench[ts]"
     pip install --no-deps "momentfm==0.1.4"
     ```
 
@@ -86,7 +92,7 @@ Some models and datasets need more packages:
 `--no-deps` keeps the old pins that moabb 1.2.0 and momentfm declare from downgrading the rest of
 the stack. Both run correctly with it. `pip check` will still list those declared pins.
 
-The `[fm]` extra includes `xlrd` and `openpyxl`, which read the ages of Sleep-EDF and ISRUC
+The base install includes `xlrd` and `openpyxl`, which read the ages of Sleep-EDF and ISRUC
 subjects for brain age. Dreyer2023 and Kim2025BetaRange are newer than moabb 1.2.0, so their
 readers ship inside the package.
 
